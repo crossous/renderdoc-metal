@@ -37,6 +37,13 @@ cmake -S "${REPO_ROOT}" -B "${BUILD_DIR}" -G Ninja \
 cmake --build "${BUILD_DIR}" --target build-qrenderdoc renderdoccmd -j "$(sysctl -n hw.ncpu)"
 
 APP_PATH="${BUILD_DIR}/bin/qrenderdoc.app"
+APP_RENDERDOC_LIB="${APP_PATH}/Contents/lib/librenderdoc.dylib"
+# qmake only refreshes the bundle copy when qrenderdoc itself relinks. A replay-only change can
+# leave the app loading an older library than renderdoccmd, so keep the bundle copy in sync.
+if ! cmp -s "${BUILD_DIR}/lib/librenderdoc.dylib" "${APP_RENDERDOC_LIB}"; then
+  mkdir -p "${APP_PATH}/Contents/lib"
+  cp -p "${BUILD_DIR}/lib/librenderdoc.dylib" "${APP_RENDERDOC_LIB}"
+fi
 echo "Built ${APP_PATH}"
 echo "Built ${BUILD_DIR}/bin/renderdoccmd"
 

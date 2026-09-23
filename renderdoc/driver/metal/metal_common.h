@@ -263,6 +263,13 @@ enum class MetalChunk : uint32_t
   MTLBlitCommandEncoder_optimizeIndirectCommandBuffer,
   MTLBlitCommandEncoder_sampleCountersInBuffer,
   MTLBlitCommandEncoder_resolveCounters,
+  MTLComputeCommandEncoder_endEncoding,
+  MTLComputeCommandEncoder_setComputePipelineState,
+  MTLComputeCommandEncoder_setTexture,
+  MTLComputeCommandEncoder_dispatchThreadgroups,
+  MTLArgumentEncoder_setArgumentBuffer,
+  MTLArgumentEncoder_setTexture,
+  MTLArgumentEncoder_setSamplerState,
   Max
 };
 

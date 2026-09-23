@@ -24,9 +24,12 @@
 
 #include "metal_device.h"
 #include "metal_blit_command_encoder.h"
+#include "metal_argument_encoder.h"
 #include "metal_buffer.h"
 #include "metal_command_buffer.h"
 #include "metal_command_queue.h"
+#include "metal_compute_command_encoder.h"
+#include "metal_compute_pipeline_state.h"
 #include "metal_depth_stencil_state.h"
 #include "metal_function.h"
 #include "metal_library.h"
@@ -73,6 +76,9 @@ WrappedMTLDevice::WrappedMTLDevice(MTL::Device *realMTLDevice, ResourceId objId)
     m_DummyReplayRenderCommandEncoder =
         new WrappedMTLRenderCommandEncoder(NULL, ResourceId(), this);
     m_DummyReplayBlitCommandEncoder = new WrappedMTLBlitCommandEncoder(NULL, ResourceId(), this);
+    m_DummyReplayComputeCommandEncoder =
+        new WrappedMTLComputeCommandEncoder(NULL, ResourceId(), this);
+    m_DummyReplayArgumentEncoder = new WrappedMTLArgumentEncoder(NULL, ResourceId(), this);
   }
 
   if(!RenderDoc::Inst().IsReplayApp())
@@ -123,7 +129,9 @@ WrappedMTLDevice::WrappedMTLDevice(MTL::Device *realMTLDevice, ResourceId objId)
 WrappedMTLDevice::~WrappedMTLDevice()
 {
   SAFE_DELETE(m_FrameReader);
+  SAFE_DELETE(m_DummyReplayArgumentEncoder);
   SAFE_DELETE(m_DummyReplayBlitCommandEncoder);
+  SAFE_DELETE(m_DummyReplayComputeCommandEncoder);
   SAFE_DELETE(m_DummyReplayRenderCommandEncoder);
   SAFE_DELETE(m_DummyReplayLibrary);
   SAFE_DELETE(m_DummyReplayCommandQueue);
@@ -698,6 +706,60 @@ WrappedMTLRenderPipelineState *WrappedMTLDevice::newRenderPipelineStateWithDescr
 }
 
 template <typename SerialiserType>
+bool WrappedMTLDevice::Serialise_newComputePipelineStateWithFunction(
+    SerialiserType &ser, WrappedMTLComputePipelineState *pipelineState,
+    WrappedMTLFunction *computeFunction, NS::Error **error)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputePipelineState, GetResID(pipelineState))
+      .TypedAs("MTLComputePipelineState"_lit);
+  SERIALISE_ELEMENT(computeFunction).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    if(!computeFunction)
+      return false;
+    MTL::AutoreleasedComputePipelineReflection reflection = NULL;
+    MTL::ComputePipelineState *realPipeline = Unwrap(this)->newComputePipelineState(
+        Unwrap(computeFunction), MTL::PipelineOptionArgumentInfo, &reflection, error);
+    if(!realPipeline)
+    {
+      RDCERR("Failed to recreate Metal compute pipeline");
+      return false;
+    }
+    WrappedMTLComputePipelineState *wrappedPipeline;
+    GetResourceManager()->WrapResource(ComputePipelineState, realPipeline, wrappedPipeline, true);
+    AddResource(ComputePipelineState, ResourceType::PipelineState, "Compute Pipeline State");
+    DerivedResource(computeFunction, ComputePipelineState);
+    GetReplay()->AddComputePipeline(ComputePipelineState, GetResID(computeFunction), reflection);
+  }
+  return true;
+}
+
+WrappedMTLComputePipelineState *WrappedMTLDevice::newComputePipelineStateWithFunction(
+    WrappedMTLFunction *computeFunction, NS::Error **error)
+{
+  MTL::ComputePipelineState *realPipeline;
+  SERIALISE_TIME_CALL(realPipeline =
+                          Unwrap(this)->newComputePipelineState(Unwrap(computeFunction), error));
+  if(!realPipeline)
+    return NULL;
+
+  WrappedMTLComputePipelineState *wrappedPipeline;
+  GetResourceManager()->WrapResource(ResourceId(), realPipeline, wrappedPipeline);
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLDevice_newComputePipelineStateWithFunction);
+    Serialise_newComputePipelineStateWithFunction(ser, wrappedPipeline, computeFunction, error);
+    MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrappedPipeline);
+    record->AddChunk(scope.Get());
+    record->AddParent(GetRecord(computeFunction));
+  }
+  return wrappedPipeline;
+}
+
+template <typename SerialiserType>
 bool WrappedMTLDevice::Serialise_newTextureWithDescriptor(SerialiserType &ser,
                                                           WrappedMTLTexture *texture,
                                                           RDMTL::TextureDescriptor &descriptor)
@@ -1037,6 +1099,10 @@ INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLDevice,
                                             newRenderPipelineStateWithDescriptor,
                                             RDMTL::RenderPipelineDescriptor &descriptor,
                                             NS::Error **error);
+INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLDevice,
+                                            WrappedMTLComputePipelineState *computePipelineState,
+                                            newComputePipelineStateWithFunction,
+                                            WrappedMTLFunction *computeFunction, NS::Error **error);
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLDevice, WrappedMTLTexture *,
                                             newTextureWithDescriptor,
                                             RDMTL::TextureDescriptor &descriptor);

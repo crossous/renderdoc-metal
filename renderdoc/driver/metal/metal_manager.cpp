@@ -24,9 +24,12 @@
 
 #include "metal_manager.h"
 #include "metal_blit_command_encoder.h"
+#include "metal_argument_encoder.h"
 #include "metal_buffer.h"
 #include "metal_command_buffer.h"
 #include "metal_command_queue.h"
+#include "metal_compute_command_encoder.h"
+#include "metal_compute_pipeline_state.h"
 #include "metal_device.h"
 #include "metal_depth_stencil_state.h"
 #include "metal_function.h"
@@ -71,6 +74,15 @@ bool MetalResourceManager::ResourceTypeRelease(WrappedResourceType res)
         break;
       case eResBlitCommandEncoder:
         ReleaseWrappedResource((WrappedMTLBlitCommandEncoder *)res);
+        break;
+      case eResComputePipelineState:
+        ReleaseWrappedResource((WrappedMTLComputePipelineState *)res);
+        break;
+      case eResComputeCommandEncoder:
+        ReleaseWrappedResource((WrappedMTLComputeCommandEncoder *)res);
+        break;
+      case eResArgumentEncoder:
+        ReleaseWrappedResource((WrappedMTLArgumentEncoder *)res);
         break;
       case eResSamplerState: ReleaseWrappedResource((WrappedMTLSamplerState *)res); break;
       case eResDevice:

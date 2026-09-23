@@ -32,6 +32,9 @@ public:
   WrappedMTLFunction(MTL::Function *realMTLFunction, ResourceId objId,
                      WrappedMTLDevice *wrappedMTLDevice);
 
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLArgumentEncoder *, newArgumentEncoder,
+                                          NS::UInteger bufferIndex);
+
   enum
   {
     TypeEnum = eResFunction

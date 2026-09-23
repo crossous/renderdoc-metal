@@ -235,6 +235,16 @@ set(SRC main.cpp
 set(METAL_SRC
         metal/metal_test.cpp
         metal/metal_test.h
+        metal/metal_blit_operations.cpp
+        metal/metal_compute_texture_filter.cpp
+        metal/metal_argument_buffer.cpp
+        metal/metal_indirect_draw.cpp
+        metal/metal_indexed_instancing.cpp
+        metal/metal_point_line.cpp
+        metal/metal_vertex_texture.cpp
+        metal/metal_batch_texture.cpp
+        metal/metal_fragment_storage_buffer.cpp
+        metal/metal_vertex_storage_buffer.cpp
         metal/metal_empty_frame.cpp
         metal/metal_dynamic_uniform.cpp
         metal/metal_depth_stencil.cpp

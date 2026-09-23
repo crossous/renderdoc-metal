@@ -296,6 +296,30 @@ void MetalReplay::AddShaderBindings(ResourceId shader, NS::Array *arguments)
 
     if(argument->type() == MTL::ArgumentTypeBuffer)
     {
+      // Metal reports a device float4 pointer as Float4 rather than DataTypePointer here.
+      // Struct-backed constant/argument buffers continue through the constant-block path.
+      if(argument->bufferDataType() != MTL::DataTypeStruct)
+      {
+        ShaderResource resource;
+        resource.name = name;
+        resource.fixedBindNumber = bind;
+        resource.bindArraySize = arraySize;
+        resource.isTexture = false;
+        resource.isReadOnly = argument->access() == MTL::BindingAccessReadOnly;
+        resource.descriptorType = resource.isReadOnly ? DescriptorType::Buffer
+                                                      : DescriptorType::ReadWriteBuffer;
+        if(resource.isReadOnly)
+        {
+          reflection.readOnlyResources.push_back(resource);
+          usage.readOnlyResources.push_back(argument->active());
+        }
+        else
+        {
+          reflection.readWriteResources.push_back(resource);
+          usage.readWriteResources.push_back(argument->active());
+        }
+        continue;
+      }
       ConstantBlock block;
       block.name = name;
       block.fixedBindNumber = bind;
@@ -304,6 +328,53 @@ void MetalReplay::AddShaderBindings(ResourceId shader, NS::Array *arguments)
       block.bufferBacked = true;
       reflection.constantBlocks.push_back(block);
       usage.constantBlocks.push_back(argument->active());
+
+      MTL::StructType *structure = argument->bufferStructType();
+      NS::Array *members = structure ? structure->members() : NULL;
+      for(NS::UInteger memberIndex = 0; members && memberIndex < members->count(); memberIndex++)
+      {
+        MTL::StructMember *member = members->object<MTL::StructMember>(memberIndex);
+        if(member == NULL)
+          continue;
+        const rdcstr memberName =
+            member->name() ? member->name()->utf8String() : StringFormat::Fmt("id%llu", memberIndex);
+        const rdcstr qualifiedName = name + "." + memberName;
+        const uint32_t argumentId = (uint32_t)member->argumentIndex();
+        if(member->dataType() == MTL::DataTypeTexture)
+        {
+          MTL::TextureReferenceType *texture = member->textureReferenceType();
+          if(texture == NULL)
+            continue;
+          ShaderResource resource;
+          resource.name = qualifiedName;
+          resource.fixedBindNumber = argumentId;
+          resource.bindArraySize = 1;
+          resource.textureType = MakeShaderTextureType(texture->textureType());
+          resource.isTexture = true;
+          resource.isReadOnly = texture->access() == MTL::BindingAccessReadOnly;
+          resource.descriptorType = resource.isReadOnly ? DescriptorType::Image
+                                                        : DescriptorType::ReadWriteImage;
+          if(resource.isReadOnly)
+          {
+            reflection.readOnlyResources.push_back(resource);
+            usage.readOnlyResources.push_back(argument->active());
+          }
+          else
+          {
+            reflection.readWriteResources.push_back(resource);
+            usage.readWriteResources.push_back(argument->active());
+          }
+        }
+        else if(member->dataType() == MTL::DataTypeSampler)
+        {
+          ShaderSampler sampler;
+          sampler.name = qualifiedName;
+          sampler.fixedBindNumber = argumentId;
+          sampler.bindArraySize = 1;
+          reflection.samplers.push_back(sampler);
+          usage.samplers.push_back(argument->active());
+        }
+      }
     }
     else if(argument->type() == MTL::ArgumentTypeSampler)
     {
@@ -383,6 +454,53 @@ void MetalReplay::AddRenderPipeline(ResourceId id,
     AddShaderBindings(pipeline.vertexFunction, reflection->vertexArguments());
     AddShaderBindings(pipeline.fragmentFunction, reflection->fragmentArguments());
   }
+}
+
+void MetalReplay::AddComputePipeline(ResourceId id, ResourceId function,
+                                     MTL::ComputePipelineReflection *reflection)
+{
+  m_ComputePipelines[id] = function;
+  if(reflection)
+    AddShaderBindings(function, reflection->arguments());
+}
+
+void MetalReplay::BeginComputePass()
+{
+  m_CurrentPipelineState = MetalPipe::State();
+}
+
+void MetalReplay::SetComputePipeline(ResourceId id)
+{
+  m_CurrentPipelineState.computePipelineResourceId = id;
+  m_CurrentPipelineState.computeShader = MetalPipe::Shader();
+  auto pipeline = m_ComputePipelines.find(id);
+  if(pipeline == m_ComputePipelines.end())
+    return;
+  const ResourceId function = pipeline->second;
+  m_CurrentPipelineState.computeShader.resourceId = function;
+  m_CurrentPipelineState.computeShader.stage = ShaderStage::Compute;
+  auto shader = m_Shaders.find(function);
+  if(shader != m_Shaders.end())
+  {
+    m_CurrentPipelineState.computeShader.reflection = &shader->second;
+    m_CurrentPipelineState.computeShader.entryPoint = shader->second.entryPoint;
+  }
+}
+
+void MetalReplay::SetComputeTexture(uint32_t index, ResourceId id)
+{
+  if(index < 2)
+  {
+    m_CurrentPipelineState.computeTextures.resize_for_index(index);
+    m_CurrentPipelineState.computeTextures[index] = id;
+  }
+}
+
+ResourceId MetalReplay::GetComputeTexture(uint32_t index) const
+{
+  return index < m_CurrentPipelineState.computeTextures.size()
+             ? m_CurrentPipelineState.computeTextures[index]
+             : ResourceId();
 }
 
 void MetalReplay::AddDepthStencilState(ResourceId id,
@@ -540,6 +658,26 @@ void MetalReplay::EndRenderPass()
 
 void MetalReplay::BindRenderPipeline(ResourceId id)
 {
+  const size_t oldVertexBindingCount =
+      RDCMAX(m_CurrentPipelineState.vertexBuffers.size(),
+             m_CurrentPipelineState.vertexStorageBuffers.size());
+  rdcarray<MetalPipe::BufferBinding> oldVertexBindings;
+  oldVertexBindings.resize(oldVertexBindingCount);
+  for(size_t slot = 0; slot < oldVertexBindingCount; slot++)
+  {
+    if(slot < m_CurrentPipelineState.vertexBuffers.size() &&
+       m_CurrentPipelineState.vertexBuffers[slot].resourceId != ResourceId())
+    {
+      oldVertexBindings[slot].resourceId = m_CurrentPipelineState.vertexBuffers[slot].resourceId;
+      oldVertexBindings[slot].byteOffset = m_CurrentPipelineState.vertexBuffers[slot].byteOffset;
+      oldVertexBindings[slot].byteSize = m_CurrentPipelineState.vertexBuffers[slot].byteSize;
+    }
+    else if(slot < m_CurrentPipelineState.vertexStorageBuffers.size())
+    {
+      oldVertexBindings[slot] = m_CurrentPipelineState.vertexStorageBuffers[slot];
+    }
+  }
+
   m_CurrentPipelineState.pipelineResourceId = id;
   m_CurrentPipelineState.vertexShader = MetalPipe::Shader();
   m_CurrentPipelineState.fragmentShader = MetalPipe::Shader();
@@ -627,6 +765,36 @@ void MetalReplay::BindRenderPipeline(ResourceId id)
     blend.writeMask = MakeWriteMask(attachment.writeMask);
     m_CurrentPipelineState.colorBlends.push_back(blend);
   }
+
+  for(size_t slot = 0; slot < oldVertexBindings.size(); slot++)
+  {
+    const MetalPipe::BufferBinding &binding = oldVertexBindings[slot];
+    if(binding.resourceId != ResourceId())
+      BindVertexBuffer((uint32_t)slot, binding.resourceId, binding.byteOffset);
+  }
+}
+
+bool MetalReplay::IsVertexStorageBufferSlot(uint32_t index) const
+{
+  auto shader = m_Shaders.find(m_CurrentPipelineState.vertexShader.resourceId);
+  if(shader == m_Shaders.end())
+    return false;
+
+  for(const ShaderResource &resource : shader->second.readOnlyResources)
+    if(!resource.isTexture && resource.descriptorType == DescriptorType::Buffer &&
+       resource.fixedBindNumber == index)
+      return true;
+
+  return false;
+}
+
+bool MetalReplay::IsVertexInputBufferSlot(uint32_t index) const
+{
+  for(const MetalPipe::VertexAttribute &attribute : m_CurrentPipelineState.vertexAttributes)
+    if(attribute.bufferIndex == index)
+      return true;
+
+  return false;
 }
 
 void MetalReplay::BindDepthStencilState(ResourceId id)
@@ -667,15 +835,38 @@ void MetalReplay::SetStencilReferenceValues(uint32_t frontReferenceValue,
 
 void MetalReplay::BindVertexBuffer(uint32_t index, ResourceId id, uint64_t offset)
 {
-  m_CurrentPipelineState.vertexBuffers.resize_for_index(index);
-  MetalPipe::VertexBuffer &binding = m_CurrentPipelineState.vertexBuffers[index];
-  binding.resourceId = id;
-  binding.byteOffset = offset;
-
   BufferDescription buffer = GetBuffer(id);
-  binding.byteSize = buffer.resourceId != ResourceId() && offset < buffer.length
-                         ? buffer.length - offset
-                         : 0;
+  const uint64_t byteSize = buffer.resourceId != ResourceId() && offset < buffer.length
+                                ? buffer.length - offset
+                                : 0;
+  const bool storage = IsVertexStorageBufferSlot(index);
+  const bool vertexInput = !storage || IsVertexInputBufferSlot(index);
+
+  if(vertexInput)
+  {
+    m_CurrentPipelineState.vertexBuffers.resize_for_index(index);
+    MetalPipe::VertexBuffer &binding = m_CurrentPipelineState.vertexBuffers[index];
+    binding.resourceId = id;
+    binding.byteOffset = offset;
+    binding.byteSize = byteSize;
+  }
+  else if(index < m_CurrentPipelineState.vertexBuffers.size())
+  {
+    m_CurrentPipelineState.vertexBuffers[index] = MetalPipe::VertexBuffer();
+  }
+
+  if(storage)
+  {
+    m_CurrentPipelineState.vertexStorageBuffers.resize_for_index(index);
+    MetalPipe::BufferBinding &binding = m_CurrentPipelineState.vertexStorageBuffers[index];
+    binding.resourceId = id;
+    binding.byteOffset = offset;
+    binding.byteSize = byteSize;
+  }
+  else if(index < m_CurrentPipelineState.vertexStorageBuffers.size())
+  {
+    m_CurrentPipelineState.vertexStorageBuffers[index] = MetalPipe::BufferBinding();
+  }
 }
 
 void MetalReplay::BindFragmentBuffer(uint32_t index, ResourceId id, uint64_t offset)
@@ -689,6 +880,14 @@ void MetalReplay::BindFragmentBuffer(uint32_t index, ResourceId id, uint64_t off
   binding.byteSize = buffer.resourceId != ResourceId() && offset < buffer.length
                          ? buffer.length - offset
                          : 0;
+
+  auto argumentBuffer = m_ArgumentBuffers.find(id);
+  if(argumentBuffer != m_ArgumentBuffers.end())
+  {
+    m_CurrentPipelineState.fragmentArgumentBuffers.resize_for_index(index);
+    m_CurrentPipelineState.fragmentArgumentBuffers[index] = argumentBuffer->second;
+    m_CurrentPipelineState.fragmentArgumentBuffers[index].buffer = binding;
+  }
 }
 
 void MetalReplay::SetFragmentBufferOffset(uint32_t index, uint64_t offset)
@@ -709,13 +908,44 @@ void MetalReplay::BindFragmentTexture(uint32_t index, ResourceId id)
   m_CurrentPipelineState.fragmentTextures[index] = id;
 }
 
+void MetalReplay::BindVertexTexture(uint32_t index, ResourceId id)
+{
+  m_CurrentPipelineState.vertexTextures.resize_for_index(index);
+  m_CurrentPipelineState.vertexTextures[index] = id;
+}
+
+void MetalReplay::BindVertexSampler(uint32_t index, ResourceId id)
+{
+  m_CurrentPipelineState.vertexSamplers.resize_for_index(index);
+  m_CurrentPipelineState.vertexSamplers[index] = id;
+}
+
 void MetalReplay::BindFragmentSampler(uint32_t index, ResourceId id)
 {
   m_CurrentPipelineState.fragmentSamplers.resize_for_index(index);
   m_CurrentPipelineState.fragmentSamplers[index] = id;
 }
 
-void MetalReplay::BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType indexType)
+void MetalReplay::SetArgumentBufferTexture(ResourceId argumentBuffer, uint32_t index,
+                                           ResourceId texture)
+{
+  MetalPipe::ArgumentBuffer &binding = m_ArgumentBuffers[argumentBuffer];
+  binding.buffer.resourceId = argumentBuffer;
+  binding.textures.resize_for_index(index);
+  binding.textures[index] = texture;
+}
+
+void MetalReplay::SetArgumentBufferSampler(ResourceId argumentBuffer, uint32_t index,
+                                           ResourceId sampler)
+{
+  MetalPipe::ArgumentBuffer &binding = m_ArgumentBuffers[argumentBuffer];
+  binding.buffer.resourceId = argumentBuffer;
+  binding.samplers.resize_for_index(index);
+  binding.samplers[index] = sampler;
+}
+
+void MetalReplay::BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType indexType,
+                                  uint64_t indexCount)
 {
   MetalPipe::VertexBuffer &binding = m_CurrentPipelineState.indexBuffer;
   binding.resourceId = id;
@@ -726,6 +956,28 @@ void MetalReplay::BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType
   binding.byteSize = buffer.resourceId != ResourceId() && offset < buffer.length
                          ? buffer.length - offset
                          : 0;
+  if(indexCount > 0)
+    binding.byteSize = RDCMIN(binding.byteSize, indexCount * binding.byteStride);
+}
+
+void MetalReplay::SetIndirectBuffer(ResourceId id, uint64_t offset, uint64_t size)
+{
+  MetalPipe::BufferBinding &binding = m_CurrentPipelineState.indirectBuffer;
+  binding.resourceId = id;
+  binding.byteOffset = offset;
+  binding.byteSize = size;
+
+  if(id == ResourceId())
+    return;
+
+  for(BufferDescription &buffer : m_Buffers)
+  {
+    if(buffer.resourceId == id)
+    {
+      buffer.creationFlags |= BufferCategory::Indirect;
+      break;
+    }
+  }
 }
 
 void MetalReplay::SetViewport(const MTL::Viewport &viewport)
@@ -809,6 +1061,11 @@ rdcarray<Descriptor> MetalReplay::GetDescriptors(ResourceId descriptorStore,
 {
   static const uint32_t SamplerOffset = 0x100;
   static const uint32_t BufferOffset = 0x200;
+  static const uint32_t ComputeReadOffset = 0x300;
+  static const uint32_t ComputeWriteOffset = 0x400;
+  static const uint32_t ArgumentTextureOffset = 0x500;
+  static const uint32_t VertexTextureOffset = 0xD00;
+  static const uint32_t VertexBufferOffset = 0xF00;
   if(descriptorStore != GetResID(m_pDriver) || m_MetalPipelineState == NULL)
     return {};
 
@@ -825,7 +1082,37 @@ rdcarray<Descriptor> MetalReplay::GetDescriptors(ResourceId descriptorStore,
     {
       const uint32_t offset = range.offset + i * range.descriptorSize;
       Descriptor &descriptor = ret[dst];
-      if(range.type == DescriptorType::Image && offset < SamplerOffset &&
+      if(range.type == DescriptorType::Buffer && offset >= VertexBufferOffset)
+      {
+        const uint32_t slot = offset - VertexBufferOffset;
+        if(slot < m_MetalPipelineState->vertexStorageBuffers.size())
+        {
+          const MetalPipe::BufferBinding &binding =
+              m_MetalPipelineState->vertexStorageBuffers[slot];
+          descriptor.type = DescriptorType::Buffer;
+          descriptor.resource = binding.resourceId;
+          descriptor.byteOffset = binding.byteOffset;
+          descriptor.byteSize = binding.byteSize;
+        }
+      }
+      else if(range.type == DescriptorType::Image && offset >= VertexTextureOffset)
+      {
+        const uint32_t slot = offset - VertexTextureOffset;
+        if(slot < m_MetalPipelineState->vertexTextures.size())
+        {
+          descriptor.type = DescriptorType::Image;
+          descriptor.resource = m_MetalPipelineState->vertexTextures[slot];
+          TextureDescription texture = GetTexture(descriptor.resource);
+          if(texture.resourceId != ResourceId())
+          {
+            descriptor.format = texture.format;
+            descriptor.textureType = texture.type;
+            descriptor.numMips = (uint8_t)texture.mips;
+            descriptor.numSlices = (uint16_t)texture.arraysize;
+          }
+        }
+      }
+      else if(range.type == DescriptorType::Image && offset < SamplerOffset &&
          offset < m_MetalPipelineState->fragmentTextures.size())
       {
         descriptor.type = DescriptorType::Image;
@@ -839,17 +1126,62 @@ rdcarray<Descriptor> MetalReplay::GetDescriptors(ResourceId descriptorStore,
           descriptor.numSlices = (uint16_t)texture.arraysize;
         }
       }
-      else if(range.type == DescriptorType::ConstantBuffer && offset >= BufferOffset)
+      else if((range.type == DescriptorType::ConstantBuffer ||
+               range.type == DescriptorType::Buffer ||
+               range.type == DescriptorType::ReadWriteBuffer) &&
+              offset >= BufferOffset && offset < ComputeReadOffset)
       {
         const uint32_t slot = offset - BufferOffset;
         if(slot < m_MetalPipelineState->fragmentBuffers.size())
         {
           const MetalPipe::BufferBinding &binding =
               m_MetalPipelineState->fragmentBuffers[slot];
-          descriptor.type = DescriptorType::ConstantBuffer;
+          descriptor.type = range.type;
           descriptor.resource = binding.resourceId;
           descriptor.byteOffset = binding.byteOffset;
           descriptor.byteSize = binding.byteSize;
+        }
+      }
+      else if((range.type == DescriptorType::Image && offset >= ComputeReadOffset &&
+               offset < ComputeWriteOffset) ||
+              (range.type == DescriptorType::ReadWriteImage && offset >= ComputeWriteOffset))
+      {
+        const uint32_t slot = offset - (range.type == DescriptorType::Image
+                                            ? ComputeReadOffset
+                                            : ComputeWriteOffset);
+        if(slot < m_MetalPipelineState->computeTextures.size())
+        {
+          descriptor.type = range.type;
+          descriptor.resource = m_MetalPipelineState->computeTextures[slot];
+          TextureDescription texture = GetTexture(descriptor.resource);
+          if(texture.resourceId != ResourceId())
+          {
+            descriptor.format = texture.format;
+            descriptor.textureType = texture.type;
+            descriptor.numMips = (uint8_t)texture.mips;
+            descriptor.numSlices = (uint16_t)texture.arraysize;
+          }
+        }
+      }
+      else if(range.type == DescriptorType::Image && offset >= ArgumentTextureOffset)
+      {
+        const uint32_t encoded = offset - ArgumentTextureOffset;
+        const uint32_t bufferSlot = encoded / 32;
+        const uint32_t member = encoded % 32;
+        if(bufferSlot < m_MetalPipelineState->fragmentArgumentBuffers.size() &&
+           member < m_MetalPipelineState->fragmentArgumentBuffers[bufferSlot].textures.size())
+        {
+          descriptor.type = DescriptorType::Image;
+          descriptor.resource =
+              m_MetalPipelineState->fragmentArgumentBuffers[bufferSlot].textures[member];
+          TextureDescription texture = GetTexture(descriptor.resource);
+          if(texture.resourceId != ResourceId())
+          {
+            descriptor.format = texture.format;
+            descriptor.textureType = texture.type;
+            descriptor.numMips = (uint8_t)texture.mips;
+            descriptor.numSlices = (uint16_t)texture.arraysize;
+          }
         }
       }
     }
@@ -889,6 +1221,8 @@ rdcarray<SamplerDescriptor> MetalReplay::GetSamplerDescriptors(ResourceId descri
                                                                const rdcarray<DescriptorRange> &ranges)
 {
   static const uint32_t SamplerOffset = 0x100;
+  static const uint32_t ArgumentSamplerOffset = 0x900;
+  static const uint32_t VertexSamplerOffset = 0xE00;
   if(descriptorStore != GetResID(m_pDriver) || m_MetalPipelineState == NULL)
     return {};
 
@@ -907,11 +1241,28 @@ rdcarray<SamplerDescriptor> MetalReplay::GetSamplerDescriptors(ResourceId descri
       if(range.type != DescriptorType::Sampler || offset < SamplerOffset)
         continue;
 
-      const uint32_t slot = offset - SamplerOffset;
-      if(slot >= m_MetalPipelineState->fragmentSamplers.size())
-        continue;
-
-      const ResourceId samplerId = m_MetalPipelineState->fragmentSamplers[slot];
+      ResourceId samplerId;
+      if(offset >= VertexSamplerOffset)
+      {
+        const uint32_t slot = offset - VertexSamplerOffset;
+        if(slot < m_MetalPipelineState->vertexSamplers.size())
+          samplerId = m_MetalPipelineState->vertexSamplers[slot];
+      }
+      else if(offset >= ArgumentSamplerOffset)
+      {
+        const uint32_t encoded = offset - ArgumentSamplerOffset;
+        const uint32_t bufferSlot = encoded / 32;
+        const uint32_t member = encoded % 32;
+        if(bufferSlot < m_MetalPipelineState->fragmentArgumentBuffers.size() &&
+           member < m_MetalPipelineState->fragmentArgumentBuffers[bufferSlot].samplers.size())
+          samplerId = m_MetalPipelineState->fragmentArgumentBuffers[bufferSlot].samplers[member];
+      }
+      else
+      {
+        const uint32_t slot = offset - SamplerOffset;
+        if(slot < m_MetalPipelineState->fragmentSamplers.size())
+          samplerId = m_MetalPipelineState->fragmentSamplers[slot];
+      }
       auto captured = m_SamplerStates.find(samplerId);
       if(captured == m_SamplerStates.end())
         continue;
@@ -950,12 +1301,119 @@ rdcarray<DescriptorAccess> MetalReplay::GetDescriptorAccess(uint32_t eventId)
 {
   static const uint32_t SamplerOffset = 0x100;
   static const uint32_t BufferOffset = 0x200;
+  static const uint32_t ComputeReadOffset = 0x300;
+  static const uint32_t ComputeWriteOffset = 0x400;
+  static const uint32_t ArgumentTextureOffset = 0x500;
+  static const uint32_t ArgumentSamplerOffset = 0x900;
+  static const uint32_t VertexTextureOffset = 0xD00;
+  static const uint32_t VertexSamplerOffset = 0xE00;
+  static const uint32_t VertexBufferOffset = 0xF00;
   const MetalPipe::State *state = m_MetalPipelineState;
   if(state == NULL)
     return {};
 
   rdcarray<DescriptorAccess> ret;
   const ResourceId store = GetResID(m_pDriver);
+  const ResourceId vertexShader = state->vertexShader.resourceId;
+  auto vertexReflectionIt = m_Shaders.find(vertexShader);
+  auto vertexUsageIt = m_ShaderBindingUsage.find(vertexShader);
+  const bool hasVertexReflection = vertexReflectionIt != m_Shaders.end() &&
+                                   vertexUsageIt != m_ShaderBindingUsage.end() &&
+                                   vertexUsageIt->second.available;
+  for(size_t slot = 0; slot < state->vertexStorageBuffers.size(); slot++)
+  {
+    if(state->vertexStorageBuffers[slot].resourceId == ResourceId())
+      continue;
+    DescriptorAccess access;
+    access.stage = ShaderStage::Vertex;
+    access.type = DescriptorType::Buffer;
+    access.index = DescriptorAccess::NoShaderBinding;
+    if(hasVertexReflection)
+    {
+      const rdcarray<ShaderResource> &resources = vertexReflectionIt->second.readOnlyResources;
+      for(size_t bind = 0; bind < resources.size(); bind++)
+        if(!resources[bind].isTexture && resources[bind].descriptorType == DescriptorType::Buffer &&
+           resources[bind].fixedBindNumber == slot)
+        {
+          access.index = (uint16_t)bind;
+          access.staticallyUnused = bind >= vertexUsageIt->second.readOnlyResources.size() ||
+                                    !vertexUsageIt->second.readOnlyResources[bind];
+          break;
+        }
+      if(access.index == DescriptorAccess::NoShaderBinding)
+        access.staticallyUnused = true;
+    }
+    else
+    {
+      access.index = (uint16_t)slot;
+    }
+    access.descriptorStore = store;
+    access.byteOffset = VertexBufferOffset + (uint32_t)slot;
+    access.byteSize = 1;
+    ret.push_back(access);
+  }
+  for(size_t slot = 0; slot < state->vertexTextures.size(); slot++)
+  {
+    if(state->vertexTextures[slot] == ResourceId())
+      continue;
+    DescriptorAccess access;
+    access.stage = ShaderStage::Vertex;
+    access.type = DescriptorType::Image;
+    access.index = DescriptorAccess::NoShaderBinding;
+    if(hasVertexReflection)
+    {
+      const rdcarray<ShaderResource> &resources = vertexReflectionIt->second.readOnlyResources;
+      for(size_t bind = 0; bind < resources.size(); bind++)
+        if(resources[bind].fixedBindNumber == slot)
+        {
+          access.index = (uint16_t)bind;
+          access.staticallyUnused = bind >= vertexUsageIt->second.readOnlyResources.size() ||
+                                    !vertexUsageIt->second.readOnlyResources[bind];
+          break;
+        }
+      if(access.index == DescriptorAccess::NoShaderBinding)
+        access.staticallyUnused = true;
+    }
+    else
+    {
+      access.index = (uint16_t)slot;
+    }
+    access.descriptorStore = store;
+    access.byteOffset = VertexTextureOffset + (uint32_t)slot;
+    access.byteSize = 1;
+    ret.push_back(access);
+  }
+  for(size_t slot = 0; slot < state->vertexSamplers.size(); slot++)
+  {
+    if(state->vertexSamplers[slot] == ResourceId())
+      continue;
+    DescriptorAccess access;
+    access.stage = ShaderStage::Vertex;
+    access.type = DescriptorType::Sampler;
+    access.index = DescriptorAccess::NoShaderBinding;
+    if(hasVertexReflection)
+    {
+      const rdcarray<ShaderSampler> &samplers = vertexReflectionIt->second.samplers;
+      for(size_t bind = 0; bind < samplers.size(); bind++)
+        if(samplers[bind].fixedBindNumber == slot)
+        {
+          access.index = (uint16_t)bind;
+          access.staticallyUnused = bind >= vertexUsageIt->second.samplers.size() ||
+                                    !vertexUsageIt->second.samplers[bind];
+          break;
+        }
+      if(access.index == DescriptorAccess::NoShaderBinding)
+        access.staticallyUnused = true;
+    }
+    else
+    {
+      access.index = (uint16_t)slot;
+    }
+    access.descriptorStore = store;
+    access.byteOffset = VertexSamplerOffset + (uint32_t)slot;
+    access.byteSize = 1;
+    ret.push_back(access);
+  }
   const ResourceId fragmentShader = state->fragmentShader.resourceId;
   auto reflectionIt = m_Shaders.find(fragmentShader);
   auto usageIt = m_ShaderBindingUsage.find(fragmentShader);
@@ -984,7 +1442,21 @@ rdcarray<DescriptorAccess> MetalReplay::GetDescriptorAccess(uint32_t eventId)
         }
       }
       if(access.index == DescriptorAccess::NoShaderBinding)
-        access.staticallyUnused = true;
+      {
+        const rdcarray<ShaderResource> &resources = reflectionIt->second.readOnlyResources;
+        for(size_t bind = 0; bind < resources.size(); bind++)
+          if(!resources[bind].isTexture && resources[bind].fixedBindNumber == slot &&
+             resources[bind].descriptorType == DescriptorType::Buffer)
+          {
+            access.type = DescriptorType::Buffer;
+            access.index = (uint16_t)bind;
+            access.staticallyUnused = bind >= usageIt->second.readOnlyResources.size() ||
+                                      !usageIt->second.readOnlyResources[bind];
+            break;
+          }
+        if(access.index == DescriptorAccess::NoShaderBinding)
+          access.staticallyUnused = true;
+      }
     }
     else
     {
@@ -1061,6 +1533,113 @@ rdcarray<DescriptorAccess> MetalReplay::GetDescriptorAccess(uint32_t eventId)
     access.byteSize = 1;
     ret.push_back(access);
   }
+  for(size_t bufferSlot = 0; bufferSlot < state->fragmentArgumentBuffers.size(); bufferSlot++)
+  {
+    const MetalPipe::ArgumentBuffer &argument = state->fragmentArgumentBuffers[bufferSlot];
+    for(size_t member = 0; member < argument.textures.size(); member++)
+    {
+      if(argument.textures[member] == ResourceId())
+        continue;
+      DescriptorAccess access;
+      access.stage = ShaderStage::Fragment;
+      access.type = DescriptorType::Image;
+      access.index = DescriptorAccess::NoShaderBinding;
+      if(hasReflection)
+      {
+        for(size_t bind = 0; bind < reflectionIt->second.readOnlyResources.size(); bind++)
+          if(reflectionIt->second.readOnlyResources[bind].fixedBindNumber == member)
+          {
+            access.index = (uint16_t)bind;
+            access.staticallyUnused = bind >= usageIt->second.readOnlyResources.size() ||
+                                      !usageIt->second.readOnlyResources[bind];
+            break;
+          }
+      }
+      access.descriptorStore = store;
+      access.byteOffset = ArgumentTextureOffset + (uint32_t)bufferSlot * 32 + (uint32_t)member;
+      access.byteSize = 1;
+      ret.push_back(access);
+    }
+    for(size_t member = 0; member < argument.samplers.size(); member++)
+    {
+      if(argument.samplers[member] == ResourceId())
+        continue;
+      DescriptorAccess access;
+      access.stage = ShaderStage::Fragment;
+      access.type = DescriptorType::Sampler;
+      access.index = DescriptorAccess::NoShaderBinding;
+      if(hasReflection)
+      {
+        for(size_t bind = 0; bind < reflectionIt->second.samplers.size(); bind++)
+          if(reflectionIt->second.samplers[bind].fixedBindNumber == member)
+          {
+            access.index = (uint16_t)bind;
+            access.staticallyUnused = bind >= usageIt->second.samplers.size() ||
+                                      !usageIt->second.samplers[bind];
+            break;
+          }
+      }
+      access.descriptorStore = store;
+      access.byteOffset = ArgumentSamplerOffset + (uint32_t)bufferSlot * 32 + (uint32_t)member;
+      access.byteSize = 1;
+      ret.push_back(access);
+    }
+  }
+  const ResourceId computeShader = state->computeShader.resourceId;
+  reflectionIt = m_Shaders.find(computeShader);
+  usageIt = m_ShaderBindingUsage.find(computeShader);
+  const bool hasComputeReflection = reflectionIt != m_Shaders.end() &&
+                                    usageIt != m_ShaderBindingUsage.end() &&
+                                    usageIt->second.available;
+  for(size_t slot = 0; slot < state->computeTextures.size(); slot++)
+  {
+    if(state->computeTextures[slot] == ResourceId())
+      continue;
+    bool readOnly = true;
+    size_t bindingIndex = slot;
+    if(hasComputeReflection)
+    {
+      const ShaderReflection &reflection = reflectionIt->second;
+      bool found = false;
+      for(size_t bind = 0; bind < reflection.readOnlyResources.size(); bind++)
+      {
+        if(reflection.readOnlyResources[bind].fixedBindNumber == slot)
+        {
+          bindingIndex = bind;
+          found = true;
+          break;
+        }
+      }
+      if(!found)
+      {
+        readOnly = false;
+        for(size_t bind = 0; bind < reflection.readWriteResources.size(); bind++)
+        {
+          if(reflection.readWriteResources[bind].fixedBindNumber == slot)
+          {
+            bindingIndex = bind;
+            found = true;
+            break;
+          }
+        }
+      }
+      if(!found)
+        continue;
+    }
+    DescriptorAccess access;
+    access.stage = ShaderStage::Compute;
+    access.type = readOnly ? DescriptorType::Image : DescriptorType::ReadWriteImage;
+    access.index = (uint16_t)bindingIndex;
+    access.staticallyUnused = hasComputeReflection &&
+        (readOnly ? bindingIndex >= usageIt->second.readOnlyResources.size() ||
+                    !usageIt->second.readOnlyResources[bindingIndex]
+                  : bindingIndex >= usageIt->second.readWriteResources.size() ||
+                    !usageIt->second.readWriteResources[bindingIndex]);
+    access.descriptorStore = store;
+    access.byteOffset = (readOnly ? ComputeReadOffset : ComputeWriteOffset) + (uint32_t)slot;
+    access.byteSize = 1;
+    ret.push_back(access);
+  }
   return ret;
 }
 
@@ -1083,6 +1662,56 @@ void MetalReplay::AddAction(const ActionDescription &in)
   action.events.swap(m_PendingEvents);
   m_EventPipelineStates[action.eventId] = m_CurrentPipelineState;
   m_FrameRecord.actionList.push_back(action);
+
+  if(action.flags & ActionFlags::Drawcall)
+  {
+    for(const MetalPipe::BufferBinding &buffer : m_CurrentPipelineState.vertexStorageBuffers)
+      AddUsage(buffer.resourceId, ResourceUsage::VS_Resource);
+    for(ResourceId texture : m_CurrentPipelineState.vertexTextures)
+      AddUsage(texture, ResourceUsage::VS_Resource);
+    for(ResourceId texture : m_CurrentPipelineState.fragmentTextures)
+      AddUsage(texture, ResourceUsage::PS_Resource);
+    const ResourceId fragmentShader = m_CurrentPipelineState.fragmentShader.resourceId;
+    auto shader = m_Shaders.find(fragmentShader);
+    for(size_t slot = 0; slot < m_CurrentPipelineState.fragmentBuffers.size(); slot++)
+    {
+      const ResourceId buffer = m_CurrentPipelineState.fragmentBuffers[slot].resourceId;
+      if(buffer == ResourceId())
+        continue;
+      bool storage = false;
+      if(shader != m_Shaders.end())
+        for(const ShaderResource &resource : shader->second.readOnlyResources)
+          if(!resource.isTexture && resource.fixedBindNumber == slot &&
+             resource.descriptorType == DescriptorType::Buffer)
+            storage = true;
+      AddUsage(buffer, storage ? ResourceUsage::PS_Resource : ResourceUsage::PS_Constants);
+    }
+    for(const MetalPipe::VertexBuffer &buffer : m_CurrentPipelineState.vertexBuffers)
+      AddUsage(buffer.resourceId, ResourceUsage::VertexBuffer);
+    if(action.flags & ActionFlags::Indexed)
+      AddUsage(m_CurrentPipelineState.indexBuffer.resourceId, ResourceUsage::IndexBuffer);
+    for(const MetalPipe::ArgumentBuffer &argumentBuffer :
+        m_CurrentPipelineState.fragmentArgumentBuffers)
+    {
+      AddUsage(argumentBuffer.buffer.resourceId, ResourceUsage::PS_Constants);
+      for(ResourceId texture : argumentBuffer.textures)
+        AddUsage(texture, ResourceUsage::PS_Resource);
+    }
+  }
+}
+
+void MetalReplay::AddUsage(ResourceId id, ResourceUsage usage)
+{
+  if(id == ResourceId() || m_FrameRecord.actionList.empty())
+    return;
+
+  m_ResourceUses[id].push_back(EventUsage(m_FrameRecord.actionList.back().eventId, usage));
+}
+
+rdcarray<EventUsage> MetalReplay::GetUsage(ResourceId id)
+{
+  auto it = m_ResourceUses.find(id);
+  return it == m_ResourceUses.end() ? rdcarray<EventUsage>() : it->second;
 }
 
 RDResult MetalReplay::ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBuffers)
@@ -1093,6 +1722,7 @@ RDResult MetalReplay::ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBu
   m_FrameRecord = {};
   m_PendingEvents.clear();
   m_Events.clear();
+  m_ResourceUses.clear();
   m_EventPipelineStates.clear();
   m_NextEventID = 1;
   m_NextActionID = 1;
@@ -1621,7 +2251,13 @@ struct MeshParams
   float4 color;
 };
 
-vertex VSOut rdoc_mesh_vs(device const uchar *vertices [[buffer(0)]],
+struct MeshVSOut
+{
+  float4 position [[position]];
+  float pointSize [[point_size]];
+};
+
+vertex MeshVSOut rdoc_mesh_vs(device const uchar *vertices [[buffer(0)]],
                           constant MeshParams &params [[buffer(1)]],
                           uint vertexID [[vertex_id]])
 {
@@ -1633,13 +2269,13 @@ vertex VSOut rdoc_mesh_vs(device const uchar *vertices [[buffer(0)]],
   if(params.componentCount >= 4)
     value.w = position[3];
 
-  VSOut output;
+  MeshVSOut output;
   output.position = params.mvp * value;
-  output.uv = float2(0.0);
+  output.pointSize = 9.0;
   return output;
 }
 
-fragment float4 rdoc_mesh_fs(VSOut input [[stage_in]],
+fragment float4 rdoc_mesh_fs(MeshVSOut input [[stage_in]],
                              constant MeshParams &params [[buffer(1)]])
 {
   return params.color;

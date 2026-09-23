@@ -410,3 +410,184 @@
   与 Metal replay 数据无关。限制修复范围比改动全局 Qt style 更稳妥。
 - 验证：最新 qrenderdoc 通过连续点击切换 mip0/1/2、array slice0/1/2、cube X+/X-，键盘 End
   选到 Z-；各颜色正确，标准 DDS 保存和 `No problems detected` 均通过。
+
+## D033：T10 blit 逐操作记录 action、usage 与可 seek 资源结果
+
+- 日期：2026-09-23
+- 状态：已采用
+- 决策：T10 的 blit encoder 创建/end 形成 pass boundary；buffer copy、texture copy、buffer
+  fill 与 mip generation 各生成一个 action/event，并分别使用通用 `Copy`、`Clear`、`GenMips`
+  flag。copy action 保存真实源/目标 resource ID 与 texture mip/slice；`GetUsage()` 按 event 记录
+  `CopySrc`、`CopyDst`、`Clear` 和 `GenMips`，让标准 Resource Inspector/Timeline 使用同一数据。
+  replay 在提交 GPU 命令前验证 buffer offset/length、texture mip/slice/origin/size 和 pixel format。
+- 原因：只执行 GPU blit 而缺少 action/usage 会让事件切换、资源跳转和读写关系与实际内容不一致；
+  复用现有标准 Viewer 能直接观察 blit 前后字节及子资源，不需要新的 Metal 专用查看器。
+- 当前边界：只承诺 T10 覆盖的 shared buffer→buffer、单采样 RGBA8 2D texture→texture origin
+  重载、buffer fill、2D mipmap generation 和同一 command buffer 内的 blit→render 可见性。
+  buffer↔texture、更多重载/格式、跨 command buffer/queue 与 managed-resource 同步待后续 fixture。
+- 验证：T10 XML、EID 2→3→2 buffer 数据、Texture 20 四象限、Texture 21 mip3、四条输出
+  色带、468-byte DDS、11 份 capture 各 10 次 lifecycle，以及 qrenderdoc 的标准资源跳转通过。
+
+## D034：Metal usage 文案与 mipgen 的通用 pass 分组
+
+- 日期：2026-09-23
+- 状态：已采用
+- 决策：qrenderdoc 的 `ResourceUsage` 文案将 Metal 纳入现有通用分支，使 copy/fill/mipgen
+  显示真实 `Copy - Source/Dest`、`Clear`、`Generate Mips`，不落到 `Unknown`。通用自动 marker
+  的 copy/clear 分组把 `GenMips` 视作该组操作，避免 blit 组因没有 color output 被误写成
+  `Depth-only Pass`。
+- 原因：L4 实机发现自动 smoke 的 usage 语义正确，但 UI 文案和分组标题误导用户；保持 action
+  flags 不变，仅修正通用显示与分组规则。
+- 验证：T10 定向 output smoke/CLI replay 通过；最新 app 包内 `librenderdoc.dylib` 同步后，
+  Event Browser 显示 `Copy/Clear Pass #1` 及 EID 1-6，Resource Inspector 显示 Buffer 18 的
+  `Copy - Dest`/`Clear` 和 Texture 21 的 `Generate Mips`，状态栏为 `No problems detected`。
+
+## D035：T11 compute 写入以 frame 内 reset 和标准 descriptor 表达
+
+- 日期：2026-09-23
+- 状态：已采用；自动 L3 与最新 qrenderdoc L4 均通过
+- 决策：fixture 的 destination `replaceRegion(0)` 放在 `StartFrameCapture` 之后，成为可重放的
+  frame chunk；compute encoder 的 begin/dispatch/end 使用标准 action/event，dispatch 标记
+  `CS_Resource/CS_RWResource` usage。compute pipeline/shader/texture binding 写入 `MetalPipe::State`，
+  由标准只读 `Image` 和读写 `ReadWriteImage` descriptor 暴露，在 Metal Pipeline 的独立 CS 阶段
+  展示并可直接打开标准 Texture Viewer；不增加 compute 专用资源查看器。
+- 原因：若 reset 在 capture 前，初次 replay 后写纹理会保留最终 texel，seek 回 dispatch 前无法恢复
+  清零状态。将 reset 纳入 frame stream 后可复用现有 replay 区间逻辑，且通用 descriptor/usage 让
+  UI、Resource Inspector 和自动断言使用同一来源。
+- 当前边界：只承诺单 command buffer、直接绑定的同尺寸 2D RGBA8 texture read/write 与
+  `dispatchThreadgroups`；不包含 argument buffer、indirect dispatch、跨 queue 同步及更多格式。
+- 验证：T11 前/后/回退 readback、全部 256 字节、最终 draw、384-byte DDS、T03/T09/T10 定向、
+  T00-T11 全量回归和 12×10 lifecycle 已通过。最新 qrenderdoc 的 Event/CS Pipeline/Texture/
+  Resource Inspector、UI DDS/HTML 导出与 `No problems detected` 均通过。
+
+## D036：argument buffer 保存编码语义，不保存不可移植的 GPU 地址字节
+
+- 日期：2026-09-23
+- 状态：已采用；自动 L3 与最新 qrenderdoc L4 均通过
+- 决策：T12 的 `MTLFunction::newArgumentEncoderWithBufferIndex` 创建真实 wrapper；
+  `setArgumentBuffer`、`setTexture`、`setSamplerState` 作为目标 argument buffer resource record 的有序
+  chunk 保存，并把 encoder/function、texture、sampler 建成依赖。replay 在真实 device 上重建 encoder
+  后重新编码资源句柄，不把 capture 进程中的 argument buffer 原始 GPU 地址字节当作初始内容复制。
+  单层成员写入 `MetalPipe::ArgumentBuffer`，同时展开为 shader struct-member reflection 和通用 descriptor；
+  `useResource` 保持真实 Metal residency 声明并产生间接 texture frame reference。
+- 原因：argument buffer 内的资源表示由 Metal 驱动编码，跨进程复制 raw bytes 不能保证句柄有效；只在
+  Metal 专用 UI 保存旁路映射又会让通用 descriptor、资源跳转和自动化看到不同事实来源。以 API 编码
+  序列重建并复用通用 descriptor，能同时保持 GPU 正确性和 Viewer 一致性。
+- 当前边界：只承诺 fragment buffer slot 0、单层直接 `texture2d<float> id(0)` 和 sampler `id(1)`；
+  nested/array argument buffer、buffer member、compute/vertex argument buffer、device descriptor 路径、
+  heap/bindless/function table/ICB 均留待独立 fixture。
+- 验证：T12 XML、resource ID、`PS_Constants/PS_Resource` usage、reflection/descriptor、64-byte texel、
+  clear/draw seek、四象限输出、192-byte DDS、T03/T04/T11 定向以及 T00-T12 全量和 13×10 lifecycle
+  已通过；最新 qrenderdoc 的 Event/FS Pipeline、Buffer/Texture/Resource 跳转、UI DDS/HTML export 与
+  `No problems detected` 也通过。
+
+## D037：单次 indirect draw 使用真实 buffer 参数与标准状态路径
+
+- 日期：2026-09-23
+- 状态：已采用；自动 L3 与最新 qrenderdoc L4 均通过
+- 决策：T13 仅接通非索引 `drawPrimitives(primitiveType, indirectBuffer, offset)`。capture 保存
+  buffer 资源引用与 offset，并延用 shared buffer 初始内容；replay 从真实 buffer 读取四个
+  `uint32` 参数填充 action，再调用真实 Metal indirect overload。用 `Drawcall|Indirect` 与
+  `ResourceUsage::Indirect` 表达事件和资源用途，将精确 16-byte 参数区放入 `MetalPipe::State`，
+  由 IA Pipeline 打开标准 Buffer Viewer。
+- 原因：参数字节、action、GPU draw 和 UI 应当来自同一个 buffer/offset；独立 Metal 专用面板会
+  让资源身份和通用导出分叉。replay 对未对齐、越界或不可 CPU 读取的参数显式失败，不把未知参数
+  伪装成确定 action。
+- 边界：只承诺 CPU 写入的 shared buffer、单次非索引 indirect draw；indexed indirect、GPU 生成
+  参数、ICB、heap、多 queue 留待独立 fixture。首版 P1 缺口先处理 T14 indexed instancing/base
+  vertex，ICB 保留为 P2。
+- 验证：正常 offset 16 的四字段 `3/2/1/1`、左右实例图像、16-byte UI/自动 raw export、
+  Pipeline HTML、14×10 lifecycle 与 T00-T13 全量通过；派生 offset 17/36 capture 在 indirect
+  chunk 返回明确 replay 失败，最新 qrenderdoc 状态栏为 `No problems detected`。
+
+## D038：indexed instancing 的 index binding 使用 draw-time 精确子范围
+
+- 日期：2026-09-23
+- 状态：已采用；T14 L3/L4 均通过
+- 决策：只接通 `drawIndexedPrimitives(... instanceCount, baseVertex, baseInstance)` 直接重载，
+  保留 T02 基础 indexed draw 与 T13 非索引 indirect 路径。replay 将 Metal 的
+  `indexBufferOffset` 放入 `MetalPipe::indexBuffer.byteOffset`，把 `byteSize` 限为
+  `indexCount × indexStride`；`ActionDescription::indexOffset` 相对于该绑定为 0。
+  `baseVertex`、`instanceOffset` 和 `Indexed|Instanced` 标记来自同一 chunk。draw action 为绑定的
+  vertex/instance/index buffer 写入通用 resource usage。
+- 原因：标准 Mesh Viewer/Buffer Viewer 会将 index binding offset 与 action indexOffset 相加；
+  若两处重复保存绝对 offset，会读取错误的 index。精确子范围还让 IA、Buffer Viewer 和导出
+  与实际 GPU draw 对齐，不把 buffer 尾部哨兵误当作当前 draw 数据。
+- 边界：当前只覆盖直接 UInt16/UInt32 indexed instancing/base vertex overload；indirect indexed、
+  ICB、GPU 生成参数与任意应用 capture 仍需独立 fixture。replay 对无效 index 类型、未对齐或越界
+  index 范围、超出 action 字段宽度的参数显式失败。
+- 验证：T14 原生/重放左红右蓝、XML 参数、`0/1/2` index 数据、4/6 Buffer Viewer、两实例
+  VS Input、usage/seek/raw 保存、offset 3/10 异常拒绝、T02/T05/T13 定向、T00-T14 全量及
+  15×10 lifecycle 均通过；最新 qrenderdoc 的 Event/API/IA/Resource/Mesh/Buffer/HTML/CSV 和状态栏
+  均已核对。
+
+## D039：直接 point/line draw 延用标准 action 与 VS Input 路径
+
+- 日期：2026-09-23
+- 状态：已采用；T15 L3/L4 均通过
+- 决策：Point、Line、Line Strip 复用已支持的直接 `drawPrimitives` chunk 和通用
+  `ActionDescription::vertexOffset`，按 primitiveType 设置事件级拓扑。Event 名称显示明确的 primitive
+  类型，`PipeState`、Mesh preview 和标准 Buffer Viewer 从同一 vertex buffer/descriptor 读取数据。
+  replay 对未知 primitive 或零顶点/实例数明确失败。仅 Mesh preview 的 vertex shader 输出
+  固定 9px point size，以使 point 可见；不会修改被捕获 draw 的大小。
+- 原因：非零 vertexStart 应只写入 action，标准 Mesh Viewer 在读取顶点时加上这个偏移；把它再次
+  写到 buffer binding 会导致双重偏移。细线的精确覆盖受光栅化边界影响，像素验证检查端点附近小范围。
+- 边界：仅覆盖直接 point/line draw；indexed/indirect line、可变 point size、line width 扩展、
+  几何 shader 和 post-VS 留待独立 fixture。
+- 验证：T15 native/capture/XML/action/seek/VS Input/Buffer/Resource/Mesh/DDS、非法参数拒绝、
+  T01/T02/T05/T14 定向以及 T00-T15 L3（16×10 lifecycle，resident growth 737280 bytes）通过；
+  最新 qrenderdoc 的 Point/Line/Line Strip Event/API/Pipeline、Mesh/Buffer/Resource、UI DDS/HTML
+  与状态栏均已核对。
+
+## D040：vertex texture/sampler 使用独立 stage snapshot 和 descriptor 地址
+
+- 日期：2026-09-23
+- 状态：已采用；T16 L3/L4 均通过
+- 决策：直接 `setVertexTexture`/`setVertexSamplerState` 与 fragment 对应接口使用各自的
+  `MetalPipe::State` 绑定数组。通用 descriptor store 为 vertex texture/sampler 分配独立的
+  `0xD00`/`0xE00` 地址区，stage、reflection index 与物理 slot 在 `DescriptorAccess` 中分别
+  保存；VS Pipeline 从通用 `PipeState` 查询资源。draw action 为 vertex texture 写入
+  `VS_Resource` usage。
+- 原因：vertex 与 fragment 可以同时使用相同物理 slot，若共享 snapshot 或 descriptor 地址，
+  标准 Viewer 会跳到错误资源。source-created MSL 的 pipeline argument reflection 已给出
+  vertex texture/sampler 名称和 active 状态，可复用 T03 的 used/unused 语义。
+- 边界：本轮只覆盖直接绑定、非空 texture/sampler 和受控 source-created MSL；批量绑定在 T17，
+  vertex argument buffer、storage buffer、function constants 与预编译 metallib 分开验证。
+  replay 对 slot 128 与缺失资源在对应 chunk 明确失败。
+- 验证：T16 四象限 native/capture/replay、VS descriptor/reflection/usage、T03/T12 定向、
+  四份异常 RDC、T00-T16 L3（17×10 lifecycle，resident growth 114688 bytes）及最新
+  qrenderdoc Event/API/VS Pipeline/Texture/Buffer/Mesh/Resource/DDS/HTML 与状态栏均通过。
+## D041：批量 texture/sampler 绑定逐槽保留空槽语义
+
+- 日期：2026-09-23
+- 状态：已采用；T17 L3/L4 均通过
+- 决策：四个 vertex/fragment 批量入口分别记录 range、逐槽是否绑定以及资源数组；replay 先验证
+  range/数量/缺失资源，再一次性调用 Metal 批量 API，并逐槽更新事件 snapshot。空槽明确清除先前
+  的绑定；每个非空资源保留 frame reference。fragment texture draw 同时记录 `PS_Resource` usage。
+- 原因：单一数组中的 null 既是合法清空操作，也可能来自不存在的 captured resource；独立的
+  bound 标志让 replay 区分两者。逐槽 snapshot 与标准 descriptor 的物理 slot、used/unused 语义一致。
+- 边界：本轮只覆盖非 LOD clamp 的 vertex/fragment texture/sampler 批量入口；storage buffer、
+  LOD clamp、function constants 和任意应用注入独立验证。
+- 验证：T17 native/capture/XML/replay、四份异常 RDC、T03/T12/T16 定向、T00-T17 全量
+  （18×10 lifecycle）与最新 qrenderdoc VS/FS Pipeline、空槽、Viewer/Resource、DDS/HTML 通过。
+
+## D042：vertex buffer 物理槽按 shader 反射区分 IA 与 storage 语义
+
+- 日期：2026-09-24
+- 状态：已采用；T19 L1/L2/L4 通过，L3 未触发
+- 决策：`setVertexBuffer` 仍保存唯一物理绑定，但 draw-time snapshot 根据当前 vertex function
+  reflection 分类：被 vertex descriptor attribute 引用的槽进入 IA `vertexBuffers`，被 vertex shader
+  read-only buffer argument 引用的槽进入 `vertexStorageBuffers`；同一槽若同时满足两类语义可同时出现。
+  pipeline 后绑定或切换时重新分类已有物理绑定。vertex storage 使用独立 descriptor 地址区
+  `0xF00 + slot`，action 记录 `VS_Resource`，qrenderdoc 通过标准 VS Storage Buffers/Buffer Viewer/
+  Resource Inspector 展示精确 offset 和剩余范围。
+- 原因：Metal 用同一 `setVertexBuffer` API 同时承载 vertex fetch 和 vertex shader buffer argument，
+  仅按 API 名称归入 IA 会把 storage buffer 伪装成顶点流；仅按 reflection 归入 storage 又会破坏普通
+  vertex input。以 vertex descriptor 与 shader reflection 两份证据分类，可让 replay、descriptor、
+  Mesh/IA 和标准 Viewer 使用一致事实来源。
+- 边界：当前只承诺 source-created MSL 的只读 vertex buffer argument、受控 reflection 和非零 offset；
+  writable buffer、vertex argument buffer、无反射 metallib、buffer arrays 及跨 pipeline 的复杂别名需
+  独立 fixture。非法 slot 和越界 offset 在 replay 调用真实 Metal 前明确失败。
+- 验证：T19 的 slot 4 used、slot 6 unused、256+512/320+448 descriptor、四象限、raw/seek/usage，
+  T18/T16 必跑及因分类改动触发的 T02/T05 均通过；最新 qrenderdoc 的 IA 空表、VS Storage Buffers、
+  Buffer/Resource、HTML/CSV/bin 与 `No problems detected` 已核对。定向证据界定了风险，未执行 L3。

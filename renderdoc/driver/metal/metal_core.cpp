@@ -25,9 +25,12 @@
 #include "metal_core.h"
 #include "serialise/rdcfile.h"
 #include "metal_blit_command_encoder.h"
+#include "metal_argument_encoder.h"
 #include "metal_buffer.h"
 #include "metal_command_buffer.h"
+#include "metal_compute_command_encoder.h"
 #include "metal_device.h"
+#include "metal_function.h"
 #include "metal_library.h"
 #include "metal_render_command_encoder.h"
 #include "metal_replay.h"
@@ -131,7 +134,8 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     }
     case MetalChunk::MTLDevice_newRenderPipelineStateWithDescriptor_options:
       METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLDevice_newComputePipelineStateWithFunction: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLDevice_newComputePipelineStateWithFunction:
+      return Serialise_newComputePipelineStateWithFunction(ser, NULL, NULL, NULL);
     case MetalChunk::MTLDevice_newComputePipelineStateWithFunction_options:
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLDevice_newComputePipelineStateWithDescriptor: METAL_CHUNK_NOT_HANDLED();
@@ -156,7 +160,11 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLLibrary_newFunctionWithDescriptor: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLLibrary_newIntersectionFunctionWithDescriptor: METAL_CHUNK_NOT_HANDLED();
 
-    case MetalChunk::MTLFunction_newArgumentEncoderWithBufferIndex: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLFunction_newArgumentEncoderWithBufferIndex:
+    {
+      WrappedMTLFunction dummy(NULL, ResourceId(), this);
+      return dummy.Serialise_newArgumentEncoder(ser, NULL, 0);
+    }
 
     case MetalChunk::MTLCommandQueue_commandBuffer:
       return m_DummyReplayCommandQueue->Serialise_commandBuffer(ser, NULL);
@@ -188,7 +196,8 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLCommandBuffer_computeCommandEncoderWithDescriptor:
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLCommandBuffer_blitCommandEncoderWithDescriptor: METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLCommandBuffer_computeCommandEncoder: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLCommandBuffer_computeCommandEncoder:
+      return m_DummyReplayCommandBuffer->Serialise_computeCommandEncoder(ser, NULL);
     case MetalChunk::MTLCommandBuffer_computeCommandEncoderWithDispatchType:
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLCommandBuffer_encodeWaitForEvent: METAL_CHUNK_NOT_HANDLED();
@@ -245,12 +254,16 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       return m_DummyReplayRenderCommandEncoder->Serialise_setVertexBuffer(ser, NULL, 0, 0);
     case MetalChunk::MTLRenderCommandEncoder_setVertexBufferOffset: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_setVertexBuffers: METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLRenderCommandEncoder_setVertexTexture: METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLRenderCommandEncoder_setVertexTextures: METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLRenderCommandEncoder_setVertexSamplerState: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLRenderCommandEncoder_setVertexTexture:
+      return m_DummyReplayRenderCommandEncoder->Serialise_setVertexTexture(ser, NULL, 0);
+    case MetalChunk::MTLRenderCommandEncoder_setVertexTextures:
+      return m_DummyReplayRenderCommandEncoder->Serialise_setVertexTextures(ser, {}, NS::Range::Make(0, 0));
+    case MetalChunk::MTLRenderCommandEncoder_setVertexSamplerState:
+      return m_DummyReplayRenderCommandEncoder->Serialise_setVertexSamplerState(ser, NULL, 0);
     case MetalChunk::MTLRenderCommandEncoder_setVertexSamplerState_lodclamp:
       METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLRenderCommandEncoder_setVertexSamplerStates: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLRenderCommandEncoder_setVertexSamplerStates:
+      return m_DummyReplayRenderCommandEncoder->Serialise_setVertexSamplerStates(ser, {}, NS::Range::Make(0, 0));
     case MetalChunk::MTLRenderCommandEncoder_setVertexSamplerStates_lodclamp:
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_setVertexVisibleFunctionTable:
@@ -292,12 +305,14 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLRenderCommandEncoder_setFragmentBuffers: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_setFragmentTexture:
       return m_DummyReplayRenderCommandEncoder->Serialise_setFragmentTexture(ser, NULL, 0);
-    case MetalChunk::MTLRenderCommandEncoder_setFragmentTextures: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLRenderCommandEncoder_setFragmentTextures:
+      return m_DummyReplayRenderCommandEncoder->Serialise_setFragmentTextures(ser, {}, NS::Range::Make(0, 0));
     case MetalChunk::MTLRenderCommandEncoder_setFragmentSamplerState:
       return m_DummyReplayRenderCommandEncoder->Serialise_setFragmentSamplerState(ser, NULL, 0);
     case MetalChunk::MTLRenderCommandEncoder_setFragmentSamplerState_lodclamp:
       METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLRenderCommandEncoder_setFragmentSamplerStates: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLRenderCommandEncoder_setFragmentSamplerStates:
+      return m_DummyReplayRenderCommandEncoder->Serialise_setFragmentSamplerStates(ser, {}, NS::Range::Make(0, 0));
     case MetalChunk::MTLRenderCommandEncoder_setFragmentSamplerStates_lodclamp:
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_setFragmentVisibleFunctionTable:
@@ -330,14 +345,17 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLRenderCommandEncoder_drawPrimitives_instanced_base:
       return m_DummyReplayRenderCommandEncoder->Serialise_drawPrimitives(
           ser, MTL::PrimitiveTypePoint, 0, 0, 0, 0);
-    case MetalChunk::MTLRenderCommandEncoder_drawPrimitives_indirect: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLRenderCommandEncoder_drawPrimitives_indirect:
+      return m_DummyReplayRenderCommandEncoder->Serialise_drawPrimitives(
+          ser, MTL::PrimitiveTypePoint, (WrappedMTLBuffer *)NULL, 0);
     case MetalChunk::MTLRenderCommandEncoder_drawIndexedPrimitives:
       return m_DummyReplayRenderCommandEncoder->Serialise_drawIndexedPrimitives(
           ser, MTL::PrimitiveTypePoint, 0, MTL::IndexTypeUInt16, NULL, 0);
     case MetalChunk::MTLRenderCommandEncoder_drawIndexedPrimitives_instanced:
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_drawIndexedPrimitives_instanced_base:
-      METAL_CHUNK_NOT_HANDLED();
+      return m_DummyReplayRenderCommandEncoder->Serialise_drawIndexedPrimitives(
+          ser, MTL::PrimitiveTypePoint, 0, MTL::IndexTypeUInt16, NULL, 0, 0, 0, 0);
     case MetalChunk::MTLRenderCommandEncoder_drawIndexedPrimitives_indirect:
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_textureBarrier: METAL_CHUNK_NOT_HANDLED();
@@ -372,7 +390,9 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_dispatchThreadsPerTile: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_setThreadgroupMemoryLength: METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLRenderCommandEncoder_useResource: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLRenderCommandEncoder_useResource:
+      return m_DummyReplayRenderCommandEncoder->Serialise_useResource(
+          ser, NULL, MTL::ResourceUsageRead);
     case MetalChunk::MTLRenderCommandEncoder_useResource_stages: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_useResources: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_useResources_stages: METAL_CHUNK_NOT_HANDLED();
@@ -403,7 +423,8 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLBuffer_InternalModifyCPUContents:
       return m_DummyBuffer->Serialise_InternalModifyCPUContents(ser, 0, 0, NULL);
 
-    case MetalChunk::MTLBlitCommandEncoder_setLabel: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLBlitCommandEncoder_setLabel:
+      return m_DummyReplayBlitCommandEncoder->Serialise_setLabel(ser, NULL);
     case MetalChunk::MTLBlitCommandEncoder_endEncoding:
       return m_DummyReplayBlitCommandEncoder->Serialise_endEncoding(ser);
     case MetalChunk::MTLBlitCommandEncoder_insertDebugSignpost: METAL_CHUNK_NOT_HANDLED();
@@ -412,7 +433,8 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLBlitCommandEncoder_synchronizeResource:
       return m_DummyReplayBlitCommandEncoder->Serialise_synchronizeResource(ser, NULL);
     case MetalChunk::MTLBlitCommandEncoder_synchronizeTexture: METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLBlitCommandEncoder_copyFromBuffer_toBuffer: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLBlitCommandEncoder_copyFromBuffer_toBuffer:
+      return m_DummyReplayBlitCommandEncoder->Serialise_copyFromBuffer(ser, NULL, 0, NULL, 0, 0);
     case MetalChunk::MTLBlitCommandEncoder_copyFromBuffer_toTexture: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLBlitCommandEncoder_copyFromBuffer_toTexture_options:
       METAL_CHUNK_NOT_HANDLED();
@@ -421,11 +443,21 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLBlitCommandEncoder_copyFromTexture_toTexture: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLBlitCommandEncoder_copyFromTexture_toTexture_slice_level_origin:
-      METAL_CHUNK_NOT_HANDLED();
+    {
+      MTL::Origin origin = {};
+      MTL::Size size = {};
+      return m_DummyReplayBlitCommandEncoder->Serialise_copyFromTexture(
+          ser, NULL, 0, 0, origin, size, NULL, 0, 0, origin);
+    }
     case MetalChunk::MTLBlitCommandEncoder_copyFromTexture_toTexture_slice_level_count:
       METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLBlitCommandEncoder_generateMipmapsForTexture: METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLBlitCommandEncoder_fillBuffer: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLBlitCommandEncoder_generateMipmapsForTexture:
+      return m_DummyReplayBlitCommandEncoder->Serialise_generateMipmapsForTexture(ser, NULL);
+    case MetalChunk::MTLBlitCommandEncoder_fillBuffer:
+    {
+      NS::Range range = NS::Range::Make(0, 0);
+      return m_DummyReplayBlitCommandEncoder->Serialise_fillBuffer(ser, NULL, range, 0);
+    }
     case MetalChunk::MTLBlitCommandEncoder_updateFence: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLBlitCommandEncoder_waitForFence: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLBlitCommandEncoder_getTextureAccessCounters: METAL_CHUNK_NOT_HANDLED();
@@ -441,6 +473,25 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLBlitCommandEncoder_optimizeIndirectCommandBuffer: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLBlitCommandEncoder_sampleCountersInBuffer: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLBlitCommandEncoder_resolveCounters: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLComputeCommandEncoder_endEncoding:
+      return m_DummyReplayComputeCommandEncoder->Serialise_endEncoding(ser);
+    case MetalChunk::MTLComputeCommandEncoder_setComputePipelineState:
+      return m_DummyReplayComputeCommandEncoder->Serialise_setComputePipelineState(ser, NULL);
+    case MetalChunk::MTLComputeCommandEncoder_setTexture:
+      return m_DummyReplayComputeCommandEncoder->Serialise_setTexture(ser, NULL, 0);
+    case MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups:
+    {
+      MTL::Size groups = MTL::Size::Make(0, 0, 0);
+      MTL::Size threads = MTL::Size::Make(0, 0, 0);
+      return m_DummyReplayComputeCommandEncoder->Serialise_dispatchThreadgroups(ser, groups,
+                                                                                threads);
+    }
+    case MetalChunk::MTLArgumentEncoder_setArgumentBuffer:
+      return m_DummyReplayArgumentEncoder->Serialise_setArgumentBuffer(ser, NULL, 0);
+    case MetalChunk::MTLArgumentEncoder_setTexture:
+      return m_DummyReplayArgumentEncoder->Serialise_setTexture(ser, NULL, 0);
+    case MetalChunk::MTLArgumentEncoder_setSamplerState:
+      return m_DummyReplayArgumentEncoder->Serialise_setSamplerState(ser, NULL, 0);
 
     // no default to get compile error if a chunk is not handled
     case MetalChunk::Max: break;
@@ -709,6 +760,17 @@ RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endE
 
 void WrappedMTLDevice::FinishReplayCommands()
 {
+  if(m_ReplayComputeCommandEncoder)
+  {
+    Unwrap(m_ReplayComputeCommandEncoder)->endEncoding();
+    m_ReplayComputeCommandEncoder = NULL;
+  }
+  if(m_ReplayBlitCommandEncoder)
+  {
+    Unwrap(m_ReplayBlitCommandEncoder)->endEncoding();
+    m_ReplayBlitCommandEncoder = NULL;
+  }
+
   if(m_ReplayRenderCommandEncoder)
   {
     Unwrap(m_ReplayRenderCommandEncoder)->endEncoding();

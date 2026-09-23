@@ -42,10 +42,18 @@
 | T07 | depth/stencil | depth/stencil state 和 attachment | P1 | Native/Capture/RDC inspect/CLI Replay/五 draw event seek/depth output/front-back stencil state/lifecycle/Texture+Pipeline OM+export UI 验证通过 |
 | T08 | MSAA resolve | multisample texture、resolve | P1 | Native/Capture/RDC inspect/CLI Replay/三 draw resolve event seek/sample+resolve state/lifecycle/Texture+Pipeline OM+export UI 验证通过 |
 | T09 | mip/cube/array | 子资源枚举和查看 | P1 | Native/Capture/RDC inspect/CLI Replay/12 子资源 readback+display/pick/DDS 保存/lifecycle/Pipeline+Texture UI 验证通过 |
-| T10 | buffer/texture blit | copy/fill/mipmap | P1 | 未开始 |
-| T11 | compute texture filter | compute pipeline、dispatch、读写纹理 | P1 | 未开始 |
-| T12 | argument buffer | 资源引用解析 | P2 | 未开始 |
-| T13 | indirect draw/ICB | 间接命令 | P2 | 未开始 |
+| T10 | buffer/texture blit | copy/fill/mipmap | P1 | Native/Capture/RDC inspect/CLI Replay/buffer+texture+mip readback/event seek+usage/DDS 保存/lifecycle/Event+Resource+Buffer+Texture UI 验证通过 |
+| T11 | compute texture filter | compute pipeline、dispatch、读写纹理 | P1 | Native/Capture/RDC inspect/CLI Replay/dispatch 前后 readback+event seek+read-write descriptor/DDS 保存/lifecycle/最新 Event+CS Pipeline+Resource+Texture UI 验证通过 |
+| T12 | argument buffer | 资源引用解析 | P2 | Native/Capture/RDC inspect/CLI Replay/argument resource+descriptor+reflection/event seek/readback/DDS/lifecycle/最新 Event+FS Pipeline+Buffer+Texture+Resource UI 验证通过 |
+| T13 | indirect draw | 单次间接 draw 参数 | P2 | Native/Capture/RDC inspect/CLI Replay/Indirect action+usage/16-byte Buffer Viewer/seek/raw save/14×10 lifecycle/最新 Event+API+IA Pipeline+Resource UI 通过；ICB 留待独立 fixture |
+| T14 | indexed instancing | 非零 index offset/base vertex/base instance | P1 | Native/Capture/RDC inspect/CLI Replay/action+usage/clear-draw seek/6-byte index range+save/Mesh instance 0/1/15×10 lifecycle/最新 Event+API+IA Pipeline+Resource+Buffer+Mesh UI 通过 |
+| T15 | point/line topology | Point/Line/Line Strip 与 VS Input | P1 | Native/Capture/RDC inspect/CLI Replay/action+topology/vertex offset/seek/Mesh/Buffer/Resource/DDS/16×10 lifecycle/最新 qrenderdoc L4 均通过 |
+| T16 | vertex texture/sampler binding | vertex stage texture/sampler 与 VS Pipeline/descriptor | P1 | Native/Capture/RDC inspect/CLI Replay/VS reflection+descriptor/usage/seek/Texture+Mesh+Buffer+Resource/DDS/HTML/17×10 lifecycle/最新 qrenderdoc L4 均通过 |
+| T17 | texture/sampler batch binding | vertex/fragment range、空槽与 used/unused | P1 | Native/Capture/XML/Replay、4 份异常 RDC、descriptor/usage/seek、DDS/HTML、18×10 lifecycle 与最新 qrenderdoc L4 通过 |
+| T18 | fragment storage buffer | 非零 slot、结构化只读 buffer、PS Resource | P1 | Native/Capture/XML/Replay、descriptor/usage/seek、raw/CSV/HTML、19×10 lifecycle 与最新 qrenderdoc L4 通过 |
+| T19 | vertex storage buffer | 非零 slot、只读 buffer、VS Resource | P1 | Native/Capture/XML/Replay、descriptor/usage/seek、raw/CSV/HTML、本场景 lifecycle 与最新 qrenderdoc L4 通过；T18/T16/T02/T05 定向通过，L3 未触发 |
+| T20 | indirect command buffer | 单命令 ICB、execute range、资源与 action | P2 | 待开始；批内自动验证后标“批末 UI 待验”，见 `BATCH21-22.md` / `PHASE21.md` |
+| T21 | indexed indirect draw | 间接五字段、非零 index/参数 offset、IA/Mesh | P2 | 待 T20 自动链路完成后开始；与 T20 批末联合验收，见 `PHASE22.md` |
 
 ## 外部样例候选
 
@@ -197,18 +205,97 @@ replay smoke 逐子资源检查原始字节、cube face pick、越界拒绝、�
 qrenderdoc EID 2 FS 页显示 Texture 17/18/19（2D/2D Array/Cube）和 Sampler 20；Texture Viewer
 可切换 mip、slice 与 face。macOS 26 上 Qt 5 combo 弹窗崩溃，子资源框以点击循环/方向键方式选择。
 
-生命周期 smoke 会在同一进程中分别打开/关闭 T00-T09 各 10 次，检查 action、swapbuffer、draw、
+T10 使用 64-byte source/destination buffer、8x8 四象限 RGBA8 source/destination texture 与
+4-mip RGBA8 texture；XML 检查 blit encoder、buffer offset/length、fill range/value、texture
+区域和 mipgen。Replay smoke 断言 `CopySrc/CopyDst/Clear/GenMips` usage、EID 1-6 action 顺序与
+资源链接、EID 2→3→2 buffer 数据往返、texture copy 四象限、mip1/mip3 原始字节、最终四条
+色带和 468-byte 全 mip DDS。最新 qrenderdoc 的 Event Browser 显示 `Copy/Clear Pass #1` 和
+逐操作事件；API Inspector 可跳到 Buffer 18/Texture 20，标准 Buffer Viewer、Texture Viewer
+与 UI DDS 保存均和自动结果一致，状态栏为 `No problems detected`。
+
+T11 使用独立的 8×8 RGBA8 source/destination texture，`filter_main` 以 `2×2×1` threadgroups、
+`4×4×1` threads/group 将 source 的 B/R/G 分量写入 destination，再由 render draw 采样。destination
+清零记录在 frame stream 内，保证 seek 到 dispatch 前/后/回退时读到全零、CPU 参考 swizzle、全零。
+XML 断言 compute pipeline/encoder、两个 texture binding、dispatch 参数和 end；replay smoke 断言
+`CS_Resource/CS_RWResource` usage、compute pipeline/shader/entry、标准只读/读写 descriptor、全部 256
+字节 texel、最终绘制边界像素和 384-byte DDS。T03/T09/T10 定向 output smoke、完整 T00-T11 回归、
+12×10 lifecycle 和逐份 CLI replay 已通过。最新 qrenderdoc EID 2 CS 页显示 `filter_main`、
+Texture 19 只读、Texture 20 读写；标准 Texture Viewer 首像素拾取为 `(16,32,24,255)`，
+Resource Inspector 与 EID 5 draw 绑定一致。UI/自动 DDS 逐字节相同，CS HTML export 完整，
+状态栏为 `No problems detected`。
+
+T12 使用 fragment function 创建 buffer slot 0 的 `MTLArgumentEncoder`，将 4×4 RGBA8 texture 写入
+`id(0)`、Point/Clamp sampler 写入 `id(1)`，并把 16-byte argument buffer 绑定到 fragment buffer 0。
+XML 断言 encoder 创建、target buffer、texture/sampler 写入、`setFragmentBuffer` 与 `useResource`；
+replay smoke 断言 `MetalPipe::ArgumentBuffer`、`arguments.colourTexture`/
+`arguments.colourSampler` reflection、通用 texture/sampler descriptor、`PS_Constants`/
+`PS_Resource` usage、64-byte texel、四象限输出、clear→draw seek 和 192-byte DDS。T03/T04/T11 定向、
+完整 T00-T12、13×10 lifecycle（resident growth 671,744 bytes）与逐份 CLI replay 已通过。最新
+qrenderdoc 在 EID 2 验证 `Buffer 20`、`Texture 17`、`Sampler 18` 及三类标准资源跳转；四象限输出
+正确，UI/自动 192-byte DDS 的 SHA-256 相同，Pipeline HTML export 包含 `fs_main` 与三项绑定，状态栏
+为 `No problems detected`。
+
+T13 使用 offset 16 的 16-byte `MTLDrawPrimitivesIndirectArguments`，四字段固定为 `3/2/1/1`；
+capture/replay/Buffer Viewer/Raw `.bin` 和左右色块一致。未对齐 offset 17 与越界 offset 36 的
+派生 RDC 均在 indirect chunk 明确失败。完整 T00-T13 回归、14×10 lifecycle（resident growth
+1,294,336 bytes）和最新 qrenderdoc 的 Event/API/IA Pipeline/Resource/标准 Buffer Viewer 验收通过；
+UI raw `.bin` 与自动产物逐字节一致，状态栏为 `No problems detected`。
+
+T14 使用 UInt16 index bytes `{4,4,0,1,2,4}`、byte offset 4、baseVertex 1、baseInstance 1、
+instanceCount 2；越界/错位哨兵令左红右蓝输出与 Mesh VS Input 可以判别三个 offset。自动验证
+`Indexed|Instanced` action、Buffer 18 的精确 4/6 子范围、Buffer 16/17 的 Vertex Buffer usage 与
+Buffer 18 的 Index Buffer usage、6-byte `{0,1,2}` raw save、clear/draw/回退、两实例 Mesh preview。
+派生 RDC 的 byte offset 3/10 分别因未对齐/越界被拒绝。完整 T00-T14 回归、15×10 lifecycle
+（resident growth 1,015,808 bytes）及最新 qrenderdoc Event/API/IA/Buffer/Resource/Mesh/Texture
+验收通过；UI CSV 为 0/1/2，Pipeline HTML 与状态栏均正确。
+
+T15 使用同一 264-byte interleaved Float2/Float4 buffer 中三段非零起点，Point `(1,1)`、
+Line `(3,2)`、Line Strip `(6,3)` 分别输出红点、绿水平线、蓝折线；视口外哨兵隔离范围。
+自动 smoke 验证 XML/action topology、VS Input、Buffer 数据、Vertex Buffer usage、三个 Mesh preview、
+clear→draw→回退和 480128-byte DDS。非法 primitive 99 与零 vertexCount 的派生 capture 均在
+`drawPrimitives` chunk 拒绝；T01/T02/T05/T14 定向以及 T00-T15 全量 L3、16×10 lifecycle
+（resident growth 737280 bytes）均通过。最新 qrenderdoc L4 已看到三类 Event/API、拓扑、标准
+Buffer/Resource、三个 Mesh VS Input、UI DDS/HTML export 和状态栏均已通过。
+
+T16 的 2×2 RGBA8 texture 在 vertex shader `texture(0)`/`sampler(0)` 采样，24 个顶点构成
+红、绿、蓝、黄四象限；未注入 BGRA readback、capture XML、原始 texture/vertex bytes、
+VS reflection/descriptor、`VS_Resource` usage、clear→draw→回退与 DDS 通过自动检查。
+texture/sampler slot 128 与空资源四份派生 capture 均在相应 chunk 拒绝；T03/T12 定向与
+T00-T16 全量 L3、17×10 lifecycle（resident growth 114688 bytes）通过。最新 qrenderdoc L4
+已核对 EID 2 Event/API、VS Pipeline、标准 Texture/Buffer/Mesh/Resource 跳转、UI DDS/HTML
+及 `No problems detected` 状态栏。
+
+T18 使用 640-byte shared buffer，在 byte offset 256 的 fragment `device const float4 *` 读取
+四组确定性颜色，物理 slot 3，未绑定 slot 5。自动 smoke 核对 native BGRA、XML、storage
+reflection/descriptor、`PS_Resource`、clear/draw/回退、640-byte raw export、哨兵与异常 offset。
+T04/T12/T10 定向、T00-T18 全量 L3、逐份 CLI replay 和 19×10 lifecycle（resident growth
+1,556,480 bytes）通过。最新 qrenderdoc L4 核对 EID 2 的 FS Storage Buffers 256+384 范围、
+标准 Buffer Viewer、Resource Inspector `FS - Resource`、HTML/CSV 保存和状态栏；UI CSV 前四行
+与 raw export 数据一致。
+
+生命周期 smoke 会在同一进程中分别打开/关闭 T00-T18 各 10 次，检查 action、swapbuffer、draw、
 texture readback，并首次调用 histogram、pixel history、post-VS、四种 shader debug 和 target/custom
 shader build 的 unsupported 路径。完成 P4.4 第三个 UI 切片后的 2026-09-22 完整回归在两轮 warm-up 后
-resident growth 为 540,672 字节；完成 T09 后最新十份 capture 回归增长为 475,136 字节。加入 T02
+resident growth 为 540,672 字节；完成 T10 后十一份 capture 回归增长为 1,277,952 字节；T11 的
+十二份 capture 全量回归增长为 999,424 字节。加入 T02
 前的额外 50 轮压力检查增长 1,441,792 字节。qrenderdoc 还实机完成
 `T01 -> Close -> T00 -> Close -> T01`，重开后 T01 的 EID 2 图像和 Pipeline State 正确；
 History/Debug 按钮明确显示不支持且保持禁用。
 
-## 单场景执行顺序
+## 切片与批次执行顺序
 
 ```text
-Native reference -> Capture -> RDC/chunk inspection -> Replay -> UI/data comparison -> Regression
+每个 T：Native reference -> Capture -> RDC/chunk inspection -> Replay/readback/state 自动断言
+批次末：最终构建 -> 去重的 L1/L2 + CLI/lifecycle -> 同一轮 qrenderdoc L4 -> 两阶段关闭
 ```
 
-T00-T09 已完成整条链路；下一项为 T10 buffer/texture blit，之后继续 compute 等 feature。
+T19 使用 768-byte shared buffer，在 byte offset 256 保存 24 个 `float4` 位置；vertex shader 从
+slot 4 读取，slot 6 绑定同一 buffer 但静态未使用。自动 smoke 核对四象限、XML、reflection、
+descriptor、`VS_Resource`、IA/storage 分类、clear/draw/回退、raw 范围和异常 slot/offset。
+T19/T18/T16/T02/T05 定向、CLI replay 与本场景 10 轮 lifecycle 通过；最新 qrenderdoc L4 核对
+VS Storage Buffers、used/unused、标准 Buffer/Resource、HTML/CSV/raw 与状态栏。未触发 T00-T19 L3；
+最近完整基线仍为 T00-T18。
+
+T00-T19 已完成整条链路；T19 当前证据与限制集中在 `PHASE20.md`。下一批是
+`BATCH21-22.md` 的 T20 单命令 ICB 与 T21 indexed indirect：每条切片立即验证功能自动链路，
+最终构建上联合去重测试，并在同一轮 qrenderdoc 验收两份 capture 后一起关闭。

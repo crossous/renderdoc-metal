@@ -46,6 +46,9 @@ enum MetalResourceType
   eResTexture,
   eResRenderCommandEncoder,
   eResBlitCommandEncoder,
+  eResComputePipelineState,
+  eResComputeCommandEncoder,
+  eResArgumentEncoder,
   eResSamplerState,
   eResMax
 };

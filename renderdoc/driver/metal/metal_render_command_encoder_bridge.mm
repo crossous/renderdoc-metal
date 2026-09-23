@@ -189,28 +189,30 @@
 
 - (void)setVertexTexture:(nullable id<MTLTexture>)texture atIndex:(NSUInteger)index
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexTexture:texture atIndex:index];
+  GetWrapped(self)->setVertexTexture(GetWrapped(texture), index);
 }
 
 - (void)setVertexTextures:(const id<MTLTexture> __nullable[__nonnull])textures
                 withRange:(NSRange)range
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexTextures:textures withRange:range];
+  rdcarray<WrappedMTLTexture *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++)
+    wrapped.push_back(GetWrapped(textures[i]));
+  GetWrapped(self)->setVertexTextures(wrapped, NS::Range::Make(range.location, range.length));
 }
 
 - (void)setVertexSamplerState:(nullable id<MTLSamplerState>)sampler atIndex:(NSUInteger)index
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexSamplerState:sampler atIndex:index];
+  GetWrapped(self)->setVertexSamplerState(GetWrapped(sampler), index);
 }
 
 - (void)setVertexSamplerStates:(const id<MTLSamplerState> __nullable[__nonnull])samplers
                      withRange:(NSRange)range
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexSamplerStates:samplers withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++)
+    wrapped.push_back(GetWrapped(samplers[i]));
+  GetWrapped(self)->setVertexSamplerStates(wrapped, NS::Range::Make(range.location, range.length));
 }
 
 - (void)setVertexSamplerState:(nullable id<MTLSamplerState>)sampler
@@ -375,8 +377,10 @@
 - (void)setFragmentTextures:(const id<MTLTexture> __nullable[__nonnull])textures
                   withRange:(NSRange)range
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentTextures:textures withRange:range];
+  rdcarray<WrappedMTLTexture *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++)
+    wrapped.push_back(GetWrapped(textures[i]));
+  GetWrapped(self)->setFragmentTextures(wrapped, NS::Range::Make(range.location, range.length));
 }
 
 - (void)setFragmentSamplerState:(nullable id<MTLSamplerState>)sampler atIndex:(NSUInteger)index
@@ -387,8 +391,10 @@
 - (void)setFragmentSamplerStates:(const id<MTLSamplerState> __nullable[__nonnull])samplers
                        withRange:(NSRange)range
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentSamplerStates:samplers withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++)
+    wrapped.push_back(GetWrapped(samplers[i]));
+  GetWrapped(self)->setFragmentSamplerStates(wrapped, NS::Range::Make(range.location, range.length));
 }
 
 - (void)setFragmentSamplerState:(nullable id<MTLSamplerState>)sampler
@@ -846,25 +852,17 @@
                    baseVertex:(NSInteger)baseVertex
                  baseInstance:(NSUInteger)baseInstance API_AVAILABLE(macos(10.11), ios(9.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawIndexedPrimitives:primitiveType
-                               indexCount:indexCount
-                                indexType:indexType
-                              indexBuffer:indexBuffer
-                        indexBufferOffset:indexBufferOffset
-                            instanceCount:instanceCount
-                               baseVertex:baseVertex
-                             baseInstance:baseInstance];
+  GetWrapped(self)->drawIndexedPrimitives((MTL::PrimitiveType)primitiveType, indexCount,
+                                          (MTL::IndexType)indexType, GetWrapped(indexBuffer),
+                                          indexBufferOffset, instanceCount, baseVertex, baseInstance);
 }
 
 - (void)drawPrimitives:(MTLPrimitiveType)primitiveType
           indirectBuffer:(id<MTLBuffer>)indirectBuffer
     indirectBufferOffset:(NSUInteger)indirectBufferOffset API_AVAILABLE(macos(10.11), ios(9.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawPrimitives:primitiveType
-                    indirectBuffer:indirectBuffer
-              indirectBufferOffset:indirectBufferOffset];
+  GetWrapped(self)->drawPrimitives((MTL::PrimitiveType)primitiveType, GetWrapped(indirectBuffer),
+                                   indirectBufferOffset);
 }
 
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)primitiveType
@@ -1157,8 +1155,7 @@
 - (void)useResource:(id<MTLResource>)resource
               usage:(MTLResourceUsage)usage API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real useResource:resource usage:usage];
+  GetWrapped(self)->useResource(GetWrapped(resource), (MTL::ResourceUsage)usage);
 }
 
 - (void)useResources:(const id<MTLResource> __nonnull[__nonnull])resources

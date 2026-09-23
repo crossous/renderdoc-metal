@@ -40,24 +40,35 @@ MetalFX、任意第三方应用注入或完整 capture 产品化为目标。为�
 - [PHASE8.md](PHASE8.md)：已完成的 T07 depth/stencil 纵向切片。
 - [PHASE9.md](PHASE9.md)：已完成的 T08 MSAA resolve 纵向切片。
 - [PHASE10.md](PHASE10.md)：已完成的 T09 mip/cube/array 子资源纵向切片。
-- [PHASE11.md](PHASE11.md)：下一条 T10 buffer/texture blit 纵向切片。
+- [PHASE11.md](PHASE11.md)：已完成的 T10 buffer/texture blit 纵向切片。
+- [PHASE12.md](PHASE12.md)：已完成的 T11 compute texture filter 纵向切片。
+- [PHASE13.md](PHASE13.md)：已完成的 T12 单层直接 argument buffer 资源引用纵向切片。
+- [PHASE14.md](PHASE14.md)：已完成的 T13 单次间接 draw 参数纵向切片。
+- [PHASE15.md](PHASE15.md)：已完成的 T14 indexed instancing/base vertex 纵向切片。
+- [PHASE16.md](PHASE16.md)：已完成的 T15 point/line 基础拓扑纵向切片。
+- [PHASE17.md](PHASE17.md)：已完成的 T16 vertex texture/sampler binding 纵向切片。
+- [PHASE18.md](PHASE18.md)：已完成的 T17 texture/sampler 批量绑定纵向切片。
+- [PHASE19.md](PHASE19.md)：已完成的 T18 fragment storage buffer 纵向切片。
+- [PHASE20.md](PHASE20.md)：已完成的 T19 vertex storage buffer 纵向切片。
+- [BATCH21-22.md](BATCH21-22.md)：下一批 T20/T21 的联合验收与批内状态规则。
+- [PHASE21.md](PHASE21.md)：批内第一条 T20 单命令 indirect command buffer 纵向切片。
+- [PHASE22.md](PHASE22.md)：批内第二条 T21 indexed indirect draw 纵向切片。
 - [STATUS.md](STATUS.md)：当前状态、最近验证结果、阻塞项和下一步。
 - [TEST_MATRIX.md](TEST_MATRIX.md)：Metal API/资源/UI 覆盖矩阵与测试样例来源。
 - [HANDOFF.md](HANDOFF.md)：新 agent 的接手规则、省额度验证节奏、compact/新任务边界和可复制提示。
+- [HANDOFF_HISTORY.md](HANDOFF_HISTORY.md)：按需追查的历史阶段交接证据。
 - [DECISIONS.md](DECISIONS.md)：关键架构与范围决策。
 
 ## 当前状态
 
-T00 空帧、T01 彩色三角形、T02 索引立方体、T03 纹理四边形、T04 动态 uniform、T05 实例化网格、
-T06 MRT/blending、T07 depth/stencil、T08 MSAA resolve 与 T09 mip/cube/array 已经完成各自的
-Native/Capture/RDC inspect/seekable Replay/UI 纵向闭环。自动回归覆盖 texture readback、像素拾取、
-DDS 保存、事件往返、vertex/index 数据、VS Input mesh preview、texture/sampler/constant-buffer shader
-reflection、动态 buffer offset、Pipeline used/unused 过滤、多 vertex buffer/base instance、多输出 action、
-逐附件 blend state、front/back stencil/dynamic reference、4x MSAA 与显式 resolve，以及 mip/array/cube
-子资源上传、读取和展示；十份 capture 各 10 次
-同进程打开/关闭以及最新 qrenderdoc 实机核对均已通过。
-当前下一项是 `PHASE11.md` 的 T10 buffer/texture blit。准确进度和已知限制以
-`STATUS.md`、`PLAN.md` 为准。
+T00-T19 的 Native/Capture/RDC inspect/Replay/UI 纵向切片已关闭。最新 T19 完成 vertex
+storage buffer 的非零 slot/offset、reflection/descriptor/usage、VS Storage Buffers、标准 Buffer
+Viewer 与资源跳转；T19/T18/T16/T02/T05 定向回归和最新 qrenderdoc 实机验收通过，未触发
+T00-T19 全量 L3。下一批按 `BATCH21-22.md` 连续实现 `PHASE21.md` 的 T20 单命令 ICB 与
+`PHASE22.md` 的 T21 indexed indirect。每条切片立即完成必要自动验证；批末在最终构建上做一次
+去重的联合定向测试和同一轮 qrenderdoc 实机验收，两条阶段一起关闭。接手时只需阅读本入口、
+`STATUS.md` 当前批次与恢复检查点、BATCH/两份 PHASE 和 `HANDOFF.md` 的验证规则；`PLAN.md` 与
+历史阶段文档按需查阅。
 
 ## 初始基线结论（2026-09-20）
 

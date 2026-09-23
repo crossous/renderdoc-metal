@@ -26,17 +26,36 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
       "${CAPTURE_DIR}/t04_capture.rdc" "${CAPTURE_DIR}/t05_capture.rdc" \
       "${CAPTURE_DIR}/t06_capture.rdc" "${CAPTURE_DIR}/t07_capture.rdc" \
       "${CAPTURE_DIR}/t08_capture.rdc" "${CAPTURE_DIR}/t09_capture.rdc" \
+      "${CAPTURE_DIR}/t10_capture.rdc" "${CAPTURE_DIR}/t11_capture.rdc" \
+      "${CAPTURE_DIR}/t12_capture.rdc" "${CAPTURE_DIR}/t13_capture.rdc" \
+      "${CAPTURE_DIR}/t14_capture.rdc" "${CAPTURE_DIR}/t15_capture.rdc" \
+      "${CAPTURE_DIR}/t16_capture.rdc" "${CAPTURE_DIR}/t17_capture.rdc" \
+      "${CAPTURE_DIR}/t18_capture.rdc" "${CAPTURE_DIR}/t19_capture.rdc" \
       "${CAPTURE_DIR}/t00.xml" "${CAPTURE_DIR}/t01.xml" "${CAPTURE_DIR}/t02.xml" \
       "${CAPTURE_DIR}/t03.xml" "${CAPTURE_DIR}/t04.xml" "${CAPTURE_DIR}/t05.xml" \
       "${CAPTURE_DIR}/t06.xml" "${CAPTURE_DIR}/t07.xml" "${CAPTURE_DIR}/t08.xml" \
       "${CAPTURE_DIR}/t09.xml" \
+      "${CAPTURE_DIR}/t10.xml" "${CAPTURE_DIR}/t11.xml" "${CAPTURE_DIR}/t12.xml" \
+      "${CAPTURE_DIR}/t13.xml" "${CAPTURE_DIR}/t14.xml" "${CAPTURE_DIR}/t15.xml" \
+      "${CAPTURE_DIR}/t16.xml" "${CAPTURE_DIR}/t17.xml" "${CAPTURE_DIR}/t18.xml" \
+      "${CAPTURE_DIR}/t19.xml" \
       "${CAPTURE_DIR}/t01_event_clear.ppm" "${CAPTURE_DIR}/t01_event_draw.ppm" \
       "${CAPTURE_DIR}/t01_event_rewind.ppm" "${CAPTURE_DIR}/t01_texture.dds" \
       "${CAPTURE_DIR}/t02_replay.ppm" "${CAPTURE_DIR}/t03_replay.ppm" \
       "${CAPTURE_DIR}/t04_replay.ppm" "${CAPTURE_DIR}/t05_replay.ppm" \
       "${CAPTURE_DIR}/t06_replay.ppm" "${CAPTURE_DIR}/t07_replay.ppm" \
       "${CAPTURE_DIR}/t08_replay.ppm" "${CAPTURE_DIR}/t09_replay.ppm" \
-      "${CAPTURE_DIR}/t09_cube.dds"
+      "${CAPTURE_DIR}/t10_replay.ppm" "${CAPTURE_DIR}/t11_replay.ppm" \
+      "${CAPTURE_DIR}/t12_replay.ppm" "${CAPTURE_DIR}/t13_replay.ppm" \
+      "${CAPTURE_DIR}/t14_replay.ppm" "${CAPTURE_DIR}/t15_replay.ppm" \
+      "${CAPTURE_DIR}/t16_replay.ppm" "${CAPTURE_DIR}/t17_replay.ppm" \
+      "${CAPTURE_DIR}/t18_replay.ppm" "${CAPTURE_DIR}/t19_replay.ppm" \
+      "${CAPTURE_DIR}/t09_cube.dds" "${CAPTURE_DIR}/t10_mips.dds" \
+      "${CAPTURE_DIR}/t11_filtered.dds" "${CAPTURE_DIR}/t12_argument_texture.dds" \
+      "${CAPTURE_DIR}/t13_arguments.bin" "${CAPTURE_DIR}/t14_indices.bin" \
+      "${CAPTURE_DIR}/t15_output.dds" "${CAPTURE_DIR}/t16_output.dds" \
+      "${CAPTURE_DIR}/t17_output.dds" "${CAPTURE_DIR}/t18_storage.bin" \
+      "${CAPTURE_DIR}/t19_storage.bin"
 
 "${DEMO_BIN}" Metal_Empty_Frame --frames 5
 "${DEMO_BIN}" Metal_Simple_Triangle --frames 5
@@ -48,6 +67,16 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
 "${DEMO_BIN}" Metal_Depth_Stencil --frames 5
 "${DEMO_BIN}" Metal_MSAA_Resolve --frames 5
 "${DEMO_BIN}" Metal_Texture_Subresources --frames 5
+"${DEMO_BIN}" Metal_Blit_Operations --frames 5
+"${DEMO_BIN}" Metal_Compute_Texture_Filter --frames 5
+"${DEMO_BIN}" Metal_Argument_Buffer --frames 5
+"${DEMO_BIN}" Metal_Indirect_Draw --frames 5
+"${DEMO_BIN}" Metal_Indexed_Instancing --frames 5
+"${DEMO_BIN}" Metal_Point_Line --frames 5
+"${DEMO_BIN}" Metal_Vertex_Texture --frames 5
+"${DEMO_BIN}" Metal_Batch_Texture --frames 5
+"${DEMO_BIN}" Metal_Fragment_Storage_Buffer --frames 5
+"${DEMO_BIN}" Metal_Vertex_Storage_Buffer --frames 5
 
 RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t00" \
 DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
@@ -89,6 +118,46 @@ RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t09" \
 DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
   "${DEMO_BIN}" Metal_Texture_Subresources --frames 8
 
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t10" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Blit_Operations --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t11" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Compute_Texture_Filter --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t12" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Argument_Buffer --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t13" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Indirect_Draw --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t14" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Indexed_Instancing --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t15" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Point_Line --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t16" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Vertex_Texture --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t17" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Batch_Texture --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t18" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Fragment_Storage_Buffer --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t19" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Vertex_Storage_Buffer --frames 8
+
 test -s "${CAPTURE_DIR}/t00_capture.rdc"
 test -s "${CAPTURE_DIR}/t01_capture.rdc"
 test -s "${CAPTURE_DIR}/t02_capture.rdc"
@@ -99,6 +168,16 @@ test -s "${CAPTURE_DIR}/t06_capture.rdc"
 test -s "${CAPTURE_DIR}/t07_capture.rdc"
 test -s "${CAPTURE_DIR}/t08_capture.rdc"
 test -s "${CAPTURE_DIR}/t09_capture.rdc"
+test -s "${CAPTURE_DIR}/t10_capture.rdc"
+test -s "${CAPTURE_DIR}/t11_capture.rdc"
+test -s "${CAPTURE_DIR}/t12_capture.rdc"
+test -s "${CAPTURE_DIR}/t13_capture.rdc"
+test -s "${CAPTURE_DIR}/t14_capture.rdc"
+test -s "${CAPTURE_DIR}/t15_capture.rdc"
+test -s "${CAPTURE_DIR}/t16_capture.rdc"
+test -s "${CAPTURE_DIR}/t17_capture.rdc"
+test -s "${CAPTURE_DIR}/t18_capture.rdc"
+test -s "${CAPTURE_DIR}/t19_capture.rdc"
 
 "${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t00_capture.rdc" \
   -o "${CAPTURE_DIR}/t00.xml" -c xml
@@ -120,6 +199,26 @@ test -s "${CAPTURE_DIR}/t09_capture.rdc"
   -o "${CAPTURE_DIR}/t08.xml" -c xml
 "${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t09_capture.rdc" \
   -o "${CAPTURE_DIR}/t09.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t10_capture.rdc" \
+  -o "${CAPTURE_DIR}/t10.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t11_capture.rdc" \
+  -o "${CAPTURE_DIR}/t11.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t12_capture.rdc" \
+  -o "${CAPTURE_DIR}/t12.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t13_capture.rdc" \
+  -o "${CAPTURE_DIR}/t13.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t14_capture.rdc" \
+  -o "${CAPTURE_DIR}/t14.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t15_capture.rdc" \
+  -o "${CAPTURE_DIR}/t15.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t16_capture.rdc" \
+  -o "${CAPTURE_DIR}/t16.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t17_capture.rdc" \
+  -o "${CAPTURE_DIR}/t17.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t18_capture.rdc" \
+  -o "${CAPTURE_DIR}/t18.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t19_capture.rdc" \
+  -o "${CAPTURE_DIR}/t19.xml" -c xml
 
 rg -q 'driver id="11">Metal<' "${CAPTURE_DIR}/t00.xml"
 rg -q 'name="MTLCommandBuffer::presentDrawable"' "${CAPTURE_DIR}/t00.xml"
@@ -246,6 +345,99 @@ test "$(rg -c 'name="slice" typename="uint64_t" width="8" important="true"' \
 test "$(rg -c 'name="MTLRenderCommandEncoder::setFragmentTexture"' \
   "${CAPTURE_DIR}/t09.xml")" = "3"
 test "$(rg -c 'name="MTLRenderCommandEncoder::drawPrimitives"' "${CAPTURE_DIR}/t09.xml")" = "1"
+rg -q 'name="MTLCommandBuffer::blitCommandEncoder"' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="MTLBlitCommandEncoder::copyFromBuffer"' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="sourceOffset" typename="uint64_t" width="8">8<' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="destinationOffset" typename="uint64_t" width="8">0<' \
+  "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="size" typename="uint64_t" width="8">32<' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="MTLBlitCommandEncoder::fillBuffer"' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="location" typename="uint64_t" width="8">16<' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="length" typename="uint64_t" width="8">16<' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="value" typename="uint8_t" width="1" important="true">96<' \
+  "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="MTLBlitCommandEncoder::copyFromTexture"' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="sourceSize" typename="MTLSize"' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="width" typename="uint64_t" width="8">8<' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="height" typename="uint64_t" width="8">8<' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="MTLBlitCommandEncoder::generateMipmapsForTexture"' \
+  "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="MTLBlitCommandEncoder::endEncoding"' "${CAPTURE_DIR}/t10.xml"
+rg -q 'name="MTLDevice::newComputePipelineStateWithFunction"' "${CAPTURE_DIR}/t11.xml"
+rg -q 'name="FunctionName" typename="NSString" important="true">filter_main<' \
+  "${CAPTURE_DIR}/t11.xml"
+rg -q 'name="MTLCommandBuffer::computeCommandEncoder"' "${CAPTURE_DIR}/t11.xml"
+rg -q 'name="MTLComputeCommandEncoder::setComputePipelineState"' "${CAPTURE_DIR}/t11.xml"
+test "$(rg -c 'name="MTLComputeCommandEncoder::setTexture"' "${CAPTURE_DIR}/t11.xml")" = "2"
+rg -q 'name="MTLComputeCommandEncoder::dispatchThreadgroups"' "${CAPTURE_DIR}/t11.xml"
+rg -q 'name="MTLComputeCommandEncoder::endEncoding"' "${CAPTURE_DIR}/t11.xml"
+rg -q 'name="contents" typename="Byte Buffer" important="true" byteLength="256"' \
+  "${CAPTURE_DIR}/t11.xml"
+rg -q 'name="MTLFunction::newArgumentEncoderWithBufferIndex"' "${CAPTURE_DIR}/t12.xml"
+rg -q 'name="bufferIndex" typename="uint64_t" width="8" important="true">0<' \
+  "${CAPTURE_DIR}/t12.xml"
+rg -q 'name="MTLArgumentEncoder::setArgumentBuffer"' "${CAPTURE_DIR}/t12.xml"
+rg -q 'name="MTLArgumentEncoder::setTexture"' "${CAPTURE_DIR}/t12.xml"
+rg -q 'name="index" typename="uint64_t" width="8" important="true">0<' \
+  "${CAPTURE_DIR}/t12.xml"
+rg -q 'name="MTLArgumentEncoder::setSamplerState"' "${CAPTURE_DIR}/t12.xml"
+rg -q 'name="index" typename="uint64_t" width="8" important="true">1<' \
+  "${CAPTURE_DIR}/t12.xml"
+rg -q 'name="MTLRenderCommandEncoder::setFragmentBuffer"' "${CAPTURE_DIR}/t12.xml"
+rg -q 'name="MTLRenderCommandEncoder::useResource"' "${CAPTURE_DIR}/t12.xml"
+rg -q 'name="MTLRenderCommandEncoder::drawPrimitives\(indirect\)"' "${CAPTURE_DIR}/t13.xml"
+rg -q 'name="indirectBuffer" typename="MTLBuffer" width="8" important="true">[1-9][0-9]*<' \
+  "${CAPTURE_DIR}/t13.xml"
+rg -q 'name="indirectBufferOffset" typename="uint64_t" width="8" important="true">16<' \
+  "${CAPTURE_DIR}/t13.xml"
+rg -q 'name="initialData" typename="Byte Buffer" byteLength="48"' \
+  "${CAPTURE_DIR}/t13.xml"
+rg -q 'name="MTLRenderCommandEncoder::drawIndexedPrimitives"' "${CAPTURE_DIR}/t14.xml"
+rg -q 'name="indexCount" typename="uint64_t" width="8" important="true">3<' \
+  "${CAPTURE_DIR}/t14.xml"
+rg -q 'name="indexBufferOffset" typename="uint64_t" width="8" important="true">4<' \
+  "${CAPTURE_DIR}/t14.xml"
+rg -q 'name="instanceCount" typename="uint64_t" width="8" important="true">2<' \
+  "${CAPTURE_DIR}/t14.xml"
+rg -q 'name="baseVertex" typename="int64_t" width="8" important="true">1<' \
+  "${CAPTURE_DIR}/t14.xml"
+rg -q 'name="baseInstance" typename="uint64_t" width="8" important="true">1<' \
+  "${CAPTURE_DIR}/t14.xml"
+rg -q 'name="initialData" typename="Byte Buffer" byteLength="12"' \
+  "${CAPTURE_DIR}/t14.xml"
+test "$(rg -c 'name="MTLRenderCommandEncoder::drawPrimitives"' "${CAPTURE_DIR}/t15.xml")" = "3"
+rg -q 'name="primitiveType".*string="MTLPrimitiveTypePoint">0<' "${CAPTURE_DIR}/t15.xml"
+rg -q 'name="primitiveType".*string="MTLPrimitiveTypeLine">1<' "${CAPTURE_DIR}/t15.xml"
+rg -q 'name="primitiveType".*string="MTLPrimitiveTypeLineStrip">2<' "${CAPTURE_DIR}/t15.xml"
+for start in 1 3 6; do
+  rg -q "name=\"vertexStart\" typename=\"uint64_t\" width=\"8\">${start}<" \
+    "${CAPTURE_DIR}/t15.xml"
+done
+rg -q 'name="initialData" typename="Byte Buffer" byteLength="264"' "${CAPTURE_DIR}/t15.xml"
+rg -q 'name="MTLRenderCommandEncoder::setVertexTexture"' "${CAPTURE_DIR}/t16.xml"
+rg -q 'name="MTLRenderCommandEncoder::setVertexSamplerState"' "${CAPTURE_DIR}/t16.xml"
+rg -q 'name="texture" typename="MTLTexture" width="8" important="true">[1-9][0-9]*<' \
+  "${CAPTURE_DIR}/t16.xml"
+rg -q 'name="sampler" typename="MTLSamplerState" width="8" important="true">[1-9][0-9]*<' \
+  "${CAPTURE_DIR}/t16.xml"
+rg -q 'name="vertexCount" typename="uint64_t" width="8" important="true">24<' \
+  "${CAPTURE_DIR}/t16.xml"
+rg -q 'name="initialData" typename="Byte Buffer" byteLength="384"' "${CAPTURE_DIR}/t16.xml"
+for method in setVertexTextures setVertexSamplerStates setFragmentTextures setFragmentSamplerStates; do
+  rg -q "name=\"MTLRenderCommandEncoder::${method}\"" "${CAPTURE_DIR}/t17.xml"
+done
+rg -q 'name="initialData" typename="Byte Buffer" byteLength="400"' "${CAPTURE_DIR}/t17.xml"
+test "$(rg -c '<uint typename="uint8_t" width="1">0</uint>' "${CAPTURE_DIR}/t17.xml")" = "4"
+rg -q 'name="initialData" typename="Byte Buffer" byteLength="640"' "${CAPTURE_DIR}/t18.xml"
+rg -q 'name="MTLRenderCommandEncoder::setFragmentBuffer"' "${CAPTURE_DIR}/t18.xml"
+rg -q 'name="offset" typename="uint64_t" width="8">256<' "${CAPTURE_DIR}/t18.xml"
+rg -q 'name="index" typename="uint64_t" width="8" important="true">3<' "${CAPTURE_DIR}/t18.xml"
+rg -q 'name="initialData" typename="Byte Buffer" byteLength="768"' "${CAPTURE_DIR}/t19.xml"
+test "$(rg -c 'name="MTLRenderCommandEncoder::setVertexBuffer"' "${CAPTURE_DIR}/t19.xml")" = "2"
+rg -q 'name="offset" typename="uint64_t" width="8">256<' "${CAPTURE_DIR}/t19.xml"
+rg -q 'name="offset" typename="uint64_t" width="8">320<' "${CAPTURE_DIR}/t19.xml"
+rg -q 'name="index" typename="uint64_t" width="8" important="true">4<' "${CAPTURE_DIR}/t19.xml"
+rg -q 'name="index" typename="uint64_t" width="8" important="true">6<' "${CAPTURE_DIR}/t19.xml"
 
 clang++ -std=c++17 -arch "${TARGET_ARCH}" -mmacosx-version-min=12.0 \
   -DRENDERDOC_PLATFORM_APPLE -I"${REPO_ROOT}" \
@@ -277,6 +469,26 @@ clang++ -std=c++17 -arch "${TARGET_ARCH}" -mmacosx-version-min=12.0 \
 "${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t08_capture.rdc" "${CAPTURE_DIR}/t08_replay.ppm"
 "${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t09_capture.rdc" "${CAPTURE_DIR}/t09_replay.ppm" \
   "${CAPTURE_DIR}/t09_cube.dds"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t10_capture.rdc" "${CAPTURE_DIR}/t10_replay.ppm" \
+  "${CAPTURE_DIR}/t10_mips.dds"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t11_capture.rdc" "${CAPTURE_DIR}/t11_replay.ppm" \
+  "${CAPTURE_DIR}/t11_filtered.dds"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t12_capture.rdc" "${CAPTURE_DIR}/t12_replay.ppm" \
+  "${CAPTURE_DIR}/t12_argument_texture.dds"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t13_capture.rdc" "${CAPTURE_DIR}/t13_replay.ppm" \
+  "${CAPTURE_DIR}/t13_arguments.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t14_capture.rdc" "${CAPTURE_DIR}/t14_replay.ppm" \
+  "${CAPTURE_DIR}/t14_indices.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t15_capture.rdc" "${CAPTURE_DIR}/t15_replay.ppm" \
+  "${CAPTURE_DIR}/t15_output.dds"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t16_capture.rdc" "${CAPTURE_DIR}/t16_replay.ppm" \
+  "${CAPTURE_DIR}/t16_output.dds"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t17_capture.rdc" "${CAPTURE_DIR}/t17_replay.ppm" \
+  "${CAPTURE_DIR}/t17_output.dds"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t18_capture.rdc" "${CAPTURE_DIR}/t18_replay.ppm" \
+  "${CAPTURE_DIR}/t18_storage.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t19_capture.rdc" "${CAPTURE_DIR}/t19_replay.ppm" \
+  "${CAPTURE_DIR}/t19_storage.bin"
 
 read_rgb()
 {
@@ -328,13 +540,65 @@ test "$(read_rgb "${CAPTURE_DIR}/t09_replay.ppm" 506 240)" = "ff4080"
 test "$(read_rgb "${CAPTURE_DIR}/t09_replay.ppm" 560 240)" = "80ff20"
 test "$(read_rgb "${CAPTURE_DIR}/t09_replay.ppm" 613 240)" = "2080ff"
 test -s "${CAPTURE_DIR}/t09_cube.dds"
+test "$(read_rgb "${CAPTURE_DIR}/t10_replay.ppm" 80 240)" = "ff8020"
+test "$(read_rgb "${CAPTURE_DIR}/t10_replay.ppm" 240 240)" = "606060"
+test "$(read_rgb "${CAPTURE_DIR}/t10_replay.ppm" 400 240)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t10_replay.ppm" 560 240)" = "868458"
+test -s "${CAPTURE_DIR}/t10_mips.dds"
+test -s "${CAPTURE_DIR}/t11_filtered.dds"
+test "$(read_rgb "${CAPTURE_DIR}/t12_replay.ppm" 200 150)" = "f82818"
+test "$(read_rgb "${CAPTURE_DIR}/t12_replay.ppm" 440 150)" = "18d838"
+test "$(read_rgb "${CAPTURE_DIR}/t12_replay.ppm" 200 330)" = "2048f8"
+test "$(read_rgb "${CAPTURE_DIR}/t12_replay.ppm" 440 330)" = "e8c828"
+test -s "${CAPTURE_DIR}/t12_argument_texture.dds"
+test "$(read_rgb "${CAPTURE_DIR}/t13_replay.ppm" 144 240)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t13_replay.ppm" 320 240)" = "06090e"
+test "$(read_rgb "${CAPTURE_DIR}/t13_replay.ppm" 496 240)" = "1840ff"
+test "$(xxd -p "${CAPTURE_DIR}/t13_arguments.bin" | tr -d '\n')" = \
+  "03000000020000000100000001000000"
+test "$(read_rgb "${CAPTURE_DIR}/t14_replay.ppm" 144 240)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t14_replay.ppm" 320 240)" = "06090e"
+test "$(read_rgb "${CAPTURE_DIR}/t14_replay.ppm" 496 240)" = "1840ff"
+test "$(xxd -p "${CAPTURE_DIR}/t14_indices.bin" | tr -d '\n')" = "000001000200"
+test "$(read_rgb "${CAPTURE_DIR}/t15_replay.ppm" 160 120)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t15_replay.ppm" 320 240)" = "06090e"
+test -s "${CAPTURE_DIR}/t15_output.dds"
+test "$(read_rgb "${CAPTURE_DIR}/t16_replay.ppm" 160 120)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t16_replay.ppm" 480 120)" = "10e030"
+test "$(read_rgb "${CAPTURE_DIR}/t16_replay.ppm" 160 360)" = "1840ff"
+test "$(read_rgb "${CAPTURE_DIR}/t16_replay.ppm" 480 360)" = "f0d020"
+test -s "${CAPTURE_DIR}/t16_output.dds"
+test "$(read_rgb "${CAPTURE_DIR}/t17_replay.ppm" 160 120)" = "002010"
+test "$(read_rgb "${CAPTURE_DIR}/t17_replay.ppm" 480 120)" = "100030"
+test "$(read_rgb "${CAPTURE_DIR}/t17_replay.ppm" 160 360)" = "1840ff"
+test "$(read_rgb "${CAPTURE_DIR}/t17_replay.ppm" 480 360)" = "f0d000"
+test -s "${CAPTURE_DIR}/t17_output.dds"
+test "$(read_rgb "${CAPTURE_DIR}/t18_replay.ppm" 160 120)" = "2040ff"
+test "$(read_rgb "${CAPTURE_DIR}/t18_replay.ppm" 480 120)" = "efcf00"
+test "$(read_rgb "${CAPTURE_DIR}/t18_replay.ppm" 160 360)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t18_replay.ppm" 480 360)" = "10df30"
+test "$(stat -f %z "${CAPTURE_DIR}/t18_storage.bin")" = "640"
+test "$(read_rgb "${CAPTURE_DIR}/t19_replay.ppm" 160 120)" = "2040ff"
+test "$(read_rgb "${CAPTURE_DIR}/t19_replay.ppm" 480 120)" = "efcf00"
+test "$(read_rgb "${CAPTURE_DIR}/t19_replay.ppm" 160 360)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t19_replay.ppm" 480 360)" = "10df30"
+test "$(stat -f %z "${CAPTURE_DIR}/t19_storage.bin")" = "768"
 
 "${LIFECYCLE_SMOKE}" "${CAPTURE_DIR}/t00_capture.rdc" \
   "${CAPTURE_DIR}/t01_capture.rdc" "${CAPTURE_DIR}/t02_capture.rdc" \
   "${CAPTURE_DIR}/t03_capture.rdc" "${CAPTURE_DIR}/t04_capture.rdc" \
   "${CAPTURE_DIR}/t05_capture.rdc" "${CAPTURE_DIR}/t06_capture.rdc" \
   "${CAPTURE_DIR}/t07_capture.rdc" "${CAPTURE_DIR}/t08_capture.rdc" \
-  "${CAPTURE_DIR}/t09_capture.rdc" 10
+  "${CAPTURE_DIR}/t09_capture.rdc" "${CAPTURE_DIR}/t10_capture.rdc" \
+  "${CAPTURE_DIR}/t11_capture.rdc" "${CAPTURE_DIR}/t12_capture.rdc" \
+  "${CAPTURE_DIR}/t13_capture.rdc" "${CAPTURE_DIR}/t14_capture.rdc" \
+  "${CAPTURE_DIR}/t15_capture.rdc" "${CAPTURE_DIR}/t16_capture.rdc" \
+  "${CAPTURE_DIR}/t17_capture.rdc" "${CAPTURE_DIR}/t18_capture.rdc" \
+  "${CAPTURE_DIR}/t19_capture.rdc" 10
+
+for index in 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19; do
+  "${RENDERDOCCMD}" replay --loops 1 "${CAPTURE_DIR}/t${index}_capture.rdc"
+done
 
 echo "Metal capture smoke test passed."
 echo "T00: ${CAPTURE_DIR}/t00_capture.rdc"
@@ -347,6 +611,16 @@ echo "T06: ${CAPTURE_DIR}/t06_capture.rdc"
 echo "T07: ${CAPTURE_DIR}/t07_capture.rdc"
 echo "T08: ${CAPTURE_DIR}/t08_capture.rdc"
 echo "T09: ${CAPTURE_DIR}/t09_capture.rdc"
+echo "T10: ${CAPTURE_DIR}/t10_capture.rdc"
+echo "T11: ${CAPTURE_DIR}/t11_capture.rdc"
+echo "T12: ${CAPTURE_DIR}/t12_capture.rdc"
+echo "T13: ${CAPTURE_DIR}/t13_capture.rdc"
+echo "T14: ${CAPTURE_DIR}/t14_capture.rdc"
+echo "T15: ${CAPTURE_DIR}/t15_capture.rdc"
+echo "T16: ${CAPTURE_DIR}/t16_capture.rdc"
+echo "T17: ${CAPTURE_DIR}/t17_capture.rdc"
+echo "T18: ${CAPTURE_DIR}/t18_capture.rdc"
+echo "T19: ${CAPTURE_DIR}/t19_capture.rdc"
 echo "T00 replay: ${CAPTURE_DIR}/t00_replay.ppm"
 echo "T01 replay: ${CAPTURE_DIR}/t01_replay.ppm"
 echo "T01 event replay: clear -> draw -> clear verified for 10 cycles"
@@ -361,4 +635,14 @@ echo "T06 MRT targets, per-attachment blending/write masks, event replay, and ou
 echo "T07 combined depth/stencil, front/back state, dynamic references, event replay, and output verified"
 echo "T08 4x MSAA attachment, explicit resolve, sample state, event replay, and output verified"
 echo "T09 mip/array/cube upload, descriptors, readback, display, picking, save, and output verified"
-echo "T00/T01/T02/T03/T04/T05/T06/T07/T08/T09 replay lifecycle and unsupported-interface stability verified"
+echo "T10 buffer copy/fill, texture copy, generated mips, event seek, usage, save, and output verified"
+echo "T11 compute dispatch, read/write texture descriptors, event seek, save, and output verified"
+echo "T12 direct argument-buffer texture/sampler references, event seek, save, and output verified"
+echo "T13 indirect action/usage/16-byte argument range, event seek, save, and output verified"
+echo "T14 indexed instancing/base vertex/index offset, mesh, usage, event seek, and output verified"
+echo "T15 Point/Line/Line Strip action, topology, vertex start, mesh, seek, DDS, and output verified"
+echo "T16 vertex texture/sampler binding, reflection, VS descriptors, usage, seek, DDS, and output verified"
+echo "T17 vertex/fragment batch texture/sampler ranges, empty slots, descriptors, usage, seek, DDS, and output verified"
+echo "T18 fragment storage-buffer slot/range, reflection, descriptors, usage, raw export, seek, and output verified"
+echo "T19 vertex storage-buffer slot/range, reflection, descriptors, usage, raw export, seek, and output verified"
+echo "T00-T19 CLI replay, lifecycle, and unsupported-interface stability verified"

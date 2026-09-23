@@ -87,6 +87,9 @@ public:
                                           newRenderPipelineStateWithDescriptor,
                                           RDMTL::RenderPipelineDescriptor &descriptor,
                                           NS::Error **error);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLComputePipelineState *,
+                                          newComputePipelineStateWithFunction,
+                                          WrappedMTLFunction *computeFunction, NS::Error **error);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLSamplerState *,
                                           newSamplerStateWithDescriptor,
                                           RDMTL::SamplerDescriptor &descriptor);
@@ -201,6 +204,14 @@ public:
   {
     m_ReplayRenderCommandEncoder = encoder;
   }
+  void SetReplayBlitCommandEncoder(WrappedMTLBlitCommandEncoder *encoder)
+  {
+    m_ReplayBlitCommandEncoder = encoder;
+  }
+  void SetReplayComputeCommandEncoder(WrappedMTLComputeCommandEncoder *encoder)
+  {
+    m_ReplayComputeCommandEncoder = encoder;
+  }
   void MarkReplayCommandBufferCommitted() { m_ReplayCommandBufferCommitted = true; }
 
   enum
@@ -253,6 +264,8 @@ private:
   WrappedMTLLibrary *m_DummyReplayLibrary = NULL;
   WrappedMTLRenderCommandEncoder *m_DummyReplayRenderCommandEncoder = NULL;
   WrappedMTLBlitCommandEncoder *m_DummyReplayBlitCommandEncoder = NULL;
+  WrappedMTLComputeCommandEncoder *m_DummyReplayComputeCommandEncoder = NULL;
+  WrappedMTLArgumentEncoder *m_DummyReplayArgumentEncoder = NULL;
 
   MetalReplay *m_Replay = NULL;
 
@@ -270,6 +283,8 @@ private:
   uint64_t m_CurChunkOffset = 0;
   WrappedMTLCommandBuffer *m_ReplayCommandBuffer = NULL;
   WrappedMTLRenderCommandEncoder *m_ReplayRenderCommandEncoder = NULL;
+  WrappedMTLBlitCommandEncoder *m_ReplayBlitCommandEncoder = NULL;
+  WrappedMTLComputeCommandEncoder *m_ReplayComputeCommandEncoder = NULL;
   bool m_ReplayCommandBufferCommitted = false;
   bool m_AppControlledCapture = false;
   SDFile *m_StructuredFile = NULL;

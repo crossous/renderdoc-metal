@@ -56,11 +56,19 @@ public:
                  const rdcstr &entryPoint);
   void AddRenderPipeline(ResourceId id, const RDMTL::RenderPipelineDescriptor &descriptor,
                          MTL::RenderPipelineReflection *reflection);
+  void AddComputePipeline(ResourceId id, ResourceId function,
+                          MTL::ComputePipelineReflection *reflection);
+  void BeginComputePass();
+  void SetComputePipeline(ResourceId id);
+  void SetComputeTexture(uint32_t index, ResourceId id);
+  ResourceId GetComputeTexture(uint32_t index) const;
   void AddDepthStencilState(ResourceId id, const RDMTL::DepthStencilDescriptor &descriptor);
   void AddSamplerState(ResourceId id, const RDMTL::SamplerDescriptor &descriptor);
   void BeginRenderPass(const RDMTL::RenderPassDescriptor &descriptor);
   void EndRenderPass();
   void BindRenderPipeline(ResourceId id);
+  bool IsVertexStorageBufferSlot(uint32_t index) const;
+  bool IsVertexInputBufferSlot(uint32_t index) const;
   void BindDepthStencilState(ResourceId id);
   void SetStencilReferenceValue(uint32_t referenceValue);
   void SetStencilReferenceValues(uint32_t frontReferenceValue, uint32_t backReferenceValue);
@@ -69,7 +77,13 @@ public:
   void SetFragmentBufferOffset(uint32_t index, uint64_t offset);
   void BindFragmentTexture(uint32_t index, ResourceId id);
   void BindFragmentSampler(uint32_t index, ResourceId id);
-  void BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType indexType);
+  void BindVertexTexture(uint32_t index, ResourceId id);
+  void BindVertexSampler(uint32_t index, ResourceId id);
+  void SetArgumentBufferTexture(ResourceId argumentBuffer, uint32_t index, ResourceId texture);
+  void SetArgumentBufferSampler(ResourceId argumentBuffer, uint32_t index, ResourceId sampler);
+  void BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType indexType,
+                       uint64_t indexCount = 0);
+  void SetIndirectBuffer(ResourceId id, uint64_t offset, uint64_t size);
   void SetViewport(const MTL::Viewport &viewport);
   void SetScissor(const MTL::ScissorRect &scissor);
   void SetFrontFacingWinding(MTL::Winding winding);
@@ -89,7 +103,7 @@ public:
   {
     return "; Metal shader disassembly is not implemented.";
   }
-  rdcarray<EventUsage> GetUsage(ResourceId id) { return {}; }
+  rdcarray<EventUsage> GetUsage(ResourceId id);
 
   void SetPipelineStates(D3D11Pipe::State *d3d11, D3D12Pipe::State *d3d12, GLPipe::State *gl,
                          VKPipe::State *vk, MetalPipe::State *metal)
@@ -113,6 +127,7 @@ public:
   FrameRecord GetFrameRecord() { return m_FrameRecord; }
   void AddEvent(uint32_t chunkIndex, uint64_t fileOffset);
   void AddAction(const ActionDescription &action);
+  void AddUsage(ResourceId id, ResourceUsage usage);
   const APIEvent *GetEvent(uint32_t eventId) const;
   uint64_t GetNextEventOffset(uint32_t eventId, uint64_t frameSize) const;
 
@@ -266,6 +281,7 @@ private:
   FrameRecord m_FrameRecord;
   rdcarray<APIEvent> m_PendingEvents;
   rdcarray<APIEvent> m_Events;
+  std::map<ResourceId, rdcarray<EventUsage>> m_ResourceUses;
   uint32_t m_NextEventID = 1;
   uint32_t m_NextActionID = 1;
 
@@ -297,8 +313,10 @@ private:
     rdcarray<RDMTL::RenderPipelineColorAttachmentDescriptor> colorAttachments;
   };
   std::map<ResourceId, RenderPipelineInfo> m_RenderPipelines;
+  std::map<ResourceId, ResourceId> m_ComputePipelines;
   std::map<ResourceId, RDMTL::DepthStencilDescriptor> m_DepthStencilStates;
   std::map<ResourceId, RDMTL::SamplerDescriptor> m_SamplerStates;
+  std::map<ResourceId, MetalPipe::ArgumentBuffer> m_ArgumentBuffers;
   MetalPipe::State m_CurrentPipelineState;
   std::map<uint32_t, MetalPipe::State> m_EventPipelineStates;
   MetalPipe::State *m_MetalPipelineState = NULL;

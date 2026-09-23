@@ -1,15 +1,20 @@
 # Metal Replay 当前状态
 
-最后更新：2026-09-23（Asia/Shanghai）
+最后更新：2026-09-24（Asia/Shanghai）
 
-## 当前阶段
+## 当前批次
 
-- 阶段：T09 mip/cube/array 子资源已关闭；下一阶段为 `PHASE11.md` / T10 buffer/texture blit
-- 状态：T00-T09 纵向切片完成；P10.1-P10.4 的 L3 完整回归与 L4 实机验收已通过
-- 当前任务：无；建议新建任务，从 P11.1 的确定性 blit fixture 开始
-- 上一阶段：T09 Native/Capture/RDC inspect/Replay/readback/pick/display/Pipeline/Texture/save/
-  lifecycle 闭环已完成
-- 下一验收点：T10 buffer copy/fill、texture copy 与 mipmap generation 的 native fixture 基线
+- 批次：`BATCH21-22.md` / T20 单命令 ICB + T21 indexed indirect；当前 `PHASE21.md` P21.1
+- 状态：P20.1-P20.4 已关闭；T19/T18/T16/T02/T05 定向与最新 qrenderdoc L4 通过，L3 未触发
+- 当前任务：从 P21.1 连续推进到 P22.4；T20 自动通过后记录“批末 UI 待验”并继续 T21；
+  两阶段经最终联合验证和同一轮最新 qrenderdoc 验收后一起关闭。保留全部既有未提交有效改动
+- 上一阶段：T19 定向日志 `/tmp/t19-final-*.log`；最近完整 L3 仍为 T00-T18 的
+  `/tmp/t18-final-regression.log`
+- 下一验收点：T20 ICB 原生 fixture、capture/XML 与 replay 自动闭环
+- 验证规则（2026-09-24 批次更新）：每个 T 立即完成必要的 native/capture/replay 自动断言和
+  实际受影响旧路径的定向检查；最终构建对 T20/T21 做去重的联合 L1/L2、CLI/lifecycle，
+  同一轮最新 qrenderdoc 验收两份 capture。批内自动通过不等于阶段关闭。L3 只在发布/合并
+  门槛或定向测试无法界定具体跨场景风险时执行，当前联合清单见 `BATCH21-22.md`。
 
 ## 已完成
 
@@ -242,6 +247,115 @@
   `captures/metal-smoke/t09_cube_ui.dds`，与自动保存产物均为 512-byte DDS 且 `cmp` 完全一致；状态栏为
   `No problems detected`。因 macOS `Documents` 目录下的 capture 直接打开偶发阻塞，L4 使用
   同一最新 `.rdc` 的字节拷贝 `/tmp/t09-ui-capture.rdc`；qrenderdoc 保持运行。
+- 已新增 `Metal_Blit_Operations`（T10）：固定 64-byte shared buffer 执行 offset 8 到 0 的
+  32-byte copy，并对 destination 16..31 fill `0x60`；8x8 RGBA8 四象限 texture 执行 texture copy，
+  另一张 4-mip texture 生成 mip chain。最终 draw 分四条色带独立采样四种结果，native 自检通过。
+- 已补齐 blit encoder 创建/end、buffer copy/fill、texture region copy 和 mipmap generation 的
+  capture/replay；buffer offset/length 与 texture mip/slice/origin/size/format 均在执行前验证。每个操作
+  生成独立 action/event，并通过 `CopySrc`/`CopyDst`/`Clear`/`GenMips` usage 接入通用资源路径。
+- T10 定向 smoke 已核对 structured XML、event 顺序与资源链接、copy/fill 前进和回退、buffer/texture
+  原始数据、mip1/mip3、最终四条色带和 468-byte 全 mip DDS。T03/T09 texture 定向 replay/output 与
+  T00/T03/T09/T10 各 10 次定向 lifecycle 均通过。
+- 最终代码的 T00-T10 一键回归复验通过；十一份 capture 各 10 次 lifecycle resident growth 为 1,277,952
+  字节，逐份 `renderdoccmd replay --loops 1` 均通过。最新 qrenderdoc 的 Event Browser 显示
+  `Copy/Clear Pass #1` 和 EID 1-6 blit 子事件；Resource Inspector 的 Buffer 18 为 EID 2
+  `Copy - Dest`、EID 3 `Clear`，Texture 21 为 EID 5 `Generate Mips`。Buffer Viewer 显示
+  copy/fill 前后字节，Texture Viewer 显示 Texture 20 四象限、Texture 21 mip3 拾取
+  `(134,132,88,255)` 和 EID 8 四条结果色带；UI/自动两份 468-byte DDS 逐字节一致，
+  状态栏为 `No problems detected`。D034 修正的组名与 usage 文案已用最新 app 包内库实机确认。
+- 已新增 `Metal_Compute_Texture_Filter`（T11）：8×8 RGBA8 source/destination、`filter_main`、
+  `2×2×1` threadgroups / `4×4×1` threads/group，B/R/G swizzle 后由 render draw 采样。
+  compute pipeline/encoder wrapper、capture/replay chunk、dispatch action/usage、compute shader reflection、
+  标准只读/读写 descriptor 与 Metal Pipeline CS 页均已接通。
+- `/tmp/t11-final-regression.log` 记录 T00-T11 原生运行、重新 capture、XML、输出 smoke、逐份 CLI
+  replay 和 12×10 lifecycle 全部通过，resident growth 999,424 字节。T11 smoke 验证 dispatch
+  前全零、后全部 256 字节 CPU swizzle、回退再前进、最终画面及 384-byte DDS；T03/T09/T10 定向输出
+  验证也通过。
+- 最新 qrenderdoc 加载与正式 capture SHA-256 一致的 `/tmp/t11-ui-capture-final.rdc`；Event Browser
+  显示 EID 1-3 Compute Pass、EID 2 dispatch 和 EID 5 final draw。CS 页显示 Compute Pipeline
+  State 16 / Function 13 `filter_main`、slot 0 Texture 19 只读、slot 1 Texture 20 读写；资源跳转进入
+  标准 Texture Viewer，Resource Inspector 分别显示 `CS - Texture`/`CS - Image/SSBO`。
+  EID 1 目标纹理全黑，EID 2 的首像素拾取约 `(0.06275,0.12549,0.09412,1.0)`；EID 5 的
+  final draw 采样 Texture 20，画面与参考一致。UI DDS `captures/metal-smoke/t11_filtered_ui.dds`
+  与自动 DDS 均为 384 字节且 `cmp` 一致；`/tmp/t11_pipeline_state_standard.html` 包含 shader、
+  Texture 19/20。状态栏为 `No problems detected`。
+- 已完成 T12 单层 fragment argument buffer 与 T13 单次非索引 indirect draw。T13 使用 48-byte
+  shared buffer 中 offset 16 的 16-byte `3/2/1/1` 参数，原生和 replay 左橙右蓝图像一致；
+  action、usage、Pipeline `Indirect Buffer`、标准 Buffer Viewer、Resource Inspector 和 raw `.bin`
+  均指向 Buffer 18。offset 17/36 派生 RDC 分别验证未对齐/越界拒绝。
+- `/tmp/t13-final-regression.log` 记录 T00-T13 native/capture/XML/output/data/state、逐份 CLI replay
+  与 14×10 lifecycle 通过，resident growth 1,294,336 bytes。最新 qrenderdoc 实机显示 EID 2
+  indirect draw、16/16 参数区和 `3/2/1/1`；UI/自动 `.bin` 逐字节一致，Pipeline HTML 包含
+  Indirect Buffer，状态栏为 `No problems detected`。
+- T14 `Metal_Indexed_Instancing` 使用 UInt16 index buffer 的 byte offset 4、baseVertex 1、
+  baseInstance 1、两个实例；位置/实例哨兵使三字段任一失效都无法得到左红右蓝输出。新 overload
+  已完成 bridge、capture chunk、序列化、GPU replay、`Indexed|Instanced` action、精确 6-byte index
+  binding、vertex/index usage、标准 Mesh/Buffer Viewer。XML、buffer 数据、clear/draw/回退像素和
+  raw index export 自动断言通过；offset 3（未对齐）与 10（越界）的派生 RDC 均被 replay 拒绝。
+- `/tmp/t14-final-regression.log` 记录 T00-T14 native/capture/XML/output/data/state、逐份 CLI replay
+  和 15×10 lifecycle 全部通过，resident growth 1,015,808 bytes。最新 qrenderdoc 实机打开正式
+  `t14_capture.rdc`，Event/API EID 2、IA Buffer 16/17/18、Index Buffer offset 4/length 6、
+  Resource Inspector `Index Buffer` usage、Mesh instance 0/1、左右像素、标准 HTML/CSV 导出均正确；
+  状态栏 `No problems detected`。产物 `captures/metal-smoke/t14_indices.bin`、
+  `t14_indices_ui.csv`、`t14_pipeline_state_standard.html` 均已验证。
+- T15 `Metal_Point_Line` 的 Point `(start=1,count=1)`、Line `(3,2)`、Line Strip `(6,3)`
+  使用 264-byte interleaved Float2/Float4 buffer 和视口外哨兵。原生 BGRA 像素、RDC XML、
+  action/topology、VS Input、Buffer 字节、Mesh preview、Vertex Buffer usage、clear/draw/回退和
+  480128-byte DDS 均通过；非法 primitive 99 与零 vertexCount 派生 RDC 被 replay 拒绝。
+- `/tmp/t15-final-regression.log` 记录 T00-T15 原生/capture/XML/output/data/state、逐份 CLI replay
+  及 16×10 lifecycle 全部通过，resident growth 737280 bytes。正式
+  `captures/metal-smoke/t15_capture.rdc` SHA-256 为
+  `208b794cc2ab49cf88f970cdda787bfb016f3483284b389130e05a39bae1a614`。
+  最新 qrenderdoc 完全重启后实机核对三种 action 与 EID 2/3/4 拓扑、Line Strip API 参数、
+  Point/Line/Line Strip Mesh VS Input、标准 Buffer Viewer 全部顶点值、Resource Inspector
+  `Vertex Buffer`、Texture Viewer 红点绿线蓝折线、Pipeline HTML Line Strip/Buffer 16，状态栏
+  `No problems detected`。UI/自动 DDS 均为 480128 bytes，SHA-256 同为
+  `4bedcfdcddf745e379a2f693eac75a5dedec53df32ffba7ddad9011f60de0a5c`；
+  产物为 `t15_output_ui.dds`、`t15_pipeline_state_standard.html`。
+- T16 `Metal_Vertex_Texture` 使用 384-byte Float2/Float2 buffer、2×2 RGBA8 texture 与
+  Point/Clamp sampler，在 vertex shader 采样并输出四象限纯色。原生 readback、XML、直接
+  vertex texture/sampler bridge/chunk/frame reference/GPU replay、event snapshot、VS reflection/
+  descriptor、`VS_Resource` usage、资源字节、VS Input、clear/draw/回退及 DDS 自动断言均通过。
+  T03/T12 fragment 定向 smoke 通过；slot 128 与空 texture/sampler 的四份派生 RDC 在对应
+  chunk 被拒绝。
+- `/tmp/t16-final-regression.log` 记录 T00-T16 原生/capture/XML/output/state、逐份 CLI replay
+  和 17×10 lifecycle 全部通过，resident growth 114688 bytes。最新 qrenderdoc 实机使用与
+  `captures/metal-smoke/t16_capture.rdc` SHA-256 同为
+  `2f1b95128946d180d7f114ca9047bb2b90f28d43915e82ad9eca2925ff788ec5` 的
+  `/tmp/t16-ui-capture.rdc`：Event/API EID 2、VS Texture 17/Sampler 18、Mesh VS Input、
+  384-byte 标准 Buffer Viewer、Texture 17/Resource Inspector `VS - Texture`、四象限输出与
+  状态栏 `No problems detected` 均通过。HTML 为
+  `captures/metal-smoke/t16_pipeline_state_standard.html`；UI/自动 480128-byte DDS 的
+  SHA-256 同为 `95597aa5bcb91a27f057df2f4f36cbeb49423ac7e5275d5ed17ca29b03ca21cf`。
+  验证命令：`bin/demos_x64 Metal_Vertex_Texture --frames 5`；
+  `build-macos-debug/metal_replay_output_smoke captures/metal-smoke/t16_capture.rdc /tmp/t16-directed.ppm /tmp/t16-directed.dds`
+  （T03/T12 使用相同 smoke 的对应 capture）；
+  `RENDERDOC_METAL_CAPTURE_DIR=/tmp/t16-final-regression-captures util/buildscripts/scripts/test_metal_capture_macos.sh > /tmp/t16-final-regression.log 2>&1`。
+- T18 `Metal_Fragment_Storage_Buffer` 使用 640-byte shared buffer，在 byte offset 256 的
+  fragment `device const float4 *` 读取四组颜色，物理 slot 3，未绑定 slot 5。native BGRA、
+  capture/XML、storage reflection/descriptor、`PS_Resource` usage、事件 seek、640-byte raw export、
+  哨兵和异常 offset 均经自动 smoke 验证；T04/T12/T10 定向通过。
+- `/tmp/t18-final-regression.log` 记录 T00-T18 全量原生/capture/XML/output/state、逐份 CLI replay
+  与 19×10 lifecycle 全部通过，resident growth 1,556,480 bytes；`git diff --check` 通过。
+  最新 qrenderdoc 加载与正式 capture SHA-256 同为
+  `4e8436d6c9859c9dcf8ba57273dd9b1515cfa3f641339bf6219ba2ffec247aa8` 的
+  `/tmp/t18-ui-final.rdc`，EID 2 的 FS Storage Buffers slot 3/offset 256/size 384、
+  标准 Buffer Viewer 四组值、Resource Inspector `FS - Resource`、HTML/CSV 保存与状态栏
+  `No problems detected` 均通过。UI CSV 前四行与自动 raw export 对应字节一致。
+  产物位于 `captures/metal-smoke/t18_capture.rdc`、`t18_storage.bin`、
+  `t18_storage_ui.csv`、`t18_pipeline_state_standard.html`。UI 二进制菜单项未单独点击；
+  raw 内容由自动 smoke 验证。
+- T19 `Metal_Vertex_Storage_Buffer` 使用 768-byte shared buffer，在 byte offset 256 保存 24 个
+  `float4` 位置；vertex shader 从 slot 4 读取，slot 6 绑定相同资源但静态未使用。自动 smoke 核对
+  四象限 native/replay、XML、reflection/descriptor、`VS_Resource`、IA/storage 分类、
+  clear/draw/回退、完整 raw 和异常 slot/offset。最终 T19/T18/T16/T02/T05 定向、CLI replay、
+  T19 10 轮 lifecycle 和 `git diff --check` 通过；日志为 `/tmp/t19-final-t19.log`、
+  `/tmp/t19-final-t18.log`、`/tmp/t19-final-t16.log`、`/tmp/t19-final-t02.log`、
+  `/tmp/t19-final-t05.log`、`/tmp/t19-final-cli.log` 与 `/tmp/t19-final-lifecycle.log`。
+  分类公共路径风险已由 T02/T05 覆盖，未触发 T00-T19 L3。最新 qrenderdoc L4 核对 EID 2、
+  `drawPrimitives(24)`、IA 空表、VS Storage Buffers slot 4/6、256+512 Buffer 范围、
+  Resource Inspector `VS - Resource`、四象限、HTML/CSV/bin 与 `No problems detected`；
+  512-byte UI bin 与自动 raw 对应子范围一致。
 
 ## 已验证环境
 
@@ -284,52 +398,159 @@ Qt 5 会警告它只测试到 macOS SDK 14，当前 SDK 26 属于 Qt 未验证�
    cube array/3D、depth/stencil、整数、浮点和压缩格式 readback 仍明确不支持。
 5. 当前 drawable hook 只验证了本机 `CAMetalDrawable` 具体类；后续需要覆盖多屏/不同 GPU 可能出现
    的其他 drawable class。
-6. 当前 event-range replay 已覆盖 T00-T09 的单 command buffer、单 render pass，并包含 T02 indexed、
-   T04 dynamic offset、T05 instanced draw、T06 双附件 blend、T07 depth/stencil 五 draw 与 T08 三次
-   MSAA resolve draw 的前进/回退
-   专项断言；多 command buffer、多 pass、嵌套 debug group 和
+6. 当前 event-range replay 已覆盖 T00-T13 的单 command buffer，并包含 T10 blit→render、
+   T11 compute→render 与 dispatch 前后/回退纹理字节、
+   T02 indexed、T04 dynamic offset、T05 instanced draw、T06 双附件 blend、T07 depth/stencil
+   五 draw 与 T08 三次 MSAA resolve draw 的前进/回退专项断言；多 command buffer、多 render
+   pass、嵌套 debug group 和
    load-action initial contents 仍需按后续样例扩展。
 7. `OnlyDraw` 遵循 RenderDoc 控制器约定，依赖紧邻的 `WithoutDraw` 建好同一 encoder 的前置状态；
    当前不承诺把 `OnlyDraw` 当作独立入口调用。
-8. T00-T09 的 replay wrapper/Metal object 释放已经完成并通过循环测试；后续 wrapper 必须继续
+8. T00-T13 的 replay wrapper/Metal object 释放已经完成并通过完整循环测试；后续 wrapper 必须继续
    遵守 D017 的 transferred/retained 所有权规则，避免重新引入双重释放或泄漏。
 9. 当前 Metal Pipeline State 承诺 T01 基础字段、T02 的 Float3/Float4 vertex descriptor、UInt16/32
    index/depth/raster、T03 fragment texture/sampler、T04 fragment constant buffer/dynamic offset，
    T05 多 vertex buffer/per-instance layout、T06 多 color target/逐 attachment blend state、T07
    combined depth/stencil/front-back stencil state、T08 multisample/resolve/sample state 与 T09 的
-   fragment 2D/array/cube texture bindings；其他
-   vertex format、更多 blend/depth-stencil 组合、storage buffer 和 vertex texture/sampler bindings
-   仍归后续范围。
-10. 直接非索引 draw 已覆盖 instance count/base instance；当前 indexed draw 仍只支持基础直接重载，
-    indexed instancing、base vertex/base instance 和 indirect draw 在对应 fixture 加入前继续 unsupported。
+   fragment 2D/array/cube texture bindings，以及 T11 的 compute pipeline/shader 和直接读写
+   2D texture bindings，以及 T16 直接 vertex、T17 VS/FS 批量 texture/sampler、T18 fragment
+   storage buffer 和 T19 vertex storage buffer bindings；其他 vertex format、writable/array buffer、
+   更多 blend/depth-stencil 组合仍归后续范围。
+10. 直接非索引 draw 已覆盖 instance count/base instance 与 T13 shared buffer 间接参数；indexed draw
+    已支持 T14 直接 indexed instancing/base vertex/base instance；indirect indexed 和 ICB 仍待
+    各自 fixture。
 11. 当前 Metal mesh renderer 只承诺 VS Input 的 Float2/Float3/Float4 和 Metal 可直接绘制的常见
     point/line/triangle topology；T05 的 per-instance 表格读取已支持，但 raw VS Input preview 不推导
     shader 中的 instance transform。post-VS、选点、高亮、solid/secondary/bbox 等仍待后续实现。
-12. Metal Pipeline State 已接入标准 IA/VS/RS/FS/OM、empty-slot、RDTree 资源操作/预览、HTML export、
+12. Metal Pipeline State 已接入标准 IA/VS/RS/FS/OM/CS、empty-slot、RDTree 资源操作/预览、HTML export、
     有反射证据的 used/unused 过滤、fragment constant buffer、逐附件 blend 与 depth/stencil；共享阶段
-    导航已支持 Left/Right/Home/End。剩余差异是更细的紧凑布局、更多状态字段及 storage buffer/vertex
-    texture/sampler 等绑定类型。
+    导航已支持 Left/Right/Home/End。T16/T17 补齐 VS/FS texture/sampler 直接与批量表，T18/T19
+    补齐 fragment/vertex storage buffer 表；剩余差异是更细的紧凑布局、更多状态字段及高级绑定类型。
 
 ## 下一步（按顺序）
 
-1. 新建 T10 任务，阅读 `PHASE11.md`，从 P11.1 确定性 blit fixture 开始。
-2. 开发中只跑 T10 与受影响的 T03/T09 定向验证；阶段末执行 T00-T10 全量回归与 qrenderdoc。
+1. 进入 `BATCH21-22.md` / `PHASE21.md` P21.1，建立 T20 单命令 ICB 原生 fixture；
+   随即完成本场景 capture/XML/replay 自动闭环和清单内 L2，记录批末 UI 待验。
+2. 直接进入 `PHASE22.md` P22.1-P22.4，完成 T21 indexed indirect，再按批次联合清单在
+   最终构建上去重验收 T20/T21、旧路径、CLI/lifecycle 与同一轮 qrenderdoc L4。
+3. 两阶段关闭并同步下一批计划后，判断当前对话是否适合继续；若建议新对话，给可复制提示词。
 
 ## 恢复检查点
 
-- 当前阶段：`PHASE10.md` / T09 已完成；下一阶段 `PHASE11.md` / T10 P11.1 待开始。
-- 第一项未完成工作：T10 的 buffer copy/fill、texture copy、mipmap generation 确定性 native fixture。
-- 工作区：包含 T00-T09 累计未提交有效修改；不得清理、覆盖或回退。
-- 最后可信完整验证：2026-09-23 T00-T09 一键回归、十份 capture 各 10 次 lifecycle（475,136
-  字节增长）、最新 qrenderdoc 的 mip/slice/face、Pipeline binding、UI cube DDS 保存和无错误状态栏。
-- 下一条安全操作：新开任务，按 `PHASE11.md` P11.1 和 `HANDOFF.md` L0-L2 节奏实现 T10。
-- 尚未执行：T10 的 L3 完整回归和 L4 qrenderdoc；T09 的 L3/L4 均已完成。
+- 2026-09-24 批次编排检查点：用户要求减少重复 QA，并要求新对话可批量执行 phase、批末统一
+  验收。已新增 `BATCH21-22.md` 和 `PHASE22.md`，将 T20 单命令 ICB 与 T21 indexed indirect
+  固定为两阶段一批；`PHASE21.md`、`HANDOFF.md`、`PLAN.md`、README、TEST_MATRIX 与 STATUS
+  同步。T20/T21 尚未开发或验证，第一项未完成仍为 P21.1。每条切片的 native/capture/replay
+  自动验证须立即完成；批末在最终构建上去重跑联合定向清单，qrenderdoc 同一轮验收两份
+  capture，未通过 L4 不可标记任一阶段关闭。L3 默认不跑，触发后范围至 T00–T21。
+  本次仅修改文档，全部既有未提交改动保留；最近代码证据仍是 T19 阶段关闭检查点。
+
+- 2026-09-24 T19 阶段关闭检查点：P20.1-P20.4 已完成。新增 768-byte vertex storage fixture，
+  slot 4/offset 256 used、slot 6/offset 320 unused；reflection/descriptor/`VS_Resource`、IA/storage
+  分类、异常 slot/offset、标准 VS Storage Buffers 与 UI 导出均通过。必跑 T19/T18/T16 以及因
+  `setVertexBuffer` 分类改动触发的 T02/T05 全部通过；T19 CLI 与 10 轮 lifecycle 通过，最终构建
+  `/tmp/t19-final-build.log`。最新 qrenderdoc 已核对 Event/API、IA 空表、VS slot 4/6、标准
+  Buffer/Resource、四象限和 `No problems detected`；UI HTML/CSV/bin 位于 `/tmp/t19_*`。
+  定向结果没有跨场景未界定风险，故未触发 T00-T19 L3；最近完整基线仍是 T00-T18。
+  全部既有未提交改动保留。第一项未完成为 `PHASE21.md` P21.1。
+
+- 2026-09-24 验证清单细化：`HANDOFF.md` 和 `PLAN.md` 规定每份新阶段文档须列出必跑旧 T、
+  条件触发旧 T、L4 检查和 L3 决策/完整范围。`PHASE20.md` 已明确 T19、必跑 T18/T16、
+  条件触发 T02/T05；L3 默认不执行，触发时覆盖 T00-T19。T19 仍待从 P20.1 开始；
+  本次只改文档，未运行代码测试，既有未提交改动保留。
+
+- 2026-09-24 验证规则调整检查点：用户指出每个 Txx 阶段全量回归随场景数增长，要求小范围验证
+  只覆盖本次修改。已同步 `HANDOFF.md`、`PLAN.md`、`PHASE20.md`：T19 从 P20.1 开始，先做
+  T19 和实际受影响的 T18/T02/T05/T16 定向验证；T19 UI 用最新 qrenderdoc 做一次定向验收。
+  仅在较大里程碑、发布/合并前或确有定向测试无法覆盖的跨场景风险时运行 L3。此前
+  T00-T18 L3/L4 结果保留为历史证据，不重跑；全部未提交改动保留。本次只改文档，未运行代码测试。
+
+- 2026-09-24 T18 阶段关闭检查点：P19.1-P19.4 完成。T00-T18 L3 日志
+  `/tmp/t18-final-regression.log`（19×10 lifecycle，resident growth 1,556,480 bytes）；
+  正式 capture、640-byte raw、UI CSV/HTML 产物位于 `captures/metal-smoke/`。最新构建 qrenderdoc
+  用与正式 capture SHA-256 相同的 `/tmp/t18-ui-final.rdc` 完成 Event/API、FS Storage Buffers
+  slot 3/offset 256/size 384、标准 Buffer Viewer、Resource Inspector `FS - Resource`、
+  HTML/CSV 保存与 `No problems detected` 验收。UI CSV 前四行与自动 raw export 一致；
+  UI 二进制菜单项未单独点击，raw 由自动 smoke 验证。T18 fixture、reflection/descriptor/usage、
+  Metal FS Pipeline UI、usage 标签、自动 smoke 与阶段文档已修改；全部前序 dirty worktree 改动
+  保留。第一项未完成为 `PHASE20.md` P20.1；不要重跑 T18 L3/L4。
+
+- 2026-09-24 P19 L4 待验收检查点：T18 fixture、反射/descriptor/usage 和 FS Storage Buffers
+  页面已实现；原生/capture/XML/replay、T04/T12/T10 定向均通过。T00-T18 完整 L3 日志
+  `/tmp/t18-final-regression.log`：19×10 lifecycle、resident growth 737280 bytes，CLI replay 通过。
+  完整回归无需重跑。qrenderdoc 旧进程打开 T18 后显示旧页面；已退出并启动最新进程，二进制含
+  `Storage Buffers`，但 Mac 随即锁屏，Computer Use 报需用户解锁。L4 **未完成**，阶段尚未关闭。
+  解锁后只需用最新 qrenderdoc 打开 `captures/metal-smoke/t18_capture.rdc`，核对 Event/API、
+  EID 2 的 FS Storage Buffers slot 3/offset 256/size 384、未绑定 slot 5、标准 Buffer Viewer、
+  Resource Inspector、HTML/raw save 和 `No problems detected`；然后同步阶段关闭文档。
+  全部前序 dirty worktree 改动保留。最后成功命令为全量回归；没有待修复的代码失败。
+
+- 2026-09-24 P19 L4 续接检查点：Mac 曾短暂解锁，最新 qrenderdoc 已显示 EID 2 的 FS
+  Storage Buffers slot 3/offset 256/size 384、标准 Buffer Viewer 的四组 `float4` 和
+  Resource Inspector 的 EID 2 usage。UI 发现 `PS_Resource` 文案误报 `FS - Texture`，已在
+  `qrenderdoc/Code/QRDUtils.cpp` 为 Metal 改成 `FS - Resource`；修改后 T00-T18 全量回归
+  `/tmp/t18-final-regression.log` 再次通过，19×10 lifecycle，resident growth 1556480 bytes。
+  最新 qrenderdoc 可执行文件已重建并启动，但 Computer Use 随后确认 Mac 已锁屏且无法自动解锁。
+  已请求用户手动解锁；第一项未完成
+  是在新进程中核对更正后的 Resource Inspector 标签、HTML/raw save 与状态栏，**无需再跑 L3**。
+
+- 2026-09-23 P19 开始检查点：已按最短接手路径读取 README、STATUS 当前阶段/最近检查点、PHASE19
+  和 HANDOFF 验证规则；`git status` 确认前序未提交改动均保留，`git diff --check` 已通过。T18 尚未
+  修改或验证。第一项未完成为 P19.1 原生 fixture；开发中仅跑 T18 与受影响 T04/T12，P19.4 才运行
+  一次 T00-T18 L3 和一次最新 qrenderdoc L4。
+
+- 2026-09-23 T17 阶段关闭检查点：P18.1-P18.4 全部通过。全量 L3 日志
+  `/tmp/t17-final-regression.log`（18×10 lifecycle，resident growth 1,015,808 bytes）；正式 T17
+  capture/XML/PPM/DDS、UI DDS/HTML 位于 `captures/metal-smoke/`。修改 T17 fixture、四个 render
+  encoder 批量入口、replay fragment texture usage、自动 smoke/回归脚本和当前阶段文档；此前所有 dirty
+  worktree 改动均须保留。最新 L4 已验证 Event/API、VS/FS Pipeline、空槽/未使用项、Mesh/Buffer/
+  Texture/Resource、DDS/HTML 与状态栏。第一项未完成为 `PHASE19.md` P19.1；无需重跑 T17 L3/L4。
+
+- 2026-09-23 T16 阶段关闭检查点：P17.1-P17.4 全部通过。全量 L3 日志
+  `/tmp/t16-final-regression.log`（17×10 lifecycle，resident growth 114688 bytes）；正式
+  T16 capture、XML、PPM、DDS 与 UI DDS/HTML 位于 `captures/metal-smoke/`。本轮修改 T16 fixture、
+  render encoder bridge/wrapper/chunk、replay snapshot/descriptor/usage、Metal Pipeline VS UI、
+  自动 smoke/脚本和文档；T00-T15 累计 dirty worktree 均不可回退。最新 L4 已验证 Event/API、
+  VS Pipeline、Texture/Buffer/Mesh/Resource、DDS/HTML 与状态栏。第一项未完成为 `PHASE18.md`
+  P18.1；不要重跑 T16 L3/L4，不要清理/回退工作区。
+
+- 2026-09-23 T15 阶段关闭检查点：P16.1-P16.4 均已完成。T00-T15 L3 日志
+  `/tmp/t15-final-regression.log`（16×10 lifecycle resident growth 737280 bytes）；正式 capture
+  `captures/metal-smoke/t15_capture.rdc` SHA-256 为
+  `208b794cc2ab49cf88f970cdda787bfb016f3483284b389130e05a39bae1a614`，自动 DDS
+  `captures/metal-smoke/t15_output.dds` 480128 bytes。T01/T02/T05/T14 定向 smoke 均通过。
+  非法 primitive 99 与零 vertexCount 的 `/tmp/t15-*.rdc` 派生 capture 均在 replay 拒绝。
+- 本轮新增/修改：`util/test/demos/metal/metal_point_line.cpp`、demos CMake 列表、
+  `metal_render_command_encoder.cpp`、`metal_replay.cpp`、`metal_replay_output_smoke.mm`、
+  `test_metal_capture_macos.sh` 及阶段文档；既有 T00-T14 dirty worktree 均不可回退。
+- 最新 L4：完全重启最新 qrenderdoc 后打开正式 T15，Event Browser 三个 action、EID 2/3/4
+  的 Point List/Line List/Line Strip、API Inspector 的 Line Strip/6/3、标准 Buffer Viewer 的
+  11 行顶点、Resource Inspector `Vertex Buffer` usage、三个 Mesh VS Input、Texture Viewer
+  红点绿线蓝折线及 UI DDS/HTML export 均已验证，状态栏 `No problems detected`。
+- 第一项未完成：进入 `PHASE17.md` P17.1；不要重跑 T15 L3/L4，不要清理/回退工作区。
+
+- 历史检查点（T14 关闭时）：当时第一项未完成工作是 `PHASE16.md` P16.1 / T15 fixture。
+- 工作区：T00-T14 累计未提交有效改动仍在。本轮新增 `metal_indexed_instancing.cpp`、indexed
+  instanced-base render encoder capture/replay、精确 index binding/usage 和 T14 回归。
+  不得清理、覆盖或回退；完整 dirty 列表以 `git status --short` 为准。
+- 最近成功：`/tmp/t14-final-regression.log` 记录 T00-T14 native/capture/XML/output/data/state、
+  15×10 lifecycle（resident growth 1,015,808 bytes）和逐份 CLI replay 全部通过。T02/T05/T13
+  定向 output smoke 通过；offset 3/10 派生 RDC 均在 indexed-instanced chunk 拒绝。
+- 最新 L4：完全重启最新 qrenderdoc 后，正式 `t14_capture.rdc` 的 Event Browser EID 2、API
+  Buffer 18/offset 4、IA Pipeline Buffer 16/17/18、Resource Inspector `Index Buffer`、
+  标准 Buffer Viewer 范围 4/6 与 `0/1/2`、Mesh instance 0/1、红蓝输出及状态栏
+  `No problems detected` 均通过。`t14_indices_ui.csv` 内容为 0/1/2，
+  `t14_pipeline_state_standard.html` 包含 Triangle List 与 Buffer 16/17/18。
+- 当时的下一条安全操作：进入 `PHASE16.md` P16.1；T15 现已关闭，不要重跑 T14/T15 L3/L4，
+  也不要清理累计 dirty worktree。
 
 ## Agent 工作节奏
 
-2026-09-23 起采用 `PLAN.md` / `HANDOFF.md` 的“省额度稳定模式”：一个 agent 默认连续负责完整 Txx
-阶段，开发期只做定向验证，阶段末执行一次完整回归和一次 qrenderdoc 实机验收。阶段完成后建议新建
-任务；阶段中途只有先写好上述恢复检查点后才建议 compact。agent 不应等待用户反复发送“继续”。
+2026-09-24 起采用更新后的 `PLAN.md` / `HANDOFF.md` 验证规则：一个 agent 默认连续负责完整 Txx
+阶段，阶段内及收口只做当前与实际受影响旧路径的定向验证；涉及 UI 时完成一次最新 qrenderdoc
+定向验收。L3 全量回归仅在较大里程碑、发布/合并前或确有定向测试无法覆盖的跨场景风险时执行。
+阶段完成后可在当前对话继续；阶段中途只有先写好上述恢复检查点后才建议 compact。agent 不应
+等待用户反复发送“继续”。
 
 ## 构建与启动
 
@@ -342,12 +563,28 @@ Qt 5 会警告它只测试到 macOS SDK 14，当前 SDK 26 属于 Qt 未验证�
 - Build 目录：`build-macos-debug`
 - App：`build-macos-debug/bin/qrenderdoc.app`
 - 核心库：`build-macos-debug/lib/librenderdoc.dylib`
+- App 内嵌核心库：`build-macos-debug/bin/qrenderdoc.app/Contents/lib/librenderdoc.dylib`；
+  `build_metal_dev_macos.sh` 在增量构建后核对并同步，防止 UI 加载旧 replay 代码。
 - CLI：`build-macos-debug/bin/renderdoccmd`
 - Metal demos：`bin/demos_x64`
 - smoke capture/XML：`captures/metal-smoke/`（生成目录，不提交）
 - 清理：删除 `build-macos-debug` 后重新运行脚本；该目录已被 `.gitignore` 忽略。
 
 ## 最近验证
+
+2026-09-23 T10 收口：`./util/buildscripts/scripts/test_metal_capture_macos.sh` 首次完整运行通过；
+通用事件分组/UI 修正后按阶段门槛以最终代码复验，日志 `/tmp/t10-final-regression-post-ui.log`；
+十一份 capture 各 10 次 lifecycle resident growth 1,277,952 字节。T10 自动断言 buffer
+copy/fill 的 EID 2→3→2 数据往返、texture copy 四象限、
+mip1/mip3、资源 usage、最终四条色带和 468-byte DDS，T03/T09 路径与 T00-T08 均通过。
+`/tmp/t10-final-cli-replay-post-ui.log` 记录 T00-T10 逐份 `--loops 1` 成功。最新 qrenderdoc app
+包内库与构建库逐字节一致。
+正式 capture 的 `/tmp` SHA-256 相同副本在 Event Browser 显示 `Copy/Clear Pass #1`、EID 1-6
+blit 操作；API Inspector 可跳到 Buffer 18 和 Texture 20，Resource Inspector usage 为
+`Copy - Dest`/`Clear`/`Generate Mips`。标准 Buffer Viewer 的 EID 2/3、Texture Viewer 的四象限
+与 mip3 拾取 `(0.52549,0.51765,0.34510,1.00)`、EID 8 四条色带均与自动结果一致。
+`captures/metal-smoke/t10_mips_ui_final.dds` 与自动 `t10_mips.dds` 各 468 字节、`cmp` 相同；
+状态栏 `No problems detected`。
 
 2026-09-23 T09 收口：`./util/buildscripts/scripts/test_metal_capture_macos.sh` 最新运行通过，日志
 `/tmp/t09-final-regression-v3.log`；十份 capture 各 10 次 lifecycle resident growth 为 475,136 字节。
@@ -526,3 +763,14 @@ instance 0/1 正确显示 baseInstance 后的 offset/colour，两个 Buffer View
 | 2026-09-22 | P9.1-P9.4 T08 MSAA resolve | 4x MSAA attachment、显式 resolve、sample/resolve snapshot、三 draw 事件回放、标准 OM/Texture/export、完整 T00-T08 回归与 qrenderdoc 实机验证通过；下一项为 T09 mip/cube/array |
 | 2026-09-23 | Agent 节奏重编排 | 固化一个 agent 完成一个 Txx 阶段、L0-L4 分层验证、阶段末单次完整回归/qrenderdoc、compact 安全检查点和下一任务提示模板；T09 仍待开始 |
 | 2026-09-23 | P10.1-P10.4 T09 mip/cube/array | 12 子资源 fixture、slice-aware upload/readback/pick/display、通用绑定、标准 Texture Viewer 和 cube DDS 保存；完整 T00-T09 回归、CLI replay、lifecycle 与最终 qrenderdoc 验收通过；下一项 T10 blit |
+| 2026-09-23 | P11.1-P11.4 T10 blit | buffer/texture copy、fill、mipgen 的 action/usage/seek/readback、标准 Buffer/Texture UI 与 DDS；完整 T00-T10 回归、CLI replay、11×10 lifecycle 和最终 qrenderdoc 验收通过；下一项 T11 compute |
+| 2026-09-23 | P12.1-P12.4 T11 compute | 8×8 RGBA8 compute filter、dispatch action/usage/seek、读写 descriptor、CS Pipeline/Texture/Resource UI 与 DDS/HTML；完整 T00-T11 回归、逐份 CLI replay、12×10 lifecycle 和最新 qrenderdoc 验收通过；下一项 T12 argument buffer |
+| 2026-09-23 | P13.1-P13.4 T12 argument buffer | 单层 fragment argument buffer、texture id(0)/sampler id(1)、capture/replay、间接 usage、通用 descriptor/reflection、标准 Viewer 跳转、DDS/HTML；T00-T12 L3、13×10 lifecycle 与最新 qrenderdoc L4 全部通过，下一项 T13 indirect draw |
+| 2026-09-23 | P14.1-P14.4 T13 indirect draw | shared buffer offset 16 的 `3/2/1/1` 参数、indirect action/usage、标准 Buffer/Resource/Pipeline、raw `.bin`/HTML、异常 offset 拒绝；T00-T13 L3、14×10 lifecycle 与最新 qrenderdoc L4 均通过，下一项 T14 indexed instancing/base vertex |
+| 2026-09-23 | P15.1-P15.4 T14 indexed instancing | UInt16 byte offset 4、baseVertex/baseInstance 1、双实例、精确 IA/Buffer/Mesh/usage/seek、异常 offset 拒绝；T00-T14 L3、15×10 lifecycle 与最新 qrenderdoc L4 均通过，下一项 T15 point/line |
+| 2026-09-23 | P16.1-P16.4 T15 point/line | Point/Line/Line Strip 非零 vertexStart、三种 action/topology/Mesh VS Input、264-byte Buffer/usage/seek、非法参数拒绝、UI DDS/HTML；T00-T15 L3、16×10 lifecycle（resident growth 737280 bytes）与最新 qrenderdoc L4 均通过，下一项 T16 vertex texture/sampler |
+| 2026-09-23 | P17.1-P17.4 T16 vertex texture/sampler | 四象限 native/replay、直接 vertex binding、VS reflection/descriptor/usage、标准 Viewer、非法 slot/资源拒绝、UI DDS/HTML；T00-T16 L3、17×10 lifecycle（resident growth 114688 bytes）与最新 qrenderdoc L4 均通过，下一项 T17 batch binding |
+| 2026-09-23 | P18.1-P18.4 T17 texture/sampler batch binding | VS/FS 批量 range、空槽清除、used/unused、四象限、异常 RDC；T00-T17 L3、18×10 lifecycle（resident growth 1015808 bytes）与最新 qrenderdoc L4 均通过，下一项 T18 storage buffer |
+| 2026-09-24 | P19.1-P19.4 T18 fragment storage buffer | slot 3/offset 256/size 384、reflection/descriptor/PS usage、FS Pipeline/Buffer/Resource、HTML/CSV/raw；T00-T18 L3、19×10 lifecycle（resident growth 1556480 bytes）与最新 qrenderdoc L4 均通过，下一项 T19 vertex storage buffer |
+| 2026-09-24 | P20.1-P20.4 T19 vertex storage buffer | slot 4/offset 256 used、slot 6/offset 320 unused、IA/storage 分类、reflection/descriptor/VS usage、VS Pipeline/Buffer/Resource、HTML/CSV/bin；T19/T18/T16/T02/T05 定向、本场景 10× lifecycle 与最新 qrenderdoc L4 通过，L3 未触发，下一项 T20 ICB |
+| 2026-09-24 | BATCH21-22 编排 | 固定 T20 ICB + T21 indexed indirect 两阶段；每条立即做功能自动验证，批末最终构建上去重跑联合定向/CLI/lifecycle，并同一轮 qrenderdoc 验收两份 capture；本次仅文档变更，第一项 P21.1 |

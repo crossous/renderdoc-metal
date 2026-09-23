@@ -5,26 +5,37 @@
 1. 先打通纵向链路，再增加 API 宽度：UI 启动、样例原生运行、截帧、加载事件、replay 一个三角形。
 2. Replay 是产品目标，capture 是不可省略的输入前提；先支持受控测试程序，不把任意应用注入列入首版。
 3. 每个功能必须有最小样例、`.rdc` 夹具或自动测试，以及 UI/数据验证方法。
-4. 每个阶段结束前必须更新 `STATUS.md`，补齐本阶段证据，并写好下一阶段的细化任务。
+4. 每条切片完成自动验证时更新 `STATUS.md`；批次关闭前补齐最终证据，并写好下一批的细化任务。
 5. 不用空实现伪装支持。未支持能力必须返回明确结果或在 UI 中禁用，而不是崩溃或给出错误数据。
 
 ## Agent 推进节奏（省额度稳定模式）
 
-后续默认以一个 `PHASEx.md` 对应的 Txx 纵向切片作为一次 agent 工作周期，而不是每完成一个小任务就
-等待用户再次发送“继续”。agent 接手当前阶段后，应按 fixture/native -> capture/structured data ->
-replay/readback/state -> 标准 UI -> 自动回归/qrenderdoc 的顺序连续推进，直到整个阶段通过关闭门槛、
-遇到必须由用户决定的范围变化，或上下文需要在安全检查点 compact。
+后续默认以已写明边界的相邻 2–3 条 `PHASEx.md` 切片作为一次工作批次，而不是每完成一个 Txx
+就等待用户再次发送“继续”。当前批次固定为 `BATCH21-22.md` 中的 T20/T21，不自动扩成 10 个
+phase。每条切片按 fixture/native -> capture/structured data -> replay/readback/state -> 自动断言
+推进；前一条自动链路通过并记录批末 UI 待验后继续后一条。两条切片经最终联合验证和同一轮
+qrenderdoc 实机验收后一起关闭。
 
-为减少重复消耗，验证分层执行：开发中只构建受影响目标并运行当前 fixture/相关旧 fixture 的定向
-检查；完整 `test_metal_capture_macos.sh`、全部 capture 的 CLI replay/lifecycle 与 qrenderdoc 实机
-验收只在阶段收口时执行一次。若收口测试暴露问题，修复后必须重跑受影响项；涉及公共 replay、资源
-生命周期或 UI 公共路径时，还要重跑完整回归。qrenderdoc 的最终验收必须使用最新成功构建，且布局、
-操作语义继续向 RenderDoc 其他图形 API 的标准页面收敛。
+为减少随 T 场景数量增长的重复消耗，每条切片开发时只构建受影响目标，并立即运行当前 fixture
+必要的 native/capture/replay 自动验证及受影响旧路径的定向断言。批末在最终构建上执行各 T 的
+CLI/lifecycle 与旧 T 清单的并集，重复 T 编号只跑一次；可复用最终代码上未受后续修改影响的
+已通过结果。涉及 UI 时，在同一轮最新 qrenderdoc 实机验收中依次打开批内 captures。
+完整 `test_metal_capture_macos.sh` 与全部 capture 的 CLI replay/lifecycle 仅在较大里程碑、
+发布/合并前，或发现无法由定向测试覆盖的具体跨场景风险时
+运行，不是每个 Txx 阶段的关闭门槛。公共 replay、资源生命周期或 UI 代码变更先按受影响路径
+选旧 fixture；只有范围无法合理界定时升级全量。修复后重跑受影响项。UI 布局和操作语义继续向
+RenderDoc 其他图形 API 的标准页面收敛。
 
-阶段关闭后默认建议新建 Codex 任务，让下一位 agent 读取文档接手下一阶段，避免携带越来越长的对话
-历史。阶段中途只有在实现状态已经写入 `STATUS.md` 的安全检查点才建议 compact；compact 后仍由同一
-任务继续当前阶段，不重新跑已经有可信证据的完整基线。精确的交接输出、compact 条件和下一任务提示
-模板见 `HANDOFF.md`。
+每份阶段文档预先列明当前 Txx、必跑旧 T、条件触发旧 T、批末 UI 验收项，并明确全量回归条件
+及完整 T 范围；批次文档另列去重后的联合清单。实现改变影响范围时先更新这两处清单和原因，
+批末只记录实际执行结果；具体格式见 `HANDOFF.md`。功能必要就开发并验证，不能以减少 QA
+为由缩小实现；确实不必要的功能须说明依据并更新范围。
+
+批次关闭后可以在当前对话继续，也可以根据上下文状态新建任务；两者都从 `STATUS.md` 第一项
+未完成工作接手。接手时读取入口、当前状态、批次与阶段清单及交接检查点；历史阶段文档按需追查。
+批次中途只有在实现状态已经写入 `STATUS.md` 的安全检查点才建议 compact；compact 后仍从
+检查点继续，不重新跑已验证基线。
+精确的交接输出与下一任务提示见 `HANDOFF.md`。
 
 ## 首版完成定义
 
@@ -140,7 +151,8 @@ texture 类型/格式和 blit 覆盖仍按本阶段后续任务推进。T02 已�
 private `Depth32Float` attachment 的创建/恢复，并自动逐字节验证 16/32-bit index 数据。T03 已覆盖
 shared 4x4 RGBA8 sampled texture 的 descriptor、`replaceRegion` 初始内容、GPU replay、逐字节读取与
 四个已知 texel 的 `PickPixel()`；T09 已进一步完成 RGBA8 2D mip、2D array 和 cube 的确定性
-子资源上传、读取与显示。Texture view 和其他 storage mode 仍未完成。
+子资源上传、读取与显示；T10 已验证 shared buffer copy/fill、RGBA8 2D texture copy 和 mipmap
+generation 的 GPU replay 与数据读取。Texture view 和其他 storage mode 仍未完成。
 
 任务：
 
@@ -155,7 +167,9 @@ shared 4x4 RGBA8 sampled texture 的 descriptor、`replaceRegion` 初始内容�
   `PickPixel()` 和保存路径。
 - [ ] M3.4b 扩展常见整数/浮点/depth/stencil/压缩格式及 cube array/3D/MSAA 子资源展示。
   （T09 的单采样 RGBA8 2D mip、2D array 和 cube 已完成。）
-- [ ] M3.5 支持 blit copy/fill/mipmap generation 中 P0/P1 用例。
+- [x] M3.5 支持 blit copy/fill/mipmap generation 中 P0/P1 用例。（T10 的 buffer→buffer、
+  RGBA8 2D texture→texture、buffer fill 与 2D mipmap generation 已通过数据/UI 验证；其他
+  overload、格式和跨 queue 场景仍按后续 fixture 扩展。）
 - [ ] M3.6 验证 render target、depth/stencil、MSAA resolve 和 sampled texture。（T00/T01 render
   target、T02 depth target、T03 sampled texture、T07 combined depth/stencil attachment 与 T08
   4x MSAA 显式 resolve 已验证；更多格式和 attachment 组合待扩展。）
@@ -190,8 +204,27 @@ depth/stencil attachment、front/back stencil state、dynamic reference、五个
 OM Depth/Stencil 表和 HTML export；共享 `PipelineFlowChart` 也补齐 Left/Right/Home/End 键盘导航。
 T08 已进一步完成 4x multisample color attachment、显式 resolve、sample state、标准 OM
 Multisample/Color/Resolve 分组、Texture Viewer resolve 跳转与 HTML export。T09 已完成 2D mip、
-2D array 和 cube 的 fragment binding/descriptor、标准 Texture Viewer 子资源切换与 DDS 保存。下一步
-转入 T10 buffer/texture blit，并继续按 D3D/Vulkan 核对字段顺序与紧凑布局。
+2D array 和 cube 的 fragment binding/descriptor、标准 Texture Viewer 子资源切换与 DDS 保存。
+T10 还验证 blit 结果进入 final draw 的 fragment buffer/texture binding。T11 已实现 compute
+texture filter 的 pipeline/shader、direct read/write texture binding、dispatch event/usage、CS Pipeline
+页及通用 Texture Viewer 跳转；自动 L3 和最新 qrenderdoc L4 均通过，T11 已关闭。下一项按
+`PHASE13.md` 已完成单层直接 argument buffer 的 API 语义重建、通用 descriptor/reflection、标准
+Buffer/Texture/Resource 跳转、DDS/HTML export；自动 L3 和最新 qrenderdoc L4 均通过，T12 已关闭。
+`PHASE14.md` 已完成单次间接 draw 参数：offset 16 的 16-byte 参数区、`Indirect` action/usage、
+标准 Buffer Viewer/Resource 跳转、raw bytes/HTML 导出、异常 offset 拒绝、T00-T13 全量 L3 与最新
+qrenderdoc L4 均通过。`PHASE15.md` 又完成 UInt16 index offset 4、base vertex 1、base instance 1
+的 indexed instancing；标准 IA/Mesh/Buffer Viewer、15×10 lifecycle、T00-T14 L3 与最新 qrenderdoc
+L4 均通过。`PHASE16.md` 的 T15 已补 Point/Line/Line Strip：native、capture/XML、
+action、event seek、标准 VS Input/Mesh/Buffer/Resource/DDS、T00-T15 L3 与最新 qrenderdoc L4
+均已通过。`PHASE17.md` 的 T16 已补 vertex texture/sampler 直接绑定：四象限原生/重放像素、
+VS reflection/descriptor/usage、标准 Viewer 与 UI DDS/HTML、T00-T16 L3 和最新 qrenderdoc L4
+均已通过。`PHASE18.md` 的 T17 已补 VS/FS texture/sampler 批量绑定、空槽和 used/unused，
+T00-T17 L3 与最新 qrenderdoc L4 均通过。`PHASE19.md` 的 T18 已补 fragment storage buffer
+slot/offset、reflection/descriptor/usage、FS 标准页面、Buffer/Resource 跳转与 HTML/CSV 导出；
+T00-T18 L3 与最新 qrenderdoc L4 均通过。`PHASE20.md` 的 T19 已补 vertex storage buffer、
+IA/storage 分类、VS 标准页面和 `VS_Resource`；T19/T18/T16/T02/T05 定向与最新 qrenderdoc L4
+通过，未触发全量 L3。下一批按 `BATCH21-22.md` 连续完成 T20 单命令 ICB 和 T21 indexed indirect，
+随后继续按 D3D/Vulkan 核对字段顺序与紧凑布局。
 
 任务：
 
@@ -217,14 +250,15 @@ Multisample/Color/Resolve 分组、Texture Viewer resolve 跳转与 HTML export�
   `PipelineFlowChart` 已支持焦点及 Left/Right/Home/End 导航；紧凑布局和后续状态字段继续收敛。）
 - [x] M4.4a 枚举 source-created vertex/fragment function 的 entry point 和 stage。
 - [x] M4.4b 枚举当前 source-created MSL 的直接 fragment texture/sampler bindings，并将反射数组索引、
-  Metal 物理 slot 与静态 active 状态接入通用 descriptor 查询。（fragment buffer、vertex
-  texture/sampler 与 argument buffer 仍归 M4.7。）
+  Metal 物理 slot 与静态 active 状态接入通用 descriptor 查询。（fragment buffer、T16 直接
+  vertex texture/sampler 与 argument buffer 已在 M4.7 的后续切片分别覆盖。）
 - [x] M4.5a 对 `newLibraryWithSource` 保存并在 Shader Viewer 显示真实 MSL 源码。
 - [ ] M4.5b 保留 library 编译选项和 function constants 元数据。
 - [ ] M4.6 对预编译 `.metallib` 显示可获得的函数/反射信息；没有源码时明确标记，不伪造源码。
-- [ ] M4.7 支持 buffer/texture/sampler 的 vertex 和 fragment stage 绑定。（T01/T02 vertex buffer、
-  T03 fragment texture/sampler 与 T04 fragment constant buffer/dynamic offset 已完成；vertex
-  texture/sampler、fragment storage buffer 与批量 binding 待后续 fixture。）
+- [x] M4.7 支持 buffer/texture/sampler 的 vertex 和 fragment stage 绑定。（T01/T02 vertex buffer、
+  T03 fragment texture/sampler、T04 fragment constant buffer/dynamic offset、T16 直接 vertex
+  texture/sampler、T17 批量 binding、T18 fragment storage buffer 与 T19 vertex storage buffer
+  已完成。）
 
 阶段验收：Pipeline State 页面与测试程序创建参数一致；点击 shader 能看到正确入口和可获得的
 MSL；绑定资源可跳转到对应 Buffer/Texture。
@@ -238,13 +272,14 @@ MSL；绑定资源可跳转到对应 Buffer/Texture。
 - [ ] M5.1 映射 Metal vertex format、buffer layout、step function、stride 和 attribute offset。（T02
   的 Float3/Float4、per-vertex、stride 28、offset 0/12 已进入 pipeline snapshot、通用
   `GetVertexInputs()`、Buffer Viewer 和 Mesh Viewer；完整格式仍待后续 fixture。）
-- [ ] M5.2 支持 16/32 位 index、base vertex、base instance 和 instance step rate。（直接 16/32-bit
-  indexed draw，以及 T05 非索引 draw 的 base instance/instance step rate 已完成自动与 UI 验证；
-  indexed base vertex/instancing 仍待后续 fixture。）
+- [x] M5.2 支持 16/32 位 index、base vertex、base instance 和 instance step rate。（T02 直接
+  UInt16/UInt32 index、T05 非索引 base instance/instance step rate，以及 T14 非零 index byte offset、
+  indexed base vertex/instancing 均完成自动与标准 UI 验证；其他 Metal draw overload 另列边界。）
 - [ ] M5.3 为非标准/缺失 vertex descriptor 提供手工格式查看能力和清楚限制。
-- [ ] M5.4 验证多 vertex buffer、interleaved/deinterleaved、instancing 和 primitive 类型。（T02/T05
-  已覆盖 interleaved 与分离 per-vertex/per-instance buffer、直接 instancing、TriangleList/Strip；
-  point/line 及 indexed instancing 仍待 fixture。）
+- [x] M5.4 验证多 vertex buffer、interleaved/deinterleaved、instancing 和 primitive 类型。（T02/T05/T14
+  覆盖 interleaved 与分离 per-vertex/per-instance buffer、直接及 indexed instancing、
+  TriangleList/Strip；T15 覆盖 PointList/LineList/LineStrip 与非零 vertex start。其他 vertex
+  format 与 Metal draw overload 仍按独立 fixture 扩展。）
 - [x] M5.5 校验 Mesh Viewer 的 VS input 与 replay 图像一致。（T02 已完成 UInt16/UInt32 indexed
   表格/线框；T05 已完成 base instance 后的 per-instance offset/colour 切换、raw position preview 与
   三实例 GPU 输出自动/实机验证。）
@@ -258,11 +293,19 @@ MSL；绑定资源可跳转到对应 Buffer/Texture。
 
 任务：
 
-- [ ] M6.1 支持 compute pipeline、dispatch threadgroups/threads 和资源绑定。
-- [ ] M6.2 支持常用 blit encoder 操作以及 encoder/command buffer 间资源可见性。
+- [ ] M6.1 支持 compute pipeline、dispatch threadgroups/threads 和资源绑定。（T11 已覆盖
+  `dispatchThreadgroups` + 直接读写 2D texture；`dispatchThreads`、compute buffer/sampler 与更广
+  范围的资源绑定仍未覆盖。）
+- [ ] M6.2 支持常用 blit encoder 操作以及 encoder/command buffer 间资源可见性。（T10 已完成
+  同一 command buffer 中 blit→render 的 copy/fill/mipgen 与可见性；跨 command buffer/queue、
+  更多 blit overload 和 managed-resource 同步待独立 fixture 验证。）
 - [ ] M6.3 支持 fence/event/managed-resource 同步中实际测试需要的子集。
-- [ ] M6.4 支持 argument buffer 的只读查看与常见资源引用解析。
-- [ ] M6.5 根据样例结果决定是否把 indirect command buffer/heaps 纳入首版扩展。
+- [x] M6.4 支持 argument buffer 的只读查看与常见资源引用解析。（T12 已覆盖 function argument
+  encoder、单层 buffer slot 0、`id(0)` RGBA8 texture、`id(1)` sampler、间接资源 capture/replay、
+  通用 descriptor/reflection、标准 Buffer/Texture/Resource Viewer 跳转与 DDS 保存；嵌套、数组、
+  bindless/heap 和 compute argument buffer 不在本项范围。）
+- [x] M6.5 根据样例结果决定是否把 indirect command buffer/heaps 纳入首版扩展。（T13 证明单次
+  CPU/shared indirect draw 可独立闭环；ICB/heaps 保留为后续 P2 fixture，暂不纳入首版 P1 门槛。）
 
 阶段验收：compute texture processing 样例可 replay，dispatch 前后资源值正确；不支持的高级能力
 有明确诊断且不会破坏同帧其他事件。
@@ -282,7 +325,7 @@ MSL；绑定资源可跳转到对应 Buffer/Texture。
 
 阶段验收：P0/P1 自动测试通过；手工 UI 验收清单通过；文档能指导新环境从源码构建并重现结果。
 
-当前进度：`test_metal_capture_macos.sh` 已覆盖 T00-T09 的构建、原生运行、capture、structured
+当前进度：`test_metal_capture_macos.sh` 已覆盖 T00-T13 的构建、原生运行、capture、structured
 inspection、CLI replay、output 像素、event seek、shader reflection、texture readback/pick/save；
 T01 的最小 pipeline state 也会自动断言 pipeline/shader/topology/vertex buffer/color target；T02
 会断言 draw-time vertex descriptor、depth/raster state、16/32-bit index binding、clear/draw1/draw2/
@@ -297,7 +340,15 @@ write mask、240-byte vertex 数据、两张 texture 的 clear/draw/回退像素
 的 depth output、通用 depth/stencil state、事件图像回退及最终左绿右蓝输出；T08 会断言 4x MSAA
 descriptor、显式 resolve/store action、sample/resolve state、三 draw/回退像素与最终红绿蓝输出；T09
 会断言 12 个 RGBA8 mip/array/cube 子资源、逐子资源 readback/display、cube pick、DDS 与 Pipeline
-fragment binding；M7.1
+fragment binding；T10 会断言 buffer copy/fill、texture copy、generated mips 的 usage/event/seek、
+原始字节、最终四条色带与全 mip DDS；T11 已断言 compute dispatch 前后的全部 8×8 RGBA8
+texel、回退、标准只读/读写 binding、最终 render 图像和 DDS；T12 会断言 argument encoder 创建与
+编码 chunk、buffer/texture/sampler 身份、间接资源 usage、通用 descriptor/reflection、前进/回退、
+四象限图像、64-byte texture readback 与 192-byte DDS；最新 qrenderdoc 还验证 EID 2 的 FS
+`Buffer 20` / `Texture 17` / `Sampler 18`、三类标准资源跳转、UI/自动 DDS 一致、Pipeline HTML export
+和 `No problems detected`。T13 另断言 `Drawcall|Indirect|Instanced`、四个真实参数、精确
+16-byte 子范围、`Indirect` usage、clear/draw seek、左右输出和 raw `.bin`；最新 qrenderdoc 的 EID 2、
+Buffer 18、Pipeline/Resource 跳转与 UI/自动 `.bin` 一致。M7.1
 保持未完成，直到其余 P0/P1 场景进入同一回归入口。
 
 T02 的 Event、Texture 与 Pipeline State 已完成 qrenderdoc 实机验证：EID 2 显示左半屏 viewport/
@@ -345,10 +396,25 @@ Texture 17、2D Array Texture 18、Cube Texture 19 和 Point/Clamp Sampler 20。
 保存对话框导出全部 faces，得到 512-byte DDS，状态栏为 `No problems detected`。Qt 5 在 macOS 26
 的 combo 弹窗崩溃，两个子资源控件以点击循环和键盘选择保持可用；其余平台不改行为。
 
-同一回归入口还会在单进程中依次打开并关闭 T00-T09 各 10 次，检查资源、event、texture readback
+T10 的 Event、Resource、Buffer 与 Texture Viewer 已完成 qrenderdoc 实机验证：blit 组含
+EID 1-6，Buffer 18 在 EID 2/3 分别显示复制橙色字节和 `0x60` 填充值；Texture 20 为四象限，
+Texture 21 的 mip3 拾取为 `(134,132,88,255)`，UI 导出的 468-byte 全 mip DDS 与自动产物
+逐字节相同。EID 8 为橙/灰/红/橄榄四条色带，状态栏为 `No problems detected`。
+
+T11 的 Event、CS Pipeline、Resource Inspector 与 Texture Viewer 已完成最新 qrenderdoc 实机
+验证：EID 2 为 `dispatchThreadgroups(2x2x1, 4x4x1)`，CS 页显示 Compute Pipeline State 16、
+Function 13 `filter_main`、Texture 19 只读与 Texture 20 读写；EID 1→2 的目标纹理由全黑变为
+swizzle 图案，首像素为 `(16,32,24,255)`。从 CS 资源行可跳到 Texture Viewer，Resource Inspector
+分别显示 `CS - Texture`/`CS - Image/SSBO`；EID 5 的 draw 采样 Texture 20。UI/自动两份
+384-byte DDS 逐字节相同，CS Pipeline HTML export 包含 shader 与两个 texture，状态栏为
+`No problems detected`。
+
+同一回归入口还会在单进程中依次打开并关闭 T00-T13 各 10 次，检查资源、event、texture readback
 和 unsupported 接口。2026-09-21 完整运行的基线后 resident growth 为 491,520 字节；shader debug、
 pixel history、histogram、post-VS 和 custom/target shader build 均返回稳定的空结果或明确错误。
-完成 T09 后的最新完整运行覆盖十份 capture，resident growth 为 475,136 字节。这只关闭当前十份 fixture
+完成 T10 后的完整运行覆盖十一份 capture，resident growth 为 1,277,952 字节；T11 全量运行覆盖
+十二份 capture，resident growth 为 999,424 字节；T12 全量运行覆盖十三份 capture，增长为
+671,744 字节；T13 全量运行覆盖十四份 capture，增长为 1,294,336 字节。这只关闭当前十四份 fixture
 的资源生命周期缺口，不代表阶段 7 对全部 P0/P1 场景的稳定性验收已经完成。
 
 ## 风险与应对

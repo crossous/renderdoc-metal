@@ -379,7 +379,8 @@ void ReplayController::AddFakeMarkers()
       int outCount = 0;
 
       if(!(actions[j].flags & (ActionFlags::Copy | ActionFlags::Resolve | ActionFlags::Clear |
-                               ActionFlags::PassBoundary | ActionFlags::SetMarker)))
+                               ActionFlags::GenMips | ActionFlags::PassBoundary |
+                               ActionFlags::SetMarker)))
         copyOnly = false;
 
       for(ResourceId o : actions[j].outputs)

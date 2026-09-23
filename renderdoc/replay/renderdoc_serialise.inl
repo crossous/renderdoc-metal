@@ -1487,6 +1487,14 @@ void DoSerialise(SerialiserType &ser, MetalPipe::Rasterizer &el)
 }
 
 template <typename SerialiserType>
+void DoSerialise(SerialiserType &ser, MetalPipe::ArgumentBuffer &el)
+{
+  SERIALISE_MEMBER(buffer);
+  SERIALISE_MEMBER(textures);
+  SERIALISE_MEMBER(samplers);
+}
+
+template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, MetalPipe::DepthStencil &el)
 {
   SERIALISE_MEMBER(resourceId);
@@ -1501,13 +1509,23 @@ template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, MetalPipe::State &el)
 {
   SERIALISE_MEMBER(pipelineResourceId);
+  SERIALISE_MEMBER(computePipelineResourceId);
+  SERIALISE_MEMBER(computeShader);
+  SERIALISE_MEMBER(computeTextures);
   SERIALISE_MEMBER(vertexShader);
   SERIALISE_MEMBER(fragmentShader);
   SERIALISE_MEMBER(topology);
   SERIALISE_MEMBER(vertexBuffers);
+  SERIALISE_MEMBER(vertexStorageBuffers);
   SERIALISE_MEMBER(vertexAttributes);
+  SERIALISE_MEMBER(vertexTextures);
+  SERIALISE_MEMBER(vertexSamplers);
   SERIALISE_MEMBER(fragmentBuffers);
+  SERIALISE_MEMBER(fragmentArgumentBuffers);
+  SERIALISE_MEMBER(fragmentTextures);
+  SERIALISE_MEMBER(fragmentSamplers);
   SERIALISE_MEMBER(indexBuffer);
+  SERIALISE_MEMBER(indirectBuffer);
   SERIALISE_MEMBER(rasterizer);
   SERIALISE_MEMBER(depthStencil);
   SERIALISE_MEMBER(sampleCount);

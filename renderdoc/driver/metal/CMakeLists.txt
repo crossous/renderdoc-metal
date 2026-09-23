@@ -44,6 +44,15 @@ set(sources
     metal_blit_command_encoder.cpp
     metal_blit_command_encoder.h
     metal_blit_command_encoder_bridge.mm
+    metal_argument_encoder.cpp
+    metal_argument_encoder.h
+    metal_argument_encoder_bridge.mm
+    metal_compute_pipeline_state.cpp
+    metal_compute_pipeline_state.h
+    metal_compute_pipeline_state_bridge.mm
+    metal_compute_command_encoder.cpp
+    metal_compute_command_encoder.h
+    metal_compute_command_encoder_bridge.mm
     metal_render_command_encoder.cpp
     metal_render_command_encoder.h
     metal_render_command_encoder_bridge.mm

@@ -127,7 +127,7 @@
        destinationLevel:(NSUInteger)destinationLevel
       destinationOrigin:(MTLOrigin)destinationOrigin
 {
-  GetWrapped(self)->copyFromTexture(GetWrapped(sourceTexture), sourceSlice, sourceSlice,
+  GetWrapped(self)->copyFromTexture(GetWrapped(sourceTexture), sourceSlice, sourceLevel,
                                     (MTL::Origin &)sourceOrigin, (MTL::Size &)sourceSize,
                                     GetWrapped(destinationTexture), destinationSlice,
                                     destinationLevel, (MTL::Origin &)destinationOrigin);

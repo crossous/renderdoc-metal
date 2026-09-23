@@ -1622,7 +1622,8 @@ QString ToQStr(const ResourceUsage usage, const GraphicsAPI apitype)
       case ResourceUsage::CPUWrite: return lit("CPU Write");
     }
   }
-  else if(apitype == GraphicsAPI::OpenGL || apitype == GraphicsAPI::Vulkan)
+  else if(apitype == GraphicsAPI::OpenGL || apitype == GraphicsAPI::Vulkan ||
+          apitype == GraphicsAPI::Metal)
   {
     const bool vk = (apitype == GraphicsAPI::Vulkan);
 
@@ -1645,11 +1646,13 @@ QString ToQStr(const ResourceUsage usage, const GraphicsAPI apitype)
 
       case ResourceUsage::StreamOut: return lit("Transform Feedback");
 
-      case ResourceUsage::VS_Resource: return lit("VS - Texture");
+      case ResourceUsage::VS_Resource:
+        return apitype == GraphicsAPI::Metal ? lit("VS - Resource") : lit("VS - Texture");
       case ResourceUsage::GS_Resource: return lit("GS - Texture");
       case ResourceUsage::HS_Resource: return lit("TCS - Texture");
       case ResourceUsage::DS_Resource: return lit("TES - Texture");
-      case ResourceUsage::PS_Resource: return lit("FS - Texture");
+      case ResourceUsage::PS_Resource:
+        return apitype == GraphicsAPI::Metal ? lit("FS - Resource") : lit("FS - Texture");
       case ResourceUsage::CS_Resource: return lit("CS - Texture");
       case ResourceUsage::TS_Resource: return lit("TS - Texture");
       case ResourceUsage::MS_Resource: return lit("MS - Texture");

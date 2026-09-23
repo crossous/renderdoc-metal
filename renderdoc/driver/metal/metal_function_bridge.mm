@@ -120,8 +120,7 @@
     API_DEPRECATED("Use MTLDevice's newArgumentEncoderWithBufferBinding: instead",
                    macos(10.13, 13.0), ios(11.0, 16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newArgumentEncoderWithBufferIndex:bufferIndex];
+  return id<MTLArgumentEncoder>(GetWrapped(self)->newArgumentEncoder(bufferIndex));
 }
 
 - (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferIndex:(NSUInteger)bufferIndex

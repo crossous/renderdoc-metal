@@ -38,6 +38,8 @@ public:
   void SetCommandQueue(WrappedMTLCommandQueue *commandQueue) { m_CommandQueue = commandQueue; }
   WrappedMTLCommandQueue *GetCommandQueue() { return m_CommandQueue; }
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLBlitCommandEncoder *, blitCommandEncoder);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLComputeCommandEncoder *,
+                                          computeCommandEncoder);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLRenderCommandEncoder *,
                                           renderCommandEncoderWithDescriptor,
                                           RDMTL::RenderPassDescriptor &descriptor);

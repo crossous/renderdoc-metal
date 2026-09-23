@@ -47,14 +47,43 @@ static const int MetalBufferSizeRole = Qt::UserRole + 3;
 static const int MetalBufferSlotRole = Qt::UserRole + 4;
 static const uint32_t MetalSamplerDescriptorOffset = 0x100;
 static const uint32_t MetalBufferDescriptorOffset = 0x200;
+static const uint32_t MetalComputeReadDescriptorOffset = 0x300;
+static const uint32_t MetalComputeWriteDescriptorOffset = 0x400;
+static const uint32_t MetalArgumentTextureDescriptorOffset = 0x500;
+static const uint32_t MetalArgumentSamplerDescriptorOffset = 0x900;
+static const uint32_t MetalVertexTextureDescriptorOffset = 0xD00;
+static const uint32_t MetalVertexSamplerDescriptorOffset = 0xE00;
+static const uint32_t MetalVertexBufferDescriptorOffset = 0xF00;
 
 static uint32_t MetalDescriptorSlot(const DescriptorAccess &access)
 {
+  if(access.stage == ShaderStage::Vertex && access.type == DescriptorType::Buffer &&
+     access.byteOffset >= MetalVertexBufferDescriptorOffset)
+    return access.byteOffset - MetalVertexBufferDescriptorOffset;
+  if(access.stage == ShaderStage::Vertex && access.type == DescriptorType::Sampler &&
+     access.byteOffset >= MetalVertexSamplerDescriptorOffset)
+    return access.byteOffset - MetalVertexSamplerDescriptorOffset;
+  if(access.stage == ShaderStage::Vertex && access.type == DescriptorType::Image &&
+     access.byteOffset >= MetalVertexTextureDescriptorOffset)
+    return access.byteOffset - MetalVertexTextureDescriptorOffset;
+  if(access.type == DescriptorType::Sampler &&
+     access.byteOffset >= MetalArgumentSamplerDescriptorOffset)
+    return (access.byteOffset - MetalArgumentSamplerDescriptorOffset) % 32;
   if(access.type == DescriptorType::Sampler && access.byteOffset >= MetalSamplerDescriptorOffset)
     return access.byteOffset - MetalSamplerDescriptorOffset;
-  if(access.type == DescriptorType::ConstantBuffer &&
+  if((access.type == DescriptorType::ConstantBuffer || access.type == DescriptorType::Buffer ||
+      access.type == DescriptorType::ReadWriteBuffer) &&
      access.byteOffset >= MetalBufferDescriptorOffset)
     return access.byteOffset - MetalBufferDescriptorOffset;
+  if(access.stage == ShaderStage::Compute && access.type == DescriptorType::Image &&
+     access.byteOffset >= MetalComputeReadDescriptorOffset)
+    return access.byteOffset - MetalComputeReadDescriptorOffset;
+  if(access.stage == ShaderStage::Compute && access.type == DescriptorType::ReadWriteImage &&
+     access.byteOffset >= MetalComputeWriteDescriptorOffset)
+    return access.byteOffset - MetalComputeWriteDescriptorOffset;
+  if(access.stage == ShaderStage::Fragment && access.type == DescriptorType::Image &&
+     access.byteOffset >= MetalArgumentTextureDescriptorOffset)
+    return (access.byteOffset - MetalArgumentTextureDescriptorOffset) % 32;
   return access.byteOffset;
 }
 
@@ -113,8 +142,8 @@ MetalPipelineStateViewer::MetalPipelineStateViewer(ICaptureContext &ctx, QWidget
   toolbarLayout->addWidget(m_Export);
   toolbarLayout->addStretch();
 
-  QLabel *pipelineLabel = new QLabel(tr("Graphics Pipeline:"), toolbar);
-  toolbarLayout->addWidget(pipelineLabel);
+  m_PipelineLabel = new QLabel(tr("Graphics Pipeline:"), toolbar);
+  toolbarLayout->addWidget(m_PipelineLabel);
   m_Pipeline = new QLabel(this);
   m_Pipeline->setObjectName(lit("metalPipeline"));
   m_Pipeline->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -125,9 +154,10 @@ MetalPipelineStateViewer::MetalPipelineStateViewer(ICaptureContext &ctx, QWidget
   QFont flowFont = m_PipeFlow->font();
   flowFont.setPointSize(12);
   m_PipeFlow->setFont(flowFont);
-  m_PipeFlow->setStages({lit("IA"), lit("VS"), lit("RS"), lit("FS"), lit("OM")},
+  m_PipeFlow->setStages({lit("IA"), lit("VS"), lit("RS"), lit("FS"), lit("OM"), lit("CS")},
                         {tr("Input Assembly"), tr("Vertex Shader"), tr("Rasterizer"),
-                         tr("Fragment Shader"), tr("Output Merger")});
+                         tr("Fragment Shader"), tr("Output Merger"), tr("Compute Shader")});
+  m_PipeFlow->setIsolatedStage(5);
   layout->addWidget(m_PipeFlow);
 
   m_Stages = new QTabWidget(this);
@@ -148,10 +178,18 @@ MetalPipelineStateViewer::MetalPipelineStateViewer(ICaptureContext &ctx, QWidget
                               tr("Stride"), tr("Step")});
   m_IndexBuffer =
       MakeTree(ia, tr("Index Buffer"), {tr("Buffer"), tr("Offset"), tr("Size"), tr("Type")});
+  m_IndirectBuffer = MakeTree(
+      ia, tr("Indirect Buffer"), {tr("Buffer"), tr("Offset"), tr("Size"), tr("Arguments")});
   ia->addStretch();
 
   QVBoxLayout *vs = MakeStagePage(tr("Vertex Shader"));
   m_VertexShader = MakeTree(vs, tr("Vertex Shader"), {tr("Function"), tr("Entry Point")});
+  m_VertexStorageBuffers = MakeTree(vs, tr("VS Storage Buffers"),
+                                    {tr("Slot"), tr("Buffer"), tr("Offset"), tr("Size")});
+  m_VertexTextures = MakeTree(
+      vs, tr("Read-Only Resources"), {tr("Slot"), tr("Texture"), tr("Type"), tr("Format")});
+  m_VertexSamplers = MakeTree(
+      vs, tr("Samplers"), {tr("Slot"), tr("Sampler"), tr("Filter"), tr("Address")});
   vs->addStretch();
 
   QVBoxLayout *rs = MakeStagePage(tr("Rasterizer"));
@@ -178,6 +216,8 @@ MetalPipelineStateViewer::MetalPipelineStateViewer(ICaptureContext &ctx, QWidget
   m_FragmentBuffers = MakeTree(fs, tr("Constant Buffers"),
                                {tr("Slot"), tr("Buffer"), tr("Offset"), tr("Size"),
                                 tr("Bytes Needed")});
+  m_FragmentStorageBuffers = MakeTree(fs, tr("Storage Buffers"),
+                                      {tr("Slot"), tr("Buffer"), tr("Offset"), tr("Size")});
   m_FragmentTextures = MakeTree(
       fs, tr("Read-Only Resources"), {tr("Slot"), tr("Texture"), tr("Type"), tr("Format")});
   m_FragmentSamplers = MakeTree(
@@ -209,6 +249,14 @@ MetalPipelineStateViewer::MetalPipelineStateViewer(ICaptureContext &ctx, QWidget
       {tr("Face"), tr("Reference"), tr("Compare Mask"), tr("Write Mask"), tr("Function"),
        tr("Pass Op"), tr("Fail Op"), tr("Depth Fail Op")});
   om->addStretch();
+
+  QVBoxLayout *cs = MakeStagePage(tr("Compute Shader"));
+  m_ComputeShader = MakeTree(cs, tr("Compute Shader"), {tr("Function"), tr("Entry Point")});
+  m_ComputeReadTextures = MakeTree(cs, tr("Read-Only Textures"),
+                                   {tr("Slot"), tr("Texture"), tr("Type"), tr("Format")});
+  m_ComputeWriteTextures = MakeTree(cs, tr("Read-Write Textures"),
+                                    {tr("Slot"), tr("Texture"), tr("Type"), tr("Format")});
+  cs->addStretch();
 
   m_Stages->setCurrentIndex(0);
   m_Stages->tabBar()->setVisible(false);
@@ -273,17 +321,23 @@ RDTreeWidget *MetalPipelineStateViewer::MakeTree(QVBoxLayout *parentLayout, cons
                        return;
                      }
 
-                     if(tree == m_VertexShader || tree == m_FragmentShader)
+                     if(tree == m_VertexShader || tree == m_FragmentShader ||
+                        tree == m_ComputeShader)
                      {
-                       const ShaderStage stage = tree == m_VertexShader ? ShaderStage::Vertex
-                                                                        : ShaderStage::Fragment;
+                       const ShaderStage stage = tree == m_VertexShader
+                                                     ? ShaderStage::Vertex
+                                                     : tree == m_ComputeShader
+                                                           ? ShaderStage::Compute
+                                                           : ShaderStage::Fragment;
                        const PipeState &pipe = m_Ctx.CurPipelineState();
                        const ShaderReflection *reflection = pipe.GetShaderReflection(stage);
                        if(reflection == NULL)
                          return;
 
                        IShaderViewer *viewer =
-                           m_Ctx.ViewShader(reflection, pipe.GetGraphicsPipelineObject());
+                           m_Ctx.ViewShader(reflection, stage == ShaderStage::Compute
+                                                            ? pipe.GetComputePipelineObject()
+                                                            : pipe.GetGraphicsPipelineObject());
                        m_Ctx.AddDockWindow(viewer->Widget(), DockReference::AddTo, this);
                        return;
                      }
@@ -293,7 +347,9 @@ RDTreeWidget *MetalPipelineStateViewer::MakeTree(QVBoxLayout *parentLayout, cons
                        return;
 
                      if(tree == m_VertexBuffers || tree == m_IndexBuffer ||
-                        tree == m_FragmentBuffers)
+                        tree == m_IndirectBuffer ||
+                        tree == m_VertexStorageBuffers || tree == m_FragmentBuffers ||
+                        tree == m_FragmentStorageBuffers)
                      {
                        const uint64_t offset = item->data(0, MetalBufferOffsetRole).toULongLong();
                        const uint64_t size = item->data(0, MetalBufferSizeRole).toULongLong();
@@ -309,6 +365,11 @@ RDTreeWidget *MetalPipelineStateViewer::MakeTree(QVBoxLayout *parentLayout, cons
                        {
                          const uint32_t stride = item->data(0, MetalBufferSlotRole).toUInt();
                          format = stride == 2 ? lit("ushort index;") : lit("uint index;");
+                       }
+                       else if(tree == m_IndirectBuffer)
+                       {
+                         format = lit("uint vertexCount; uint instanceCount; uint vertexStart; "
+                                      "uint baseInstance;");
                        }
 
                        IBufferViewer *viewer = m_Ctx.ViewBuffer(offset, size, id, format);
@@ -414,8 +475,14 @@ void MetalPipelineStateViewer::ExportHTML()
         ExportHTMLTree(xml, tr("Vertex Attributes"), m_VertexAttributes);
         ExportHTMLTree(xml, tr("Vertex Buffers"), m_VertexBuffers);
         ExportHTMLTree(xml, tr("Index Buffer"), m_IndexBuffer);
+        ExportHTMLTree(xml, tr("Indirect Buffer"), m_IndirectBuffer);
         break;
-      case 1: ExportHTMLTree(xml, tr("Vertex Shader"), m_VertexShader); break;
+      case 1:
+        ExportHTMLTree(xml, tr("Vertex Shader"), m_VertexShader);
+        ExportHTMLTree(xml, tr("VS Storage Buffers"), m_VertexStorageBuffers);
+        ExportHTMLTree(xml, tr("Read-Only Resources"), m_VertexTextures);
+        ExportHTMLTree(xml, tr("Samplers"), m_VertexSamplers);
+        break;
       case 2:
         common->exportHTMLTable(
             xml, {tr("Viewport"), tr("Scissor"), tr("Cull Mode"), tr("Front Face")},
@@ -424,6 +491,7 @@ void MetalPipelineStateViewer::ExportHTML()
       case 3:
         ExportHTMLTree(xml, tr("Fragment Shader"), m_FragmentShader);
         ExportHTMLTree(xml, tr("Constant Buffers"), m_FragmentBuffers);
+        ExportHTMLTree(xml, tr("Storage Buffers"), m_FragmentStorageBuffers);
         ExportHTMLTree(xml, tr("Read-Only Resources"), m_FragmentTextures);
         ExportHTMLTree(xml, tr("Samplers"), m_FragmentSamplers);
         break;
@@ -435,6 +503,11 @@ void MetalPipelineStateViewer::ExportHTML()
         ExportHTMLTree(xml, tr("Depth Target"), m_DepthTarget);
         ExportHTMLTree(xml, tr("Depth State"), m_DepthState);
         ExportHTMLTree(xml, tr("Stencil State"), m_StencilState);
+        break;
+      case 5:
+        ExportHTMLTree(xml, tr("Compute Shader"), m_ComputeShader);
+        ExportHTMLTree(xml, tr("Read-Only Textures"), m_ComputeReadTextures);
+        ExportHTMLTree(xml, tr("Read-Write Textures"), m_ComputeWriteTextures);
         break;
       default: break;
     }
@@ -471,6 +544,7 @@ void MetalPipelineStateViewer::SelectPipelineStage(PipelineStage stage)
     case PipelineStage::PixelShader: index = 3; break;
     case PipelineStage::ColorDepthOutput:
     case PipelineStage::SampleMask: index = 4; break;
+    case PipelineStage::ComputeShader: index = 5; break;
     default: break;
   }
 
@@ -481,19 +555,28 @@ void MetalPipelineStateViewer::SelectPipelineStage(PipelineStage stage)
 void MetalPipelineStateViewer::ClearState()
 {
   m_Pipeline->setText(tr("No render pipeline bound"));
+  m_PipelineLabel->setText(tr("Graphics Pipeline:"));
   m_Topology->setText(ToQStr(Topology::Unknown));
   m_Viewport->setText(tr("Disabled"));
   m_Scissor->setText(tr("Disabled"));
   m_CullMode->setText(ToQStr(CullMode::NoCull));
   m_FrontFace->setText(tr("Clockwise"));
   m_VertexShader->clear();
+  m_VertexStorageBuffers->clear();
+  m_VertexTextures->clear();
+  m_VertexSamplers->clear();
   m_FragmentShader->clear();
   m_FragmentBuffers->clear();
+  m_FragmentStorageBuffers->clear();
   m_FragmentTextures->clear();
   m_FragmentSamplers->clear();
+  m_ComputeShader->clear();
+  m_ComputeReadTextures->clear();
+  m_ComputeWriteTextures->clear();
   m_VertexAttributes->clear();
   m_VertexBuffers->clear();
   m_IndexBuffer->clear();
+  m_IndirectBuffer->clear();
   m_DepthState->clear();
   m_StencilState->clear();
   m_MultisampleState->clear();
@@ -501,7 +584,7 @@ void MetalPipelineStateViewer::ClearState()
   m_ResolveTargets->clear();
   m_ColorBlends->clear();
   m_DepthTarget->clear();
-  m_PipeFlow->setStagesEnabled({true, false, true, false, true});
+  m_PipeFlow->setStagesEnabled({true, false, true, false, true, false});
 }
 
 void MetalPipelineStateViewer::SetState()
@@ -521,12 +604,64 @@ void MetalPipelineStateViewer::SetState()
   if(state == NULL)
     return;
 
+  const ResourceId computePipeline = pipe.GetComputePipelineObject();
+  if(computePipeline != ResourceId())
+  {
+    m_PipelineLabel->setText(tr("Compute Pipeline:"));
+    m_Pipeline->setText(m_Ctx.GetResourceName(computePipeline));
+    const ResourceId computeShader = pipe.GetShader(ShaderStage::Compute);
+    if(computeShader != ResourceId())
+      AddResourceRow(m_ComputeShader,
+                     {m_Ctx.GetResourceName(computeShader),
+                      pipe.GetShaderEntryPoint(ShaderStage::Compute)},
+                     computeShader);
+    const ShaderReflection *reflection = pipe.GetShaderReflection(ShaderStage::Compute);
+    const bool hasBindingReflection = reflection != NULL &&
+        (!reflection->readOnlyResources.empty() || !reflection->readWriteResources.empty());
+    m_ShowUnused->setEnabled(hasBindingReflection);
+    m_ShowUnused->setToolTip(hasBindingReflection
+                                ? tr("Show resources which are bound but statically unused by the shader.")
+                                : tr("Metal compute binding reflection is not available for this pipeline."));
+    auto addTexture = [this](RDTreeWidget *tree, const UsedDescriptor &binding) {
+      const Descriptor &descriptor = binding.descriptor;
+      if(descriptor.resource != ResourceId())
+        AddResourceRow(tree,
+                       {Formatter::Format(MetalDescriptorSlot(binding.access)),
+                        m_Ctx.GetResourceName(descriptor.resource),
+                        ToQStr(descriptor.textureType), QString(descriptor.format.Name())},
+                       descriptor.resource);
+    };
+    for(const UsedDescriptor &binding :
+        pipe.GetReadOnlyResources(ShaderStage::Compute, !m_ShowUnused->isChecked()))
+      addTexture(m_ComputeReadTextures, binding);
+    for(const UsedDescriptor &binding :
+        pipe.GetReadWriteResources(ShaderStage::Compute, !m_ShowUnused->isChecked()))
+      addTexture(m_ComputeWriteTextures, binding);
+    if(m_ShowEmpty->isChecked())
+    {
+      for(size_t slot = 0; slot < 2; slot++)
+      {
+        if(slot >= state->computeTextures.size() || state->computeTextures[slot] == ResourceId())
+          AddEmptyRow(slot == 0 ? m_ComputeReadTextures : m_ComputeWriteTextures,
+                      {Formatter::Format((uint32_t)slot), tr("Empty"), QString(), QString()});
+      }
+    }
+    m_PipeFlow->setStagesEnabled({false, false, false, false, false, true});
+    m_PipeFlow->setSelectedStage(5);
+    return;
+  }
+  if(m_Stages->currentIndex() == 5)
+    m_PipeFlow->setSelectedStage(3);
+
+  const ShaderReflection *vertexReflection = pipe.GetShaderReflection(ShaderStage::Vertex);
   const ShaderReflection *fragmentReflection = pipe.GetShaderReflection(ShaderStage::Fragment);
   const bool hasBindingReflection =
-      fragmentReflection != NULL && (!fragmentReflection->constantBlocks.empty() ||
-                                     !fragmentReflection->samplers.empty() ||
-                                     !fragmentReflection->readOnlyResources.empty() ||
-                                     !fragmentReflection->readWriteResources.empty());
+      (vertexReflection != NULL && (!vertexReflection->samplers.empty() ||
+                                    !vertexReflection->readOnlyResources.empty())) ||
+      (fragmentReflection != NULL && (!fragmentReflection->constantBlocks.empty() ||
+                                      !fragmentReflection->samplers.empty() ||
+                                      !fragmentReflection->readOnlyResources.empty() ||
+                                      !fragmentReflection->readWriteResources.empty()));
   m_ShowUnused->setEnabled(hasBindingReflection);
   m_ShowUnused->setToolTip(
       hasBindingReflection
@@ -580,7 +715,68 @@ void MetalPipelineStateViewer::SetState()
     AddEmptyRow(m_FragmentShader, {tr("Unbound"), QString()});
   }
   m_PipeFlow->setStagesEnabled(
-      {true, vertexShader != ResourceId(), true, fragmentShader != ResourceId(), true});
+      {true, vertexShader != ResourceId(), true, fragmentShader != ResourceId(), true, false});
+
+  for(const UsedDescriptor &binding :
+      pipe.GetReadOnlyResources(ShaderStage::Vertex, !m_ShowUnused->isChecked()))
+  {
+    const Descriptor &descriptor = binding.descriptor;
+    if(descriptor.resource == ResourceId())
+      continue;
+    if(binding.access.type == DescriptorType::Buffer)
+    {
+      RDTreeWidgetItem *item = AddResourceRow(
+          m_VertexStorageBuffers,
+          {Formatter::Format(MetalDescriptorSlot(binding.access)),
+           m_Ctx.GetResourceName(descriptor.resource),
+           Formatter::HumanFormat(descriptor.byteOffset, Formatter::OffsetSize),
+           Formatter::HumanFormat(descriptor.byteSize, Formatter::OffsetSize)},
+          descriptor.resource);
+      item->setData(0, MetalBufferOffsetRole, qulonglong(descriptor.byteOffset));
+      item->setData(0, MetalBufferSizeRole, qulonglong(descriptor.byteSize));
+      continue;
+    }
+    AddResourceRow(m_VertexTextures,
+                   {Formatter::Format(MetalDescriptorSlot(binding.access)),
+                    m_Ctx.GetResourceName(descriptor.resource), ToQStr(descriptor.textureType),
+                    QString(descriptor.format.Name())},
+                   descriptor.resource);
+  }
+  for(const UsedDescriptor &binding :
+      pipe.GetSamplers(ShaderStage::Vertex, !m_ShowUnused->isChecked()))
+  {
+    const SamplerDescriptor &sampler = binding.sampler;
+    if(sampler.object == ResourceId())
+      continue;
+    const QString filter = tr("%1 / %2 / %3")
+                               .arg(ToQStr(sampler.filter.minify))
+                               .arg(ToQStr(sampler.filter.magnify))
+                               .arg(ToQStr(sampler.filter.mip));
+    const QString address = tr("%1 / %2 / %3")
+                                .arg(ToQStr(sampler.addressU))
+                                .arg(ToQStr(sampler.addressV))
+                                .arg(ToQStr(sampler.addressW));
+    AddResourceRow(m_VertexSamplers,
+                   {Formatter::Format(MetalDescriptorSlot(binding.access)),
+                    m_Ctx.GetResourceName(sampler.object), filter, address},
+                   sampler.object);
+  }
+  if(m_ShowEmpty->isChecked())
+  {
+    for(size_t slot = 0; slot < qMax<size_t>(1, state->vertexStorageBuffers.size()); slot++)
+      if(slot >= state->vertexStorageBuffers.size() ||
+         state->vertexStorageBuffers[slot].resourceId == ResourceId())
+        AddEmptyRow(m_VertexStorageBuffers,
+                    {Formatter::Format((uint32_t)slot), tr("Empty"), QString(), QString()});
+    for(size_t slot = 0; slot < qMax<size_t>(1, state->vertexTextures.size()); slot++)
+      if(slot >= state->vertexTextures.size() || state->vertexTextures[slot] == ResourceId())
+        AddEmptyRow(m_VertexTextures,
+                    {Formatter::Format((uint32_t)slot), tr("Empty"), QString(), QString()});
+    for(size_t slot = 0; slot < qMax<size_t>(1, state->vertexSamplers.size()); slot++)
+      if(slot >= state->vertexSamplers.size() || state->vertexSamplers[slot] == ResourceId())
+        AddEmptyRow(m_VertexSamplers,
+                    {Formatter::Format((uint32_t)slot), tr("Empty"), QString(), QString()});
+  }
 
   for(const UsedDescriptor &binding :
       pipe.GetConstantBlocks(ShaderStage::Fragment, !m_ShowUnused->isChecked()))
@@ -624,6 +820,19 @@ void MetalPipelineStateViewer::SetState()
     const Descriptor &descriptor = binding.descriptor;
     if(descriptor.resource == ResourceId())
       continue;
+    if(binding.access.type == DescriptorType::Buffer)
+    {
+      RDTreeWidgetItem *item = AddResourceRow(
+          m_FragmentStorageBuffers,
+          {Formatter::Format(MetalDescriptorSlot(binding.access)),
+           m_Ctx.GetResourceName(descriptor.resource),
+           Formatter::HumanFormat(descriptor.byteOffset, Formatter::OffsetSize),
+           Formatter::HumanFormat(descriptor.byteSize, Formatter::OffsetSize)},
+          descriptor.resource);
+      item->setData(0, MetalBufferOffsetRole, qulonglong(descriptor.byteOffset));
+      item->setData(0, MetalBufferSizeRole, qulonglong(descriptor.byteSize));
+      continue;
+    }
     AddResourceRow(m_FragmentTextures,
                    {Formatter::Format(MetalDescriptorSlot(binding.access)),
                     m_Ctx.GetResourceName(descriptor.resource), ToQStr(descriptor.textureType),
@@ -729,6 +938,26 @@ void MetalPipelineStateViewer::SetState()
   else if(m_ShowEmpty->isChecked())
   {
     AddEmptyRow(m_IndexBuffer, {tr("Empty"), QString(), QString(), QString()});
+  }
+
+  const MetalPipe::BufferBinding &indirectBuffer = state->indirectBuffer;
+  if(indirectBuffer.resourceId != ResourceId())
+  {
+    RDTreeWidgetItem *item = AddResourceRow(
+        m_IndirectBuffer,
+        {m_Ctx.GetResourceName(indirectBuffer.resourceId),
+         Formatter::HumanFormat(indirectBuffer.byteOffset, Formatter::OffsetSize),
+         Formatter::HumanFormat(indirectBuffer.byteSize, Formatter::OffsetSize),
+         tr("Draw Primitives")},
+        indirectBuffer.resourceId);
+    item->setData(0, MetalBufferOffsetRole,
+                  QVariant::fromValue((qulonglong)indirectBuffer.byteOffset));
+    item->setData(0, MetalBufferSizeRole,
+                  QVariant::fromValue((qulonglong)indirectBuffer.byteSize));
+  }
+  else if(m_ShowEmpty->isChecked())
+  {
+    AddEmptyRow(m_IndirectBuffer, {tr("Empty"), QString(), QString(), QString()});
   }
 
   const DepthTestState depth = pipe.GetDepthTestState();

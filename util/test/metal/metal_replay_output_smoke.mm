@@ -65,6 +65,16 @@ static void FindDrawActions(const rdcarray<ActionDescription> &actions,
   }
 }
 
+static void FindActions(const rdcarray<ActionDescription> &actions,
+                        rdcarray<const ActionDescription *> &result)
+{
+  for(const ActionDescription &action : actions)
+  {
+    result.push_back(&action);
+    FindActions(action.children, result);
+  }
+}
+
 static bool WriteOutput(IReplayController *renderer, IReplayOutput *output, uint32_t eventId,
                         const char *path)
 {
@@ -267,6 +277,8 @@ static bool ValidateTexturedFixture(IReplayController *renderer)
     return fail("pipeline topology is not TriangleStrip");
 
   const MetalPipe::State *metal = pipe.GetMetalPipelineState();
+  if(metal != NULL && !metal->fragmentArgumentBuffers.empty())
+    return true;
   if(metal == NULL || metal->fragmentTextures.size() != 2 ||
      metal->fragmentTextures[0] != sampledTexture.resourceId ||
      metal->fragmentTextures[1] != sampledTexture.resourceId ||
@@ -563,6 +575,442 @@ static bool PixelMatchesRGBA(IReplayController *renderer, ResourceId texture, ui
       renderer->PickPixel(texture, x, y, {0, 0, 0}, CompType::Typeless);
   return Near(pixel.floatValue[0], r) && Near(pixel.floatValue[1], g) &&
          Near(pixel.floatValue[2], b) && Near(pixel.floatValue[3], a);
+}
+
+static bool HasUsage(IReplayController *renderer, ResourceId resource, ResourceUsage usage)
+{
+  for(const EventUsage &event : renderer->GetUsage(resource))
+    if(event.usage == usage)
+      return true;
+  return false;
+}
+
+static bool ValidateComputeFixture(IReplayController *renderer, ResourceId colorTarget,
+                                   const char *savePath)
+{
+  ResourceId source;
+  ResourceId destination;
+  for(const TextureDescription &texture : renderer->GetTextures())
+  {
+    if(texture.width != 8 || texture.height != 8 || texture.mips != 1 ||
+       texture.format.compType != CompType::UNorm || texture.format.compCount != 4 ||
+       texture.format.compByteWidth != 1)
+      continue;
+    if(HasUsage(renderer, texture.resourceId, ResourceUsage::CS_Resource))
+      source = texture.resourceId;
+    if(HasUsage(renderer, texture.resourceId, ResourceUsage::CS_RWResource))
+      destination = texture.resourceId;
+  }
+  if(source == ResourceId() && destination == ResourceId())
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal compute fixture validation failed: %s\n", message);
+    return false;
+  };
+  if(source == ResourceId() || destination == ResourceId())
+    return fail("compute source/destination usage is missing");
+
+  rdcarray<const ActionDescription *> actions;
+  FindActions(renderer->GetRootActions(), actions);
+  const ActionDescription *begin = NULL;
+  const ActionDescription *dispatch = NULL;
+  const ActionDescription *end = NULL;
+  const ActionDescription *draw = NULL;
+  for(const ActionDescription *action : actions)
+  {
+    if(action->customName == "Begin Metal Compute Pass")
+      begin = action;
+    if(action->flags & ActionFlags::Dispatch)
+      dispatch = action;
+    if(action->customName == "End Metal Compute Pass")
+      end = action;
+    if(action->flags & ActionFlags::Drawcall)
+      draw = action;
+  }
+  if(!begin || !dispatch || !end || !draw || begin->eventId >= dispatch->eventId ||
+     dispatch->eventId >= end->eventId || end->eventId >= draw->eventId ||
+     dispatch->dispatchDimension[0] != 2 || dispatch->dispatchDimension[1] != 2 ||
+     dispatch->dispatchDimension[2] != 1)
+    return fail("compute event order or dispatch dimensions are wrong");
+
+  renderer->SetFrameEvent(begin->eventId, true);
+  bytebuf pixels = renderer->GetTextureData(destination, {0, 0, 0});
+  if(pixels.size() != 256)
+    return fail("pre-dispatch destination readback is unavailable");
+  for(byte value : pixels)
+    if(value != 0)
+    {
+      fprintf(stderr, "pre-dispatch bytes: %u %u %u %u\n", pixels[0], pixels[1], pixels[2], pixels[3]);
+      return fail("pre-dispatch destination is not zero");
+    }
+
+  renderer->SetFrameEvent(dispatch->eventId, true);
+  const PipeState &computeState = renderer->GetPipelineState();
+  if(computeState.GetComputePipelineObject() == ResourceId() ||
+     computeState.GetShader(ShaderStage::Compute) == ResourceId() ||
+     computeState.GetShaderEntryPoint(ShaderStage::Compute) != "filter_main")
+    return fail("compute pipeline or shader state is missing");
+  const MetalPipe::State *metal = computeState.GetMetalPipelineState();
+  if(!metal || metal->computeTextures.size() != 2 || metal->computeTextures[0] != source ||
+     metal->computeTextures[1] != destination)
+    return fail("compute texture bindings are wrong");
+  const rdcarray<UsedDescriptor> readOnly =
+      computeState.GetReadOnlyResources(ShaderStage::Compute, true);
+  const rdcarray<UsedDescriptor> readWrite =
+      computeState.GetReadWriteResources(ShaderStage::Compute, true);
+  if(readOnly.size() != 1 || readWrite.size() != 1 ||
+     readOnly[0].descriptor.resource != source ||
+     readWrite[0].descriptor.resource != destination ||
+     readOnly[0].access.stage != ShaderStage::Compute ||
+     readWrite[0].access.stage != ShaderStage::Compute)
+    return fail("compute descriptors do not expose the read/write textures");
+
+  pixels = renderer->GetTextureData(destination, {0, 0, 0});
+  if(pixels.size() != 256)
+    return fail("post-dispatch destination readback is unavailable");
+  for(uint32_t y = 0; y < 8; y++)
+    for(uint32_t x = 0; x < 8; x++)
+    {
+      const byte expected[4] = {byte(16 + 8 * (x + y)), byte(32 + 24 * x),
+                                byte(24 + 24 * y), 255};
+      if(memcmp(pixels.data() + (y * 8 + x) * 4, expected, 4) != 0)
+        return fail("post-dispatch texels do not match the CPU swizzle reference");
+    }
+
+  renderer->SetFrameEvent(begin->eventId, true);
+  pixels = renderer->GetTextureData(destination, {0, 0, 0});
+  for(byte value : pixels)
+    if(value != 0)
+      return fail("rewinding before dispatch did not restore zero texels");
+
+  renderer->SetFrameEvent(draw->eventId, true);
+  metal = renderer->GetPipelineState().GetMetalPipelineState();
+  if(!metal || metal->fragmentTextures.size() != 1 || metal->fragmentTextures[0] != destination)
+    return fail("final render draw is not sampling the compute destination");
+  if(!PixelMatches(renderer, colorTarget, draw->eventId, 25, 20, 16.0f / 255.0f,
+                   32.0f / 255.0f, 24.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 375, 280, 128.0f / 255.0f,
+                   200.0f / 255.0f, 192.0f / 255.0f))
+    return fail("final render output did not sample the boundary texels");
+
+  if(savePath)
+  {
+    TextureSave save;
+    save.resourceId = destination;
+    ResultDetails result = renderer->SaveTexture(save, savePath);
+    if(!result.OK())
+      return fail("compute destination DDS save failed");
+    std::ifstream file(savePath, std::ios::binary | std::ios::ate);
+    if(!file || file.tellg() != std::streampos(128 + 256))
+      return fail("compute destination DDS byte size is wrong");
+  }
+  return true;
+}
+
+static bool ValidateBlitFixture(IReplayController *renderer, ResourceId colorTarget,
+                                const char *savePath)
+{
+  ResourceId sourceBuffer;
+  ResourceId destinationBuffer;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+  {
+    if(buffer.length != 64)
+      continue;
+    if(HasUsage(renderer, buffer.resourceId, ResourceUsage::CopySrc))
+      sourceBuffer = buffer.resourceId;
+    if(HasUsage(renderer, buffer.resourceId, ResourceUsage::CopyDst) &&
+       HasUsage(renderer, buffer.resourceId, ResourceUsage::Clear))
+      destinationBuffer = buffer.resourceId;
+  }
+
+  TextureDescription sourceTexture;
+  TextureDescription copiedTexture;
+  TextureDescription mipTexture;
+  for(const TextureDescription &texture : renderer->GetTextures())
+  {
+    if(texture.width != 8 || texture.height != 8 || texture.depth != 1 ||
+       texture.type != TextureType::Texture2D || texture.arraysize != 1 ||
+       texture.format.compType != CompType::UNorm || texture.format.compByteWidth != 1 ||
+       texture.format.compCount != 4)
+      continue;
+
+    if(HasUsage(renderer, texture.resourceId, ResourceUsage::CopySrc))
+      sourceTexture = texture;
+    if(HasUsage(renderer, texture.resourceId, ResourceUsage::CopyDst))
+      copiedTexture = texture;
+    if(HasUsage(renderer, texture.resourceId, ResourceUsage::GenMips))
+      mipTexture = texture;
+  }
+
+  // Other fixtures do not contain T10's blit usage set and 8x8 mip chain.
+  if(sourceBuffer == ResourceId() && destinationBuffer == ResourceId() &&
+     sourceTexture.resourceId == ResourceId() && copiedTexture.resourceId == ResourceId() &&
+     mipTexture.resourceId == ResourceId())
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal blit fixture validation failed: %s\n", message);
+    return false;
+  };
+
+  if(sourceBuffer == ResourceId() || destinationBuffer == ResourceId() ||
+     sourceTexture.resourceId == ResourceId() || copiedTexture.resourceId == ResourceId() ||
+     mipTexture.resourceId == ResourceId() || sourceTexture.mips != 1 || copiedTexture.mips != 1 ||
+     mipTexture.mips != 4 || sourceTexture.byteSize != 256 || copiedTexture.byteSize != 256 ||
+     mipTexture.byteSize != 340)
+    return fail("blit source/destination buffer or texture descriptions do not match");
+
+  const rdcarray<EventUsage> sourceBufferUses = renderer->GetUsage(sourceBuffer);
+  const rdcarray<EventUsage> destinationBufferUses = renderer->GetUsage(destinationBuffer);
+  if(sourceBufferUses.size() != 1 || sourceBufferUses[0].usage != ResourceUsage::CopySrc ||
+     destinationBufferUses.size() != 3 ||
+     destinationBufferUses[0].usage != ResourceUsage::CopyDst ||
+     destinationBufferUses[1].usage != ResourceUsage::Clear ||
+     destinationBufferUses[2].usage != ResourceUsage::PS_Resource ||
+     !HasUsage(renderer, sourceTexture.resourceId, ResourceUsage::CopySrc) ||
+     !HasUsage(renderer, copiedTexture.resourceId, ResourceUsage::CopyDst) ||
+     !HasUsage(renderer, mipTexture.resourceId, ResourceUsage::GenMips))
+    return fail("resource usage does not expose CopySrc/CopyDst/Clear/GenMips");
+
+  const ActionDescription *bufferCopy = NULL;
+  const ActionDescription *bufferFill = NULL;
+  const ActionDescription *textureCopy = NULL;
+  const ActionDescription *generateMips = NULL;
+  bool beginBlit = false;
+  bool endBlit = false;
+  rdcarray<const ActionDescription *> actions;
+  FindActions(renderer->GetRootActions(), actions);
+  for(const ActionDescription *action : actions)
+  {
+    beginBlit |= action->customName == "Begin Metal Blit Pass" &&
+                 (action->flags & ActionFlags::BeginPass);
+    endBlit |= action->customName == "End Metal Blit Pass" &&
+               (action->flags & ActionFlags::EndPass);
+    if((action->flags & ActionFlags::Copy) && action->copySource == sourceBuffer &&
+       action->copyDestination == destinationBuffer)
+      bufferCopy = action;
+    if((action->flags & ActionFlags::Clear) && action->copyDestination == destinationBuffer &&
+       action->customName.contains("fillBuffer"))
+      bufferFill = action;
+    if((action->flags & ActionFlags::Copy) && action->copySource == sourceTexture.resourceId &&
+       action->copyDestination == copiedTexture.resourceId)
+      textureCopy = action;
+    if((action->flags & ActionFlags::GenMips) && action->copySource == mipTexture.resourceId &&
+       action->copyDestination == mipTexture.resourceId)
+      generateMips = action;
+  }
+
+  if(!beginBlit || !endBlit || bufferCopy == NULL || bufferFill == NULL || textureCopy == NULL ||
+     generateMips == NULL || bufferCopy->eventId >= bufferFill->eventId ||
+     bufferFill->eventId >= textureCopy->eventId || textureCopy->eventId >= generateMips->eventId ||
+     textureCopy->copySourceSubresource != Subresource(0, 0) ||
+     textureCopy->copyDestinationSubresource != Subresource(0, 0))
+    return fail("blit event ordering, flags, or resource links do not match");
+
+  static const byte copiedColour[4] = {255, 128, 32, 255};
+  renderer->SetFrameEvent(bufferCopy->eventId, true);
+  bytebuf destination = renderer->GetBufferData(destinationBuffer, 0, 0);
+  if(destination.size() != 64)
+    return fail("destination buffer readback size does not match");
+  for(size_t i = 0; i < 16; i += 4)
+    if(memcmp(destination.data() + i, copiedColour, 4) != 0)
+      return fail("buffer copy event did not write the fixed orange bytes");
+  for(size_t i = 16; i < 32; i++)
+    if(destination[i] != 0)
+      return fail("buffer copy event did not overwrite the future fill range with zero");
+
+  renderer->SetFrameEvent(bufferFill->eventId, true);
+  destination = renderer->GetBufferData(destinationBuffer, 0, 0);
+  for(size_t i = 16; i < 32; i++)
+    if(destination[i] != 0x60)
+      return fail("buffer fill event did not write 0x60");
+
+  renderer->SetFrameEvent(bufferCopy->eventId, true);
+  destination = renderer->GetBufferData(destinationBuffer, 0, 0);
+  for(size_t i = 16; i < 32; i++)
+    if(destination[i] != 0)
+      return fail("rewinding to buffer copy did not restore its event result");
+
+  static const byte colours[4][4] = {
+      {255, 32, 16, 255}, {16, 224, 48, 255}, {24, 64, 255, 255}, {240, 208, 32, 255},
+  };
+  renderer->SetFrameEvent(textureCopy->eventId, true);
+  const bytebuf copied = renderer->GetTextureData(copiedTexture.resourceId, {0, 0, 0});
+  if(copied.size() != 256)
+    return fail("copied texture readback size does not match");
+  for(uint32_t y = 0; y < 8; y++)
+    for(uint32_t x = 0; x < 8; x++)
+    {
+      const uint32_t quadrant = (x >= 4 ? 1U : 0U) + (y >= 4 ? 2U : 0U);
+      if(memcmp(copied.data() + (y * 8 + x) * 4, colours[quadrant], 4) != 0)
+        return fail("texture copy event did not preserve the quadrant pattern");
+    }
+
+  renderer->SetFrameEvent(generateMips->eventId, true);
+  const bytebuf generatedMip1 = renderer->GetTextureData(mipTexture.resourceId, {1, 0, 0});
+  const bytebuf generatedMip3 = renderer->GetTextureData(mipTexture.resourceId, {3, 0, 0});
+  if(generatedMip1.size() != 64 || generatedMip3.size() != 4 ||
+     memcmp(generatedMip1.data(), colours[0], 4) != 0 ||
+     abs(int(generatedMip3[0]) - 134) > 1 || abs(int(generatedMip3[1]) - 132) > 1 ||
+     abs(int(generatedMip3[2]) - 88) > 1 || generatedMip3[3] != 255)
+    return fail("generated mip readback does not match the deterministic averages");
+
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  if(draws.size() != 1)
+    return fail("expected one final sampling draw");
+  renderer->SetFrameEvent(draws[0]->eventId, true);
+  const MetalPipe::State *state = renderer->GetPipelineState().GetMetalPipelineState();
+  if(state == NULL || state->fragmentBuffers.size() != 1 ||
+     state->fragmentBuffers[0].resourceId != destinationBuffer ||
+     state->fragmentTextures.size() != 2 ||
+     state->fragmentTextures[0] != copiedTexture.resourceId ||
+     state->fragmentTextures[1] != mipTexture.resourceId)
+    return fail("final draw does not bind all independent blit results");
+
+  if(!PixelMatches(renderer, colorTarget, draws[0]->eventId, 50, 150, 1.0f, 128.0f / 255.0f,
+                   32.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 150, 150, 96.0f / 255.0f,
+                   96.0f / 255.0f, 96.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 250, 150, 1.0f, 32.0f / 255.0f,
+                   16.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 350, 150, 134.0f / 255.0f,
+                   132.0f / 255.0f, 88.0f / 255.0f))
+    return fail("final draw bands do not sample the four blit results");
+
+  if(savePath != NULL)
+  {
+    TextureSave save;
+    save.resourceId = mipTexture.resourceId;
+    save.destType = FileType::DDS;
+    save.mip = -1;
+    ResultDetails result = renderer->SaveTexture(save, savePath);
+    if(!result.OK())
+      return fail("mip texture DDS save failed");
+    std::ifstream file(savePath, std::ios::binary | std::ios::ate);
+    if(!file || file.tellg() != std::streampos(128 + 340))
+      return fail("mip texture DDS save did not contain all four levels");
+  }
+
+  return true;
+}
+
+static bool ValidateArgumentBufferFixture(IReplayController *renderer, ResourceId colorTarget,
+                                          const char *savePath)
+{
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  if(draws.size() != 1)
+    return true;
+
+  renderer->SetFrameEvent(draws[0]->eventId, true);
+  const PipeState &pipe = renderer->GetPipelineState();
+  const MetalPipe::State *state = pipe.GetMetalPipelineState();
+  if(state == NULL || state->fragmentArgumentBuffers.empty())
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal argument-buffer fixture validation failed: %s\n", message);
+    return false;
+  };
+
+  if(state->fragmentArgumentBuffers.size() != 1 || state->fragmentBuffers.size() != 1)
+    return fail("fragment argument-buffer slot count is wrong");
+  const MetalPipe::ArgumentBuffer &argument = state->fragmentArgumentBuffers[0];
+  if(argument.buffer.resourceId == ResourceId() ||
+     argument.buffer.resourceId != state->fragmentBuffers[0].resourceId ||
+     argument.buffer.byteOffset != 0 || argument.buffer.byteSize == 0 ||
+     argument.textures.size() != 1 || argument.textures[0] == ResourceId() ||
+     argument.samplers.size() != 2 || argument.samplers[1] == ResourceId())
+    return fail("buffer, texture id(0), or sampler id(1) member is missing");
+  if(GetResourceType(renderer, argument.buffer.resourceId) != ResourceType::Buffer ||
+     GetResourceType(renderer, argument.textures[0]) != ResourceType::Texture ||
+     GetResourceType(renderer, argument.samplers[1]) != ResourceType::Sampler)
+    return fail("argument member resource types are wrong");
+
+  BufferDescription argumentBuffer;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.resourceId == argument.buffer.resourceId)
+      argumentBuffer = buffer;
+  TextureDescription sampledTexture;
+  for(const TextureDescription &texture : renderer->GetTextures())
+    if(texture.resourceId == argument.textures[0])
+      sampledTexture = texture;
+  if(argumentBuffer.length != argument.buffer.byteSize || sampledTexture.width != 4 ||
+     sampledTexture.height != 4 || sampledTexture.format.compCount != 4 ||
+     sampledTexture.format.compByteWidth != 1)
+    return fail("argument buffer range or sampled texture description is wrong");
+  if(!HasUsage(renderer, argument.buffer.resourceId, ResourceUsage::PS_Constants) ||
+     !HasUsage(renderer, argument.textures[0], ResourceUsage::PS_Resource))
+    return fail("draw usage does not reference the argument buffer and texture member");
+
+  const ShaderReflection *fragment = pipe.GetShaderReflection(ShaderStage::Fragment);
+  if(fragment == NULL || fragment->constantBlocks.size() != 1 ||
+     fragment->constantBlocks[0].name != "arguments" ||
+     fragment->constantBlocks[0].fixedBindNumber != 0 ||
+     fragment->readOnlyResources.size() != 1 || fragment->samplers.size() != 1 ||
+     fragment->readOnlyResources[0].name != "arguments.colourTexture" ||
+     fragment->readOnlyResources[0].fixedBindNumber != 0 ||
+     fragment->samplers[0].name != "arguments.colourSampler" ||
+     fragment->samplers[0].fixedBindNumber != 1)
+    return fail("fragment reflection does not expose the argument buffer at slot 0");
+
+  const rdcarray<UsedDescriptor> textures =
+      pipe.GetReadOnlyResources(ShaderStage::Fragment, true);
+  const rdcarray<UsedDescriptor> samplers = pipe.GetSamplers(ShaderStage::Fragment, true);
+  if(textures.size() != 1 || textures[0].descriptor.resource != argument.textures[0] ||
+     textures[0].access.index != 0 || textures[0].access.staticallyUnused ||
+     samplers.size() != 1 || samplers[0].sampler.object != argument.samplers[1] ||
+     samplers[0].access.index != 0 || samplers[0].access.staticallyUnused ||
+     samplers[0].sampler.filter.minify != FilterMode::Point ||
+     samplers[0].sampler.filter.magnify != FilterMode::Point ||
+     samplers[0].sampler.addressU != AddressMode::ClampEdge ||
+     samplers[0].sampler.addressV != AddressMode::ClampEdge)
+    return fail("generic descriptors do not expose the argument texture and sampler members");
+
+  const byte expectedTexture[][4] = {{248, 40, 24, 255}, {24, 216, 56, 255},
+                                     {32, 72, 248, 255}, {232, 200, 40, 255}};
+  const bytebuf textureBytes = renderer->GetTextureData(argument.textures[0], {0, 0, 0});
+  if(textureBytes.size() != 64 || memcmp(textureBytes.data(), expectedTexture[0], 4) != 0 ||
+     memcmp(textureBytes.data() + 12, expectedTexture[1], 4) != 0 ||
+     memcmp(textureBytes.data() + 48, expectedTexture[2], 4) != 0 ||
+     memcmp(textureBytes.data() + 60, expectedTexture[3], 4) != 0)
+    return fail("argument texture readback does not match fixed texels");
+
+  if(!PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 75, 248.0f / 255.0f,
+                   40.0f / 255.0f, 24.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 75, 24.0f / 255.0f,
+                   216.0f / 255.0f, 56.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 225, 32.0f / 255.0f,
+                   72.0f / 255.0f, 248.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 225, 232.0f / 255.0f,
+                   200.0f / 255.0f, 40.0f / 255.0f))
+    return fail("draw output does not match argument-buffer texture quadrants");
+
+  const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+  if(clear == NULL)
+    return fail("clear action is missing");
+  renderer->SetFrameEvent(clear->eventId, true);
+  if(!PixelMatches(renderer, colorTarget, clear->eventId, 200, 150, 0.025f, 0.035f, 0.055f))
+    return fail("rewind to clear did not restore the background");
+  if(!PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 75, 248.0f / 255.0f,
+                   40.0f / 255.0f, 24.0f / 255.0f))
+    return fail("forward seek did not restore the argument-buffer draw");
+
+  if(savePath)
+  {
+    TextureSave save;
+    save.resourceId = argument.textures[0];
+    ResultDetails result = renderer->SaveTexture(save, savePath);
+    if(!result.OK())
+      return fail("argument texture DDS save failed");
+    std::ifstream file(savePath, std::ios::binary | std::ios::ate);
+    if(!file || file.tellg() != std::streampos(128 + 64))
+      return fail("argument texture DDS byte size is wrong");
+  }
+
+  return true;
 }
 
 static bool ValidateDynamicUniformFixture(IReplayController *renderer, ResourceId colorTarget)
@@ -1161,7 +1609,8 @@ static bool ValidateIndexedFixture(IReplayController *renderer, ResourceId color
 
   rdcarray<const ActionDescription *> draws;
   FindDrawActions(renderer->GetRootActions(), draws);
-  if(draws.empty() || !(draws[0]->flags & ActionFlags::Indexed))
+  if(draws.empty() || !(draws[0]->flags & ActionFlags::Indexed) ||
+     draws[0]->numIndices != 36)
     return true;
 
   if(draws.size() != 2)
@@ -1300,6 +1749,704 @@ static bool ValidateIndexedFixture(IReplayController *renderer, ResourceId color
   return true;
 }
 
+static bool ValidateIndirectFixture(IReplayController *renderer, ResourceId colorTarget,
+                                    const char *savePath)
+{
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  if(draws.empty() || !(draws[0]->flags & ActionFlags::Indirect))
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal indirect fixture validation failed: %s\n", message);
+    return false;
+  };
+
+  if(draws.size() != 1)
+    return fail("expected one indirect draw action");
+  const ActionDescription *draw = draws[0];
+  if(!(draw->flags & ActionFlags::Instanced) || (draw->flags & ActionFlags::Indexed) ||
+     draw->numIndices != 3 || draw->numInstances != 2 || draw->vertexOffset != 1 ||
+     draw->instanceOffset != 1)
+    return fail("indirect action metadata does not match all four argument fields");
+
+  renderer->SetFrameEvent(draw->eventId, true);
+  const PipeState &pipe = renderer->GetPipelineState();
+  const MetalPipe::State *state = pipe.GetMetalPipelineState();
+  if(state == NULL || pipe.GetPrimitiveTopology() != Topology::TriangleList ||
+     state->vertexAttributes.size() != 3 || state->vertexBuffers.size() != 2)
+    return fail("indirect draw pipeline topology or vertex input shape is wrong");
+
+  const MetalPipe::BufferBinding &indirect = state->indirectBuffer;
+  if(indirect.resourceId == ResourceId() || indirect.byteOffset != 16 ||
+     indirect.byteSize != 16)
+    return fail("indirect buffer binding does not expose the exact argument subrange");
+
+  BufferDescription description;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.resourceId == indirect.resourceId)
+      description = buffer;
+  if(description.resourceId == ResourceId() || description.length != 48 ||
+     !(description.creationFlags & BufferCategory::Indirect))
+    return fail("indirect buffer description is missing its category or full length");
+  if(!HasUsage(renderer, indirect.resourceId, ResourceUsage::Indirect))
+    return fail("indirect argument usage is missing");
+
+  static const uint32_t expected[] = {3, 2, 1, 1};
+  const bytebuf arguments = renderer->GetBufferData(indirect.resourceId, 16, 16);
+  if(arguments.size() != sizeof(expected) ||
+     memcmp(arguments.data(), expected, sizeof(expected)) != 0)
+    return fail("indirect argument bytes do not match 3/2/1/1");
+
+  const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+  if(clear == NULL)
+    return fail("clear action is unavailable");
+  const float bgR = 0.025f, bgG = 0.035f, bgB = 0.055f;
+  if(!PixelMatches(renderer, colorTarget, clear->eventId, 100, 150, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 300, 150, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 100, 150, 1.0f, 0.125f, 0.0625f) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 300, 150, 0.09375f, 0.25f, 1.0f) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 200, 150, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 100, 150, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 300, 150, 0.09375f, 0.25f, 1.0f))
+    return fail("clear/draw/clear/draw event seek or indirect output pixels are wrong");
+
+  if(savePath)
+  {
+    std::ofstream file(savePath, std::ios::binary | std::ios::trunc);
+    file.write((const char *)arguments.data(), arguments.size());
+    file.close();
+    std::ifstream saved(savePath, std::ios::binary | std::ios::ate);
+    if(!saved || saved.tellg() != std::streampos(sizeof(expected)))
+      return fail("indirect argument raw save did not contain exactly 16 bytes");
+  }
+
+  return true;
+}
+
+static bool ValidateIndexedInstancingFixture(IReplayController *renderer, ResourceId colorTarget,
+                                             const char *savePath)
+{
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  if(draws.size() != 1 || !(draws[0]->flags & ActionFlags::Indexed))
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal indexed instancing validation failed: %s\n", message);
+    return false;
+  };
+  const ActionDescription *draw = draws[0];
+  if(!(draw->flags & ActionFlags::Instanced) || draw->numIndices != 3 ||
+     draw->numInstances != 2 || draw->baseVertex != 1 ||
+     draw->instanceOffset != 1 || draw->indexOffset != 0)
+    return fail("indexed/instanced action metadata is wrong");
+
+  renderer->SetFrameEvent(draw->eventId, true);
+  const PipeState &pipe = renderer->GetPipelineState();
+  const MetalPipe::State *state = pipe.GetMetalPipelineState();
+  const BoundVBuffer index = pipe.GetIBuffer();
+  const rdcarray<BoundVBuffer> vertices = pipe.GetVBuffers();
+  if(state == NULL || pipe.GetPrimitiveTopology() != Topology::TriangleList ||
+     state->vertexAttributes.size() != 3 || vertices.size() < 2 ||
+     index.resourceId == ResourceId() || index.byteOffset != 4 || index.byteStride != 2 ||
+     index.byteSize != 6 || vertices[0].resourceId == ResourceId() ||
+     vertices[1].resourceId == ResourceId() || !state->vertexBuffers[1].perInstance)
+    return fail("IA binding, index subrange or vertex layout is wrong");
+
+  const uint16_t expectedIndices[] = {4, 4, 0, 1, 2, 4};
+  const bytebuf indexData = renderer->GetBufferData(index.resourceId, 0, 0);
+  if(indexData.size() != sizeof(expectedIndices) ||
+     memcmp(indexData.data(), expectedIndices, sizeof(expectedIndices)) != 0)
+    return fail("full index buffer does not contain the offset sentinels");
+  const bytebuf selected = renderer->GetBufferData(index.resourceId, index.byteOffset, 6);
+  if(selected.size() != 6 || memcmp(selected.data(), expectedIndices + 2, 6) != 0)
+    return fail("selected index subrange is wrong");
+  if(renderer->GetBufferData(vertices[0].resourceId, 0, 0).size() != 40 ||
+     renderer->GetBufferData(vertices[1].resourceId, 0, 0).size() != 96 ||
+     !HasUsage(renderer, index.resourceId, ResourceUsage::IndexBuffer) ||
+     !HasUsage(renderer, vertices[0].resourceId, ResourceUsage::VertexBuffer) ||
+     !HasUsage(renderer, vertices[1].resourceId, ResourceUsage::VertexBuffer))
+    return fail("index/vertex/instance data or usage is missing");
+
+  const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+  if(clear == NULL)
+    return fail("clear action is unavailable");
+  const float bgR = 0.025f, bgG = 0.035f, bgB = 0.055f;
+  if(!PixelMatches(renderer, colorTarget, clear->eventId, 100, 150, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 100, 150, 1.0f, 0.125f, 0.0625f) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 300, 150, 0.09375f, 0.25f, 1.0f) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 200, 150, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 300, 150, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 300, 150, 0.09375f, 0.25f, 1.0f))
+    return fail("clear/draw/rewind output pixels are wrong");
+
+  if(savePath)
+  {
+    std::ofstream file(savePath, std::ios::binary | std::ios::trunc);
+    file.write((const char *)selected.data(), selected.size());
+    file.close();
+    std::ifstream saved(savePath, std::ios::binary | std::ios::ate);
+    if(!saved || saved.tellg() != std::streampos(6))
+      return fail("raw index export is not exactly six bytes");
+  }
+  return true;
+}
+
+static bool ValidatePointLineFixture(IReplayController *renderer, ResourceId colorTarget,
+                                     const char *savePath)
+{
+  ResourceId vertexBuffer;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.length == 11 * 6 * sizeof(float))
+      vertexBuffer = buffer.resourceId;
+  if(vertexBuffer == ResourceId())
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal point/line fixture validation failed: %s\n", message);
+    return false;
+  };
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  if(draws.size() != 3)
+    return fail("expected three draw events");
+  const Topology topologies[] = {Topology::PointList, Topology::LineList, Topology::LineStrip};
+  const uint32_t starts[] = {1, 3, 6};
+  const uint32_t counts[] = {1, 2, 3};
+  const char *names[] = {"Point", "Line", "Line Strip"};
+  for(size_t i = 0; i < 3; i++)
+  {
+    const ActionDescription *draw = draws[i];
+    if((draw->flags & (ActionFlags::Indexed | ActionFlags::Instanced)) ||
+       draw->eventId != draws[0]->eventId + i || draw->vertexOffset != starts[i] ||
+       draw->numIndices != counts[i] || draw->numInstances != 1 ||
+       !draw->customName.contains(names[i]) || draw->outputs[0] != colorTarget)
+      return fail("draw event metadata, order or output is wrong");
+
+    renderer->SetFrameEvent(draw->eventId, true);
+    const PipeState &pipe = renderer->GetPipelineState();
+    const MetalPipe::State *state = pipe.GetMetalPipelineState();
+    const rdcarray<BoundVBuffer> vbs = pipe.GetVBuffers();
+    const rdcarray<VertexInputAttribute> inputs = pipe.GetVertexInputs();
+    if(state == NULL || pipe.GetPrimitiveTopology() != topologies[i] ||
+       state->vertexAttributes.size() != 2 || vbs.size() != 1 ||
+       vbs[0].resourceId != vertexBuffer || vbs[0].byteOffset != 0 ||
+       vbs[0].byteSize != 264 || vbs[0].byteStride != 24 || inputs.size() != 2 ||
+       inputs[0].vertexBuffer != 0 || inputs[0].byteOffset != 0 ||
+       inputs[0].format.compCount != 2 || inputs[1].vertexBuffer != 0 ||
+       inputs[1].byteOffset != 8 || inputs[1].format.compCount != 4)
+      return fail("Pipeline or standard VS Input does not show point/line topology and vertex input");
+
+    const size_t selectedOffset = starts[i] * 24;
+    const bytebuf selected = renderer->GetBufferData(vertexBuffer, selectedOffset, counts[i] * 24);
+    if(selected.size() != counts[i] * 24)
+      return fail("selected Buffer Viewer vertex range is unavailable");
+    float firstX = 0.0f;
+    memcpy(&firstX, selected.data(), sizeof(firstX));
+    const float expectedX[] = {-0.5f, -0.75f, 0.25f};
+    if(!Near(firstX, expectedX[i]))
+      return fail("selected vertex bytes do not match vertexStart");
+  }
+
+  const bytebuf all = renderer->GetBufferData(vertexBuffer, 0, 0);
+  if(all.size() != 264 || !HasUsage(renderer, vertexBuffer, ResourceUsage::VertexBuffer))
+    return fail("full vertex buffer or resource usage is missing");
+
+  const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+  if(clear == NULL)
+    return fail("clear event is unavailable");
+  const float bgR = 0.025f, bgG = 0.035f, bgB = 0.055f;
+  auto nearby = [&](uint32_t eventId, uint32_t x, uint32_t y, float r, float g, float b) {
+    renderer->SetFrameEvent(eventId, true);
+    for(uint32_t yy = y - 2; yy <= y + 2; yy++)
+      for(uint32_t xx = x - 2; xx <= x + 2; xx++)
+      {
+        const PixelValue pixel = renderer->PickPixel(colorTarget, xx, yy, {0, 0, 0}, CompType::Typeless);
+        if(Near(pixel.floatValue[0], r) && Near(pixel.floatValue[1], g) &&
+           Near(pixel.floatValue[2], b))
+          return true;
+      }
+    return false;
+  };
+  if(!PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 100, 150, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 275, 225, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 75, 1.0f, 0.125f, 0.0625f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 150, bgR, bgG, bgB) ||
+     !nearby(draws[1]->eventId, 100, 150, 0.0625f, 0.875f, 0.1875f) ||
+     !PixelMatches(renderer, colorTarget, draws[1]->eventId, 275, 225, bgR, bgG, bgB) ||
+     !nearby(draws[2]->eventId, 275, 225, 0.09375f, 0.25f, 1.0f) ||
+     !nearby(draws[2]->eventId, 300, 250, 0.09375f, 0.25f, 1.0f) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, bgR, bgG, bgB) ||
+     !PixelMatches(renderer, colorTarget, draws[2]->eventId, 100, 75, 1.0f, 0.125f, 0.0625f))
+    return fail("clear/draw/rewind pixels or primitive connectivity are wrong");
+
+  if(savePath)
+  {
+    renderer->SetFrameEvent(draws[2]->eventId, true);
+    TextureSave save;
+    save.resourceId = colorTarget;
+    save.destType = FileType::DDS;
+    save.mip = 0;
+    save.slice.sliceIndex = 0;
+    if(!renderer->SaveTexture(save, savePath).OK())
+      return fail("standard DDS export failed");
+    std::ifstream saved(savePath, std::ios::binary | std::ios::ate);
+    if(!saved || saved.tellg() != std::streampos(400 * 300 * 4 + 128))
+      return fail("standard DDS export size is wrong");
+  }
+  return true;
+}
+
+static bool ValidateVertexTextureFixture(IReplayController *renderer, ResourceId colorTarget,
+                                         const char *savePath)
+{
+  ResourceId vertexBuffer;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.length == 24 * 4 * sizeof(float))
+      vertexBuffer = buffer.resourceId;
+  if(vertexBuffer == ResourceId())
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal vertex texture fixture validation failed: %s\n", message);
+    return false;
+  };
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  if(draws.size() != 1 || draws[0]->numIndices != 24 || draws[0]->numInstances != 1 ||
+     draws[0]->outputs[0] != colorTarget)
+    return fail("draw action or output does not match");
+  const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+  if(clear == NULL)
+    return fail("clear event is missing");
+  renderer->SetFrameEvent(draws[0]->eventId, true);
+  const PipeState &pipe = renderer->GetPipelineState();
+  const MetalPipe::State *state = pipe.GetMetalPipelineState();
+  if(state == NULL || pipe.GetPrimitiveTopology() != Topology::TriangleList ||
+     state->vertexTextures.size() != 1 || state->vertexTextures[0] == ResourceId() ||
+     state->vertexSamplers.size() != 1 || state->vertexSamplers[0] == ResourceId() ||
+     !state->fragmentTextures.empty() || !state->fragmentSamplers.empty())
+    return fail("vertex bindings or topology are wrong");
+  const ResourceId texture = state->vertexTextures[0];
+  const ResourceId sampler = state->vertexSamplers[0];
+  const ShaderReflection *reflection = pipe.GetShaderReflection(ShaderStage::Vertex);
+  if(reflection == NULL || reflection->readOnlyResources.size() != 1 ||
+     reflection->samplers.size() != 1 ||
+     reflection->readOnlyResources[0].name != "vertexTexture" ||
+     reflection->readOnlyResources[0].fixedBindNumber != 0 ||
+     reflection->samplers[0].name != "vertexSampler" ||
+     reflection->samplers[0].fixedBindNumber != 0)
+    return fail("vertex shader reflection is wrong");
+  const rdcarray<UsedDescriptor> resources = pipe.GetReadOnlyResources(ShaderStage::Vertex, true);
+  const rdcarray<UsedDescriptor> samplers = pipe.GetSamplers(ShaderStage::Vertex, true);
+  if(resources.size() != 1 || resources[0].access.index != 0 ||
+     resources[0].access.staticallyUnused || resources[0].descriptor.resource != texture ||
+     resources[0].descriptor.textureType != TextureType::Texture2D ||
+     samplers.size() != 1 || samplers[0].access.index != 0 ||
+     samplers[0].access.staticallyUnused || samplers[0].sampler.object != sampler ||
+     samplers[0].sampler.filter.minify != FilterMode::Point ||
+     samplers[0].sampler.addressU != AddressMode::ClampEdge)
+    return fail("standard vertex descriptors are wrong");
+  const byte expectedTexture[] = {255, 32, 16, 255, 16, 224, 48, 255,
+                                  24, 64, 255, 255, 240, 208, 32, 255};
+  const bytebuf textureBytes = renderer->GetTextureData(texture, {0, 0, 0});
+  if(textureBytes.size() != sizeof(expectedTexture) ||
+     memcmp(textureBytes.data(), expectedTexture, sizeof(expectedTexture)) != 0 ||
+     !HasUsage(renderer, texture, ResourceUsage::VS_Resource) ||
+     !HasUsage(renderer, vertexBuffer, ResourceUsage::VertexBuffer))
+    return fail("texture bytes or resource usage are wrong");
+  const rdcarray<BoundVBuffer> vbs = pipe.GetVBuffers();
+  const rdcarray<VertexInputAttribute> inputs = pipe.GetVertexInputs();
+  const bytebuf vertexBytes = renderer->GetBufferData(vertexBuffer, 0, 0);
+  if(vbs.size() != 1 || vbs[0].resourceId != vertexBuffer || vbs[0].byteStride != 16 ||
+     inputs.size() != 2 || inputs[0].byteOffset != 0 || inputs[1].byteOffset != 8 ||
+     vertexBytes.size() != 384)
+    return fail("VS Input or standard Buffer Viewer data is wrong");
+  if(!PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, .025f, .035f, .055f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 75, 1.0f,
+                   32.0f / 255.0f, 16.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 75,
+                   16.0f / 255.0f, 224.0f / 255.0f, 48.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 225,
+                   24.0f / 255.0f, 64.0f / 255.0f, 1.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 225,
+                   240.0f / 255.0f, 208.0f / 255.0f, 32.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, .025f, .035f, .055f))
+    return fail("clear/draw/rewind pixels are wrong");
+  if(savePath)
+  {
+    renderer->SetFrameEvent(draws[0]->eventId, true);
+    TextureSave save;
+    save.resourceId = colorTarget;
+    save.destType = FileType::DDS;
+    save.mip = 0;
+    save.slice.sliceIndex = 0;
+    if(!renderer->SaveTexture(save, savePath).OK())
+      return fail("standard DDS export failed");
+    std::ifstream saved(savePath, std::ios::binary | std::ios::ate);
+    if(!saved || saved.tellg() != std::streampos(400 * 300 * 4 + 128))
+      return fail("DDS size is wrong");
+  }
+  return true;
+}
+
+static bool ValidateBatchTextureFixture(IReplayController *renderer, ResourceId colorTarget,
+                                        const char *savePath)
+{
+  ResourceId vertexBuffer;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.length == 25 * 4 * sizeof(float))
+      vertexBuffer = buffer.resourceId;
+  if(vertexBuffer == ResourceId())
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal batch texture fixture validation failed: %s\n", message);
+    return false;
+  };
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+  if(clear == NULL || draws.size() != 1 || draws[0]->numIndices != 24 ||
+     draws[0]->outputs[0] != colorTarget)
+    return fail("clear/draw action is wrong");
+  renderer->SetFrameEvent(draws[0]->eventId, true);
+  const PipeState &pipe = renderer->GetPipelineState();
+  const MetalPipe::State *state = pipe.GetMetalPipelineState();
+  if(state == NULL || pipe.GetPrimitiveTopology() != Topology::TriangleList ||
+     state->vertexTextures.size() != 4 || state->vertexSamplers.size() != 4 ||
+     state->fragmentTextures.size() != 6 || state->fragmentSamplers.size() != 6 ||
+     state->vertexTextures[1] != ResourceId() || state->vertexSamplers[1] != ResourceId() ||
+     state->fragmentTextures[3] != ResourceId() || state->fragmentSamplers[3] != ResourceId() ||
+     state->vertexTextures[2] == ResourceId() || state->vertexTextures[3] == ResourceId() ||
+     state->fragmentTextures[4] == ResourceId() || state->fragmentTextures[5] == ResourceId() ||
+     state->vertexSamplers[2] == ResourceId() || state->vertexSamplers[3] == ResourceId() ||
+     state->fragmentSamplers[4] == ResourceId() || state->fragmentSamplers[5] == ResourceId())
+    return fail("batch slot range or cleared slots are wrong");
+
+  const ShaderReflection *vs = pipe.GetShaderReflection(ShaderStage::Vertex);
+  const ShaderReflection *fs = pipe.GetShaderReflection(ShaderStage::Fragment);
+  if(vs == NULL || fs == NULL || vs->readOnlyResources.empty() || vs->samplers.empty() ||
+     fs->readOnlyResources.empty() || fs->samplers.empty() ||
+     vs->readOnlyResources[0].fixedBindNumber != 2 || vs->samplers[0].fixedBindNumber != 2 ||
+     fs->readOnlyResources[0].fixedBindNumber != 4 || fs->samplers[0].fixedBindNumber != 4)
+    return fail("VS/FS reflection slot numbers are wrong");
+  const rdcarray<UsedDescriptor> vsTextures = pipe.GetReadOnlyResources(ShaderStage::Vertex, false);
+  const rdcarray<UsedDescriptor> vsSamplers = pipe.GetSamplers(ShaderStage::Vertex, false);
+  const rdcarray<UsedDescriptor> fsTextures = pipe.GetReadOnlyResources(ShaderStage::Fragment, false);
+  const rdcarray<UsedDescriptor> fsSamplers = pipe.GetSamplers(ShaderStage::Fragment, false);
+  if(vsTextures.size() != 2 || vsSamplers.size() != 2 || fsTextures.size() != 2 ||
+     fsSamplers.size() != 2 || vsTextures[0].descriptor.resource != state->vertexTextures[2] ||
+     vsTextures[0].access.staticallyUnused || !vsTextures[1].access.staticallyUnused ||
+     vsSamplers[0].sampler.object != state->vertexSamplers[2] ||
+     vsSamplers[0].sampler.addressU != AddressMode::ClampEdge ||
+     vsSamplers[0].access.staticallyUnused || !vsSamplers[1].access.staticallyUnused ||
+     fsTextures[0].descriptor.resource != state->fragmentTextures[4] ||
+     fsTextures[0].access.staticallyUnused || !fsTextures[1].access.staticallyUnused ||
+     fsSamplers[0].sampler.object != state->fragmentSamplers[4] ||
+     fsSamplers[0].sampler.addressU != AddressMode::Wrap ||
+     fsSamplers[0].access.staticallyUnused || !fsSamplers[1].access.staticallyUnused ||
+     pipe.GetReadOnlyResources(ShaderStage::Vertex, true).size() != 1 ||
+     pipe.GetSamplers(ShaderStage::Vertex, true).size() != 1 ||
+     pipe.GetReadOnlyResources(ShaderStage::Fragment, true).size() != 1 ||
+     pipe.GetSamplers(ShaderStage::Fragment, true).size() != 1)
+    return fail("standard used/unused descriptors or sampler states are wrong");
+
+  const byte expectedVertex[] = {255, 32, 16, 255, 16, 224, 48, 255,
+                                 24, 64, 255, 255, 240, 208, 32, 255};
+  const byte expectedFragment[] = {255, 0, 255, 255, 0, 255, 255, 255,
+                                   255, 255, 0, 255, 255, 255, 255, 255};
+  const bytebuf vertexBytes = renderer->GetTextureData(state->vertexTextures[2], {0, 0, 0});
+  const bytebuf fragmentBytes = renderer->GetTextureData(state->fragmentTextures[4], {0, 0, 0});
+  if(vertexBytes.size() != sizeof(expectedVertex) ||
+     memcmp(vertexBytes.data(), expectedVertex, sizeof(expectedVertex)) != 0 ||
+     fragmentBytes.size() != sizeof(expectedFragment) ||
+     memcmp(fragmentBytes.data(), expectedFragment, sizeof(expectedFragment)) != 0 ||
+     renderer->GetBufferData(vertexBuffer, 0, 0).size() != 400 ||
+     !HasUsage(renderer, state->vertexTextures[2], ResourceUsage::VS_Resource) ||
+     !HasUsage(renderer, state->fragmentTextures[4], ResourceUsage::PS_Resource) ||
+     !HasUsage(renderer, vertexBuffer, ResourceUsage::VertexBuffer))
+    return fail("texture/buffer data or usage is wrong");
+  if(!PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, .025f, .035f, .055f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 75, 0.0f,
+                   32.0f / 255.0f, 16.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 75,
+                   16.0f / 255.0f, 0.0f, 48.0f / 255.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 225,
+                   24.0f / 255.0f, 64.0f / 255.0f, 1.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 225,
+                   240.0f / 255.0f, 208.0f / 255.0f, 0.0f) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, .025f, .035f, .055f))
+    return fail("clear/draw/rewind pixels are wrong");
+  if(savePath)
+  {
+    renderer->SetFrameEvent(draws[0]->eventId, true);
+    TextureSave save;
+    save.resourceId = colorTarget;
+    save.destType = FileType::DDS;
+    save.mip = 0;
+    save.slice.sliceIndex = 0;
+    if(!renderer->SaveTexture(save, savePath).OK())
+      return fail("standard DDS export failed");
+    std::ifstream saved(savePath, std::ios::binary | std::ios::ate);
+    if(!saved || saved.tellg() != std::streampos(400 * 300 * 4 + 128))
+      return fail("DDS size is wrong");
+  }
+  return true;
+}
+
+static bool ValidateFragmentStorageBufferFixture(IReplayController *renderer,
+                                                 ResourceId colorTarget, const char *savePath)
+{
+  ResourceId storage;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.length == 640)
+      storage = buffer.resourceId;
+  if(storage == ResourceId())
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal fragment storage-buffer validation failed: %s\n", message);
+    return false;
+  };
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+  if(clear == NULL || draws.size() != 1 || draws[0]->numIndices != 3 ||
+     draws[0]->outputs[0] != colorTarget)
+    return fail("clear/draw action or output is wrong");
+
+  renderer->SetFrameEvent(draws[0]->eventId, true);
+  const PipeState &pipe = renderer->GetPipelineState();
+  const MetalPipe::State *state = pipe.GetMetalPipelineState();
+  if(state == NULL || state->fragmentBuffers.size() != 4 ||
+     state->fragmentBuffers[3].resourceId != storage ||
+     state->fragmentBuffers[3].byteOffset != 256 ||
+     state->fragmentBuffers[3].byteSize != 384 ||
+     state->fragmentBuffers[0].resourceId != ResourceId() ||
+     state->fragmentBuffers[1].resourceId != ResourceId() ||
+     state->fragmentBuffers[2].resourceId != ResourceId())
+    return fail("physical slot, range, or empty slots are wrong");
+  const ShaderReflection *reflection = pipe.GetShaderReflection(ShaderStage::Fragment);
+  if(reflection == NULL || !reflection->constantBlocks.empty() ||
+     reflection->readOnlyResources.size() != 2 ||
+     reflection->readOnlyResources[0].name != "colours" ||
+     reflection->readOnlyResources[0].fixedBindNumber != 3 ||
+     reflection->readOnlyResources[0].descriptorType != DescriptorType::Buffer ||
+     reflection->readOnlyResources[0].isTexture ||
+     reflection->readOnlyResources[1].name != "unusedColours" ||
+     reflection->readOnlyResources[1].fixedBindNumber != 5 ||
+     reflection->readOnlyResources[1].descriptorType != DescriptorType::Buffer)
+    return fail("storage buffer reflection was misclassified");
+  const rdcarray<UsedDescriptor> allResources =
+      pipe.GetReadOnlyResources(ShaderStage::Fragment, false);
+  if(allResources.size() != 1)
+    return fail("unbound storage-buffer shader slot must not appear as a bound descriptor");
+  const rdcarray<UsedDescriptor> resources =
+      pipe.GetReadOnlyResources(ShaderStage::Fragment, true);
+  if(resources.size() != 1 || resources[0].access.type != DescriptorType::Buffer ||
+     resources[0].access.index != 0 || resources[0].access.byteOffset != 0x203 ||
+     resources[0].access.staticallyUnused ||
+     resources[0].descriptor.type != DescriptorType::Buffer ||
+     resources[0].descriptor.resource != storage ||
+     resources[0].descriptor.byteOffset != 256 || resources[0].descriptor.byteSize != 384 ||
+     !pipe.GetConstantBlocks(ShaderStage::Fragment, true).empty())
+    return fail("generic storage-buffer descriptor or used state is wrong");
+
+  const bytebuf bytes = renderer->GetBufferData(storage, 0, 0);
+  const float guard[4] = {1.0f, 0.0f, 1.0f, 1.0f};
+  const float colours[4][4] = {{1.0f, 0.125f, 0.0625f, 1.0f},
+                               {0.0625f, 0.875f, 0.1875f, 1.0f},
+                               {0.125f, 0.25f, 1.0f, 1.0f},
+                               {0.9375f, 0.8125f, 0.0f, 1.0f}};
+  if(bytes.size() != 640 || memcmp(bytes.data(), guard, sizeof(guard)) != 0 ||
+     memcmp(bytes.data() + 256, colours, sizeof(colours)) != 0 ||
+     memcmp(bytes.data() + 256 + sizeof(colours), guard, sizeof(guard)) != 0 ||
+     renderer->GetBufferData(storage, 640, 16).size() != 0 ||
+     !HasUsage(renderer, storage, ResourceUsage::PS_Resource) ||
+     HasUsage(renderer, storage, ResourceUsage::PS_Constants))
+    return fail("raw bytes, out-of-range read, or resource usage are wrong");
+
+  if(!PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, .025f, .035f, .055f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 75, .125f, .25f, 1.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 75, .9375f, .8125f, 0.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 225, 1.0f, .125f, .0625f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 225, .0625f, .875f, .1875f) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, .025f, .035f, .055f))
+    return fail("clear/draw/rewind pixels are wrong");
+  if(savePath)
+  {
+    std::ofstream saved(savePath, std::ios::binary);
+    saved.write((const char *)bytes.data(), bytes.size());
+    if(!saved)
+      return fail("raw buffer export failed");
+  }
+  return true;
+}
+
+static bool ValidateVertexStorageBufferFixture(IReplayController *renderer,
+                                               ResourceId colorTarget, const char *savePath)
+{
+  ResourceId storage;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.length == 768)
+      storage = buffer.resourceId;
+  if(storage == ResourceId())
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "Metal vertex storage-buffer validation failed: %s\n", message);
+    return false;
+  };
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+  if(clear == NULL || draws.size() != 1 || draws[0]->numIndices != 24 ||
+     draws[0]->outputs[0] != colorTarget)
+    return fail("clear/draw action or output is wrong");
+
+  renderer->SetFrameEvent(draws[0]->eventId, true);
+  const PipeState &pipe = renderer->GetPipelineState();
+  const MetalPipe::State *state = pipe.GetMetalPipelineState();
+  if(state == NULL || state->vertexStorageBuffers.size() != 7 ||
+     state->vertexStorageBuffers[4].resourceId != storage ||
+     state->vertexStorageBuffers[4].byteOffset != 256 ||
+     state->vertexStorageBuffers[4].byteSize != 512 ||
+     state->vertexStorageBuffers[6].resourceId != storage ||
+     state->vertexStorageBuffers[6].byteOffset != 320 ||
+     state->vertexStorageBuffers[6].byteSize != 448 ||
+     state->vertexStorageBuffers[0].resourceId != ResourceId() ||
+     state->vertexStorageBuffers[1].resourceId != ResourceId() ||
+     state->vertexStorageBuffers[2].resourceId != ResourceId() ||
+     state->vertexStorageBuffers[3].resourceId != ResourceId() ||
+     state->vertexStorageBuffers[5].resourceId != ResourceId())
+    return fail("physical slots, ranges, or empty slots are wrong");
+  for(const MetalPipe::VertexBuffer &buffer : state->vertexBuffers)
+    if(buffer.resourceId == storage)
+      return fail("vertex storage buffer was misclassified as an IA vertex buffer");
+  const ShaderReflection *reflection = pipe.GetShaderReflection(ShaderStage::Vertex);
+  if(reflection == NULL || !reflection->constantBlocks.empty() ||
+     reflection->readOnlyResources.size() != 2 ||
+     reflection->readOnlyResources[0].name != "positions" ||
+     reflection->readOnlyResources[0].fixedBindNumber != 4 ||
+     reflection->readOnlyResources[0].descriptorType != DescriptorType::Buffer ||
+     reflection->readOnlyResources[0].isTexture ||
+     reflection->readOnlyResources[1].name != "unusedPositions" ||
+     reflection->readOnlyResources[1].fixedBindNumber != 6 ||
+     reflection->readOnlyResources[1].descriptorType != DescriptorType::Buffer)
+    return fail("storage buffer reflection was misclassified");
+  const rdcarray<UsedDescriptor> allResources =
+      pipe.GetReadOnlyResources(ShaderStage::Vertex, false);
+  const rdcarray<UsedDescriptor> usedResources =
+      pipe.GetReadOnlyResources(ShaderStage::Vertex, true);
+  if(allResources.size() != 2 || usedResources.size() != 1 ||
+     allResources[0].access.type != DescriptorType::Buffer ||
+     allResources[0].access.index != 0 || allResources[0].access.byteOffset != 0xF04 ||
+     allResources[0].access.staticallyUnused ||
+     allResources[0].descriptor.resource != storage ||
+     allResources[0].descriptor.byteOffset != 256 ||
+     allResources[0].descriptor.byteSize != 512 ||
+     allResources[1].access.type != DescriptorType::Buffer ||
+     allResources[1].access.index != 1 || allResources[1].access.byteOffset != 0xF06 ||
+     !allResources[1].access.staticallyUnused ||
+     allResources[1].descriptor.resource != storage ||
+     allResources[1].descriptor.byteOffset != 320 ||
+     allResources[1].descriptor.byteSize != 448 ||
+     usedResources[0].access.byteOffset != 0xF04 ||
+     !pipe.GetConstantBlocks(ShaderStage::Vertex, true).empty())
+    return fail("generic storage-buffer descriptors or used state are wrong");
+
+  const bytebuf bytes = renderer->GetBufferData(storage, 0, 0);
+  const float guard[4] = {2.0f, 2.0f, 2.0f, 2.0f};
+  const float firstPosition[4] = {-1.0f, 0.0f, 0.0f, 1.0f};
+  const float lastPosition[4] = {1.0f, 0.0f, 0.0f, 1.0f};
+  if(bytes.size() != 768 || memcmp(bytes.data(), guard, sizeof(guard)) != 0 ||
+     memcmp(bytes.data() + 256, firstPosition, sizeof(firstPosition)) != 0 ||
+     memcmp(bytes.data() + 256 + 23 * sizeof(firstPosition), lastPosition,
+            sizeof(lastPosition)) != 0 ||
+     memcmp(bytes.data() + 256 + 24 * sizeof(firstPosition), guard, sizeof(guard)) != 0 ||
+     renderer->GetBufferData(storage, 768, 16).size() != 0 ||
+     !HasUsage(renderer, storage, ResourceUsage::VS_Resource) ||
+     HasUsage(renderer, storage, ResourceUsage::VertexBuffer))
+    return fail("raw bytes, sentinels, out-of-range read, or resource usage are wrong");
+
+  if(!PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, .025f, .035f, .055f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 75, .125f, .25f, 1.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 75, .9375f, .8125f, 0.0f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 100, 225, 1.0f, .125f, .0625f) ||
+     !PixelMatches(renderer, colorTarget, draws[0]->eventId, 300, 225, .0625f, .875f, .1875f) ||
+     !PixelMatches(renderer, colorTarget, clear->eventId, 100, 75, .025f, .035f, .055f))
+    return fail("clear/draw/rewind pixels are wrong");
+  if(savePath)
+  {
+    std::ofstream saved(savePath, std::ios::binary);
+    saved.write((const char *)bytes.data(), bytes.size());
+    if(!saved)
+      return fail("raw buffer export failed");
+  }
+  return true;
+}
+
+static bool ValidatePointLineMeshPreview(IReplayController *renderer, WindowingData window)
+{
+  ResourceId vertexBuffer;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.length == 264)
+      vertexBuffer = buffer.resourceId;
+  if(vertexBuffer == ResourceId())
+    return true;
+
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  if(draws.size() != 3)
+    return false;
+
+  for(size_t i = 0; i < 3; i++)
+  {
+    renderer->SetFrameEvent(draws[i]->eventId, true);
+    const PipeState &pipe = renderer->GetPipelineState();
+    const rdcarray<VertexInputAttribute> inputs = pipe.GetVertexInputs();
+    const rdcarray<BoundVBuffer> vbs = pipe.GetVBuffers();
+    if(inputs.empty() || vbs.empty() || inputs[0].vertexBuffer != 0)
+      return false;
+
+    MeshDisplay mesh;
+    mesh.type = MeshDataStage::VSIn;
+    mesh.wireframeDraw = true;
+    mesh.position.vertexResourceId = vertexBuffer;
+    mesh.position.vertexByteOffset = vbs[0].byteOffset + inputs[0].byteOffset +
+                                     draws[i]->vertexOffset * vbs[0].byteStride;
+    mesh.position.vertexByteStride = vbs[0].byteStride;
+    mesh.position.vertexByteSize = vbs[0].byteSize;
+    mesh.position.format = inputs[0].format;
+    mesh.position.topology = pipe.GetPrimitiveTopology();
+    mesh.position.numIndices = draws[i]->numIndices;
+
+    IReplayOutput *output = renderer->CreateOutput(window, ReplayOutputType::Mesh);
+    if(output == NULL)
+      return false;
+    output->SetMeshDisplay(mesh);
+    output->Display();
+    const bytebuf pixels = output->ReadbackOutputTexture();
+    output->Shutdown();
+    if(pixels.size() != size_t(640 * 480 * 3))
+      return false;
+    size_t changed = 0;
+    for(size_t p = 3; p + 2 < pixels.size(); p += 3)
+      if(pixels[p] != pixels[0] || pixels[p + 1] != pixels[1] || pixels[p + 2] != pixels[2])
+        changed++;
+    if(changed < (i == 0 ? 30U : 60U))
+    {
+      fprintf(stderr, "T15 %s Mesh Viewer preview changed only %zu pixels\n",
+              i == 0 ? "Point" : i == 1 ? "Line" : "Line Strip", changed);
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool ValidateMeshPreview(IReplayController *renderer, WindowingData window)
 {
   rdcarray<const ActionDescription *> draws;
@@ -1311,7 +2458,11 @@ static bool ValidateMeshPreview(IReplayController *renderer, WindowingData windo
   const bool instancedFixture =
       draws.size() == 1 && (draws[0]->flags & ActionFlags::Instanced) &&
       draws[0]->numInstances == 3 && draws[0]->instanceOffset == 1;
-  if(!indexedFixture && !instancedFixture)
+  const bool indexedInstancedFixture =
+      draws.size() == 1 && (draws[0]->flags & ActionFlags::Indexed) &&
+      (draws[0]->flags & ActionFlags::Instanced) && draws[0]->numInstances == 2 &&
+      draws[0]->baseVertex == 1;
+  if(!indexedFixture && !instancedFixture && !indexedInstancedFixture)
     return true;
 
   renderer->SetFrameEvent(draws[0]->eventId, true);
@@ -1327,7 +2478,7 @@ static bool ValidateMeshPreview(IReplayController *renderer, WindowingData windo
   MeshDisplay mesh;
   mesh.type = MeshDataStage::VSIn;
   mesh.wireframeDraw = true;
-  mesh.curInstance = instancedFixture ? 1 : 0;
+  mesh.curInstance = instancedFixture || indexedInstancedFixture ? 1 : 0;
   mesh.position.vertexResourceId = vertexBuffer.resourceId;
   mesh.position.vertexByteOffset = vertexBuffer.byteOffset + inputs[0].byteOffset;
   mesh.position.vertexByteStride = vertexBuffer.byteStride;
@@ -1447,6 +2598,25 @@ int main(int argc, char **argv)
               ValidateTexturedFixture(renderer) &&
               ValidateTextureSubresourceFixture(renderer, output, display.resourceId,
                                                 argc == 4 ? argv[3] : NULL) &&
+              ValidateBlitFixture(renderer, display.resourceId, argc == 4 ? argv[3] : NULL) &&
+              ValidateComputeFixture(renderer, display.resourceId, argc == 4 ? argv[3] : NULL) &&
+              ValidateArgumentBufferFixture(renderer, display.resourceId,
+                                            argc == 4 ? argv[3] : NULL) &&
+              ValidateIndirectFixture(renderer, display.resourceId,
+                                      argc == 4 ? argv[3] : NULL) &&
+              ValidateIndexedInstancingFixture(renderer, display.resourceId,
+                                               argc == 4 ? argv[3] : NULL) &&
+              ValidatePointLineFixture(renderer, display.resourceId,
+                                       argc == 4 ? argv[3] : NULL) &&
+              ValidateVertexTextureFixture(renderer, display.resourceId,
+                                           argc == 4 ? argv[3] : NULL) &&
+              ValidateBatchTextureFixture(renderer, display.resourceId,
+                                          argc == 4 ? argv[3] : NULL) &&
+              ValidateFragmentStorageBufferFixture(renderer, display.resourceId,
+                                                  argc == 4 ? argv[3] : NULL) &&
+              ValidateVertexStorageBufferFixture(renderer, display.resourceId,
+                                                 argc == 4 ? argv[3] : NULL) &&
+              ValidatePointLineMeshPreview(renderer, window) &&
               ValidateMeshPreview(renderer, window);
     if(success)
     {

@@ -63,6 +63,7 @@ private:
 
   ICaptureContext &m_Ctx;
   QLabel *m_Pipeline = NULL;
+  QLabel *m_PipelineLabel = NULL;
   QLabel *m_Topology = NULL;
   QLabel *m_Viewport = NULL;
   QLabel *m_Scissor = NULL;
@@ -74,13 +75,21 @@ private:
   QToolButton *m_ShowEmpty = NULL;
   QToolButton *m_Export = NULL;
   RDTreeWidget *m_VertexShader = NULL;
+  RDTreeWidget *m_VertexStorageBuffers = NULL;
+  RDTreeWidget *m_VertexTextures = NULL;
+  RDTreeWidget *m_VertexSamplers = NULL;
   RDTreeWidget *m_FragmentShader = NULL;
   RDTreeWidget *m_FragmentBuffers = NULL;
+  RDTreeWidget *m_FragmentStorageBuffers = NULL;
   RDTreeWidget *m_FragmentTextures = NULL;
   RDTreeWidget *m_FragmentSamplers = NULL;
+  RDTreeWidget *m_ComputeShader = NULL;
+  RDTreeWidget *m_ComputeReadTextures = NULL;
+  RDTreeWidget *m_ComputeWriteTextures = NULL;
   RDTreeWidget *m_VertexAttributes = NULL;
   RDTreeWidget *m_VertexBuffers = NULL;
   RDTreeWidget *m_IndexBuffer = NULL;
+  RDTreeWidget *m_IndirectBuffer = NULL;
   RDTreeWidget *m_DepthState = NULL;
   RDTreeWidget *m_StencilState = NULL;
   RDTreeWidget *m_MultisampleState = NULL;

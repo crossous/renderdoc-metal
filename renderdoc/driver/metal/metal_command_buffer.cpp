@@ -24,6 +24,7 @@
 
 #include "metal_command_buffer.h"
 #include "metal_blit_command_encoder.h"
+#include "metal_compute_command_encoder.h"
 #include "metal_device.h"
 #include "metal_replay.h"
 #include "metal_render_command_encoder.h"
@@ -50,7 +51,29 @@ bool WrappedMTLCommandBuffer::Serialise_blitCommandEncoder(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    // Blit replay will be implemented with the first resource-copy feature.
+    MTL::BlitCommandEncoder *realEncoder = Unwrap(CommandBuffer)->blitCommandEncoder();
+    if(!realEncoder)
+      return false;
+
+    WrappedMTLBlitCommandEncoder *wrappedEncoder =
+        (WrappedMTLBlitCommandEncoder *)GetResourceManager()->GetResource(BlitCommandEncoder, true);
+    if(wrappedEncoder)
+      GetResourceManager()->ReplaceRealResource(wrappedEncoder, realEncoder);
+    else
+      GetResourceManager()->WrapResource(BlitCommandEncoder, realEncoder, wrappedEncoder);
+    wrappedEncoder->SetCommandBuffer(CommandBuffer);
+    m_Device->SetReplayBlitCommandEncoder(wrappedEncoder);
+
+    if(IsLoading(m_State))
+    {
+      m_Device->AddResource(BlitCommandEncoder, ResourceType::CommandBuffer, "Blit Encoder");
+      m_Device->DerivedResource(CommandBuffer, BlitCommandEncoder);
+      AddEvent();
+      ActionDescription action;
+      action.customName = "Begin Metal Blit Pass";
+      action.flags = ActionFlags::PassBoundary | ActionFlags::BeginPass;
+      AddAction(action);
+    }
   }
   return true;
 }
@@ -84,6 +107,64 @@ WrappedMTLBlitCommandEncoder *WrappedMTLCommandBuffer::blitCommandEncoder()
     //     GetResourceManager()->AddLiveResource(id, *wrappedMTLLibrary);
   }
   return wrappedMTLBlitCommandEncoder;
+}
+
+template <typename SerialiserType>
+bool WrappedMTLCommandBuffer::Serialise_computeCommandEncoder(
+    SerialiserType &ser, WrappedMTLComputeCommandEncoder *encoder)
+{
+  SERIALISE_ELEMENT_LOCAL(CommandBuffer, this);
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, GetResID(encoder))
+      .TypedAs("MTLComputeCommandEncoder"_lit);
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    MTL::ComputeCommandEncoder *realEncoder = Unwrap(CommandBuffer)->computeCommandEncoder();
+    if(!realEncoder)
+      return false;
+    WrappedMTLComputeCommandEncoder *wrappedEncoder =
+        (WrappedMTLComputeCommandEncoder *)GetResourceManager()->GetResource(
+            ComputeCommandEncoder, true);
+    if(wrappedEncoder)
+      GetResourceManager()->ReplaceRealResource(wrappedEncoder, realEncoder);
+    else
+      GetResourceManager()->WrapResource(ComputeCommandEncoder, realEncoder, wrappedEncoder);
+    wrappedEncoder->SetCommandBuffer(CommandBuffer);
+    m_Device->SetReplayComputeCommandEncoder(wrappedEncoder);
+    m_Device->GetReplay()->BeginComputePass();
+    if(IsLoading(m_State))
+    {
+      m_Device->AddResource(ComputeCommandEncoder, ResourceType::CommandBuffer, "Compute Encoder");
+      m_Device->DerivedResource(CommandBuffer, ComputeCommandEncoder);
+      AddEvent();
+      ActionDescription action;
+      action.customName = "Begin Metal Compute Pass";
+      action.flags = ActionFlags::PassBoundary | ActionFlags::BeginPass;
+      AddAction(action);
+    }
+  }
+  return true;
+}
+
+WrappedMTLComputeCommandEncoder *WrappedMTLCommandBuffer::computeCommandEncoder()
+{
+  MTL::ComputeCommandEncoder *realEncoder;
+  SERIALISE_TIME_CALL(realEncoder = Unwrap(this)->computeCommandEncoder());
+  if(!realEncoder)
+    return NULL;
+  WrappedMTLComputeCommandEncoder *wrappedEncoder;
+  GetResourceManager()->WrapResource(ResourceId(), realEncoder, wrappedEncoder);
+  wrappedEncoder->SetCommandBuffer(this);
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLCommandBuffer_computeCommandEncoder);
+    Serialise_computeCommandEncoder(ser, wrappedEncoder);
+    GetRecord(this)->AddChunk(scope.Get());
+    GetResourceManager()->AddResourceRecord(wrappedEncoder);
+  }
+  return wrappedEncoder;
 }
 
 template <typename SerialiserType>
@@ -383,6 +464,9 @@ void WrappedMTLCommandBuffer::waitUntilCompleted()
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer,
                                             WrappedMTLBlitCommandEncoder *encoder,
                                             blitCommandEncoder);
+INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer,
+                                            WrappedMTLComputeCommandEncoder *encoder,
+                                            computeCommandEncoder);
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer,
                                             WrappedMTLRenderCommandEncoder *encoder,
                                             renderCommandEncoderWithDescriptor,

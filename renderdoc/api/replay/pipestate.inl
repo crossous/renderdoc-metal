@@ -364,6 +364,8 @@ const ShaderReflection *PipeState::GetShaderReflection(ShaderStage stage) const
     }
     else if(IsCaptureMetal())
     {
+      if(stage == ShaderStage::Compute)
+        return m_Metal->computeShader.reflection;
       if(stage == ShaderStage::Vertex)
         return m_Metal->vertexShader.reflection;
       if(stage == ShaderStage::Fragment)
@@ -376,6 +378,8 @@ const ShaderReflection *PipeState::GetShaderReflection(ShaderStage stage) const
 
 ResourceId PipeState::GetComputePipelineObject() const
 {
+  if(IsCaptureLoaded() && IsCaptureMetal())
+    return m_Metal->computePipelineResourceId;
   if(IsCaptureLoaded() && IsCaptureVK())
   {
     return m_Vulkan->compute.pipelineResourceId;
@@ -434,6 +438,8 @@ rdcstr PipeState::GetShaderEntryPoint(ShaderStage stage) const
   }
   else if(IsCaptureLoaded() && IsCaptureMetal())
   {
+    if(stage == ShaderStage::Compute)
+      return m_Metal->computeShader.entryPoint;
     if(stage == ShaderStage::Vertex)
       return m_Metal->vertexShader.entryPoint;
     if(stage == ShaderStage::Fragment)
@@ -505,6 +511,8 @@ ResourceId PipeState::GetShader(ShaderStage stage) const
     }
     else if(IsCaptureMetal())
     {
+      if(stage == ShaderStage::Compute)
+        return m_Metal->computeShader.resourceId;
       if(stage == ShaderStage::Vertex)
         return m_Metal->vertexShader.resourceId;
       if(stage == ShaderStage::Fragment)

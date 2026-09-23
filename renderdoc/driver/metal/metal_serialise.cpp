@@ -23,9 +23,12 @@
  ******************************************************************************/
 
 #include "metal_blit_command_encoder.h"
+#include "metal_argument_encoder.h"
 #include "metal_buffer.h"
 #include "metal_command_buffer.h"
 #include "metal_command_queue.h"
+#include "metal_compute_command_encoder.h"
+#include "metal_compute_pipeline_state.h"
 #include "metal_device.h"
 #include "metal_depth_stencil_state.h"
 #include "metal_function.h"

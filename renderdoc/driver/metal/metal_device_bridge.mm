@@ -409,8 +409,8 @@
     newComputePipelineStateWithFunction:(id<MTLFunction>)computeFunction
                                   error:(__autoreleasing NSError **)error
 {
-  METAL_NOT_HOOKED();
-  return [self.real newComputePipelineStateWithFunction:computeFunction error:error];
+  return id<MTLComputePipelineState>(GetWrapped(self)->newComputePipelineStateWithFunction(
+      GetWrapped(computeFunction), (NS::Error **)error));
 }
 
 - (nullable id<MTLComputePipelineState>)

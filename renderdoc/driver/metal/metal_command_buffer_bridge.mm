@@ -211,8 +211,7 @@
 
 - (nullable id<MTLComputeCommandEncoder>)computeCommandEncoder
 {
-  METAL_NOT_HOOKED();
-  return [self.real computeCommandEncoder];
+  return id<MTLComputeCommandEncoder>(GetWrapped(self)->computeCommandEncoder());
 }
 
 - (nullable id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:

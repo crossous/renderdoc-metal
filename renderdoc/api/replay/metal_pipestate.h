@@ -150,6 +150,38 @@ struct BufferBinding
 };
 
 DOCUMENT(R"(
+MetalArgumentBuffer()
+MetalArgumentBuffer(other: MetalArgumentBuffer)
+
+Describes the directly encoded resources referenced by one Metal argument buffer.
+)");
+struct ArgumentBuffer
+{
+  DOCUMENT("");
+  ArgumentBuffer() = default;
+  ArgumentBuffer(const ArgumentBuffer &) = default;
+  ArgumentBuffer &operator=(const ArgumentBuffer &) = default;
+
+  DOCUMENT(R"(The argument-buffer allocation and range.
+
+:type: MetalBufferBinding
+)");
+  BufferBinding buffer;
+
+  DOCUMENT(R"(Direct texture members indexed by argument id.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> textures;
+
+  DOCUMENT(R"(Direct sampler members indexed by argument id.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> samplers;
+};
+
+DOCUMENT(R"(
 MetalVertexAttribute()
 MetalVertexAttribute(other: MetalVertexAttribute)
 
@@ -247,6 +279,24 @@ struct State
 )");
   ResourceId pipelineResourceId;
 
+  DOCUMENT(R"(The bound compute pipeline, if the current action is a dispatch.
+
+:type: ResourceId
+)");
+  ResourceId computePipelineResourceId;
+
+  DOCUMENT(R"(The bound compute function.
+
+:type: MetalShader
+)");
+  Shader computeShader;
+
+  DOCUMENT(R"(The direct compute texture bindings, indexed by Metal texture slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> computeTextures;
+
   DOCUMENT(R"(The bound vertex function.
 
 :type: MetalShader
@@ -271,17 +321,41 @@ struct State
 )");
   rdcarray<VertexBuffer> vertexBuffers;
 
+  DOCUMENT(R"(The vertex-stage storage buffer bindings, indexed by Metal buffer slot.
+
+:type: List[MetalBufferBinding]
+)");
+  rdcarray<BufferBinding> vertexStorageBuffers;
+
   DOCUMENT(R"(The attributes from the currently bound Metal vertex descriptor.
 
 :type: List[MetalVertexAttribute]
 )");
   rdcarray<VertexAttribute> vertexAttributes;
 
+  DOCUMENT(R"(The vertex-stage texture bindings, indexed by Metal texture slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> vertexTextures;
+
+  DOCUMENT(R"(The vertex-stage sampler bindings, indexed by Metal sampler slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> vertexSamplers;
+
   DOCUMENT(R"(The fragment-stage buffer bindings, indexed by Metal buffer slot.
 
 :type: List[MetalBufferBinding]
 )");
   rdcarray<BufferBinding> fragmentBuffers;
+
+  DOCUMENT(R"(The directly encoded fragment argument buffers, indexed by Metal buffer slot.
+
+:type: List[MetalArgumentBuffer]
+)");
+  rdcarray<ArgumentBuffer> fragmentArgumentBuffers;
 
   DOCUMENT(R"(The fragment-stage texture bindings, indexed by Metal texture slot.
 
@@ -300,6 +374,12 @@ struct State
 :type: MetalVertexBuffer
 )");
   VertexBuffer indexBuffer;
+
+  DOCUMENT(R"(The argument buffer region used by the current indirect draw.
+
+:type: MetalBufferBinding
+)");
+  BufferBinding indirectBuffer;
 
   DOCUMENT(R"(The dynamic rasterizer state used by the current draw.
 
@@ -360,6 +440,7 @@ struct State
 DECLARE_REFLECTION_STRUCT(MetalPipe::Shader);
 DECLARE_REFLECTION_STRUCT(MetalPipe::VertexBuffer);
 DECLARE_REFLECTION_STRUCT(MetalPipe::BufferBinding);
+DECLARE_REFLECTION_STRUCT(MetalPipe::ArgumentBuffer);
 DECLARE_REFLECTION_STRUCT(MetalPipe::VertexAttribute);
 DECLARE_REFLECTION_STRUCT(MetalPipe::Rasterizer);
 DECLARE_REFLECTION_STRUCT(MetalPipe::DepthStencil);
