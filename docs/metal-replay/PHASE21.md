@@ -8,8 +8,7 @@ GPU 生成命令、inherit buffers/pipeline、indexed ICB、compute ICB、heap �
 本阶段与 `PHASE22.md` / T21 组成 `BATCH21-22.md`。T20 的功能自动链路先验证并记录 UI
 待验项，随后推进 T21；两阶段在最终构建上完成联合 L1/L2 和同一轮 qrenderdoc L4 后一起关闭。
 
-当前状态：待从 P21.1 开始；T19 定向 L1/L2/L4 已通过，T00-T18 最近一次完整 L3 仍作为基线，
-接手时无需重跑。
+当前状态：P21.1–P21.4 已关闭；T20/T21 的最终联合自动验证及同一轮最新 qrenderdoc L4 均通过。
 
 ## 本阶段验证清单
 
@@ -60,3 +59,22 @@ GPU 生成命令、inherit buffers/pipeline、indexed ICB、compute ICB、heap �
 
 验收：T20 的自动功能链路通过且证据可复用；待 T21 完成后按 `BATCH21-22.md` 联合完成
 最终自动检查与 qrenderdoc 验收，再将本阶段标为关闭。
+
+## 最终验收证据
+
+- `Metal_Indirect_Command_Buffer` 未注入原生 5 帧通过。单命令 ICB 容量 2，执行 range `0+1`；
+  152-byte 顶点 buffer 从 offset 16 绑定，绘制 vertexStart 1 的红色三角形。
+- T20 capture/XML、CLI replay、Replay API action/state/usage/readback、clear→draw→clear→draw、
+  152-byte 原始字节与 raw 保存通过；执行 marker 与展开 draw 分别占用连续事件。
+- XML+ZIP 派生的越界 range/index、缺失 pipeline/buffer、错误 vertex offset、inheritBuffers
+  均被 replay 明确拒绝。T01/T13 定向 smoke、T20 10 轮 lifecycle 通过（resident growth
+  606208 bytes）。日志 `/tmp/t20-*.log`，capture `captures/metal-smoke/t20_capture.rdc`。
+- 最终联合清单 T01/T02/T05/T13/T14/T20/T21 的 native、capture/XML、Replay API、各自 CLI
+  replay 和含 T00 基线的 8 份 capture × 10 轮 lifecycle 通过；T20 六类异常 capture 被拒绝。
+  汇总 `/tmp/batch21-22-final.log`，lifecycle resident growth 196608 bytes；L3 未触发。
+- 最终 qrenderdoc 打开与正式 capture SHA-256 相同的 `/private/tmp/t20-batch-ui.rdc`：EID 2
+  `executeCommandsInBuffer(range 0+1)`、EID 3 `ICB[0] drawPrimitives(3)`，API Inspector 显示
+  ICB 16 和 `{0,1}`；IA 为 Pipeline 15、Triangle List、Buffer 17 offset 16/size 136/stride 24，
+  Mesh VS Input 三行及 Buffer 17/Resource 跳转正确。Texture Viewer 显示红色三角形，状态栏为
+  `No problems detected`。UI 保存的 `/private/tmp/t20-batch-buffer-ui.csv` 和最终构建导出的
+  `/private/tmp/t20-batch-pipeline-final.html` 已核对存在及内容。

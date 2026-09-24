@@ -11,15 +11,21 @@
 ## Agent 推进节奏（省额度稳定模式）
 
 后续默认以已写明边界的相邻 2–3 条 `PHASEx.md` 切片作为一次工作批次，而不是每完成一个 Txx
-就等待用户再次发送“继续”。当前批次固定为 `BATCH21-22.md` 中的 T20/T21，不自动扩成 10 个
+就等待用户再次发送“继续”。当前计划批次固定为 `BATCH31-32.md` 中的 T30/T31，不自动扩成 10 个
 phase。每条切片按 fixture/native -> capture/structured data -> replay/readback/state -> 自动断言
 推进；前一条自动链路通过并记录批末 UI 待验后继续后一条。两条切片经最终联合验证和同一轮
-qrenderdoc 实机验收后一起关闭。
+用户 qrenderdoc L4 验收后一起关闭。T28/T29 的最终联合自动与用户同轮 L4
+均已通过，`QA_PENDING.md` 当前无待验项；
+从 BATCH29-30 起按 [QA_GUIDE.md](QA_GUIDE.md) 将 GUI 可见交互交给用户验收。
 
 为减少随 T 场景数量增长的重复消耗，每条切片开发时只构建受影响目标，并立即运行当前 fixture
 必要的 native/capture/replay 自动验证及受影响旧路径的定向断言。批末在最终构建上执行各 T 的
 CLI/lifecycle 与旧 T 清单的并集，重复 T 编号只跑一次；可复用最终代码上未受后续修改影响的
-已通过结果。涉及 UI 时，在同一轮最新 qrenderdoc 实机验收中依次打开批内 captures。
+已通过结果。命令行可判定的 QA 由 agent 完成；最终正式 captures 准备好后，
+agent 给出合并批内检查项的一次性 GUI 验收单，由用户在同一轮最新 qrenderdoc
+中依次打开并反馈。每个 T 的人工验收状态跨批次登记在 [QA_PENDING.md](QA_PENDING.md)；
+用户未回复、漏看或只反馈部分步骤时，未验功能持续“等待用户 L4”，后续功能可继续
+开发，但对应阶段/批次不关闭。每次结果和交接须列出全部仍待人工 QA 的 T。
 完整 `test_metal_capture_macos.sh` 与全部 capture 的 CLI replay/lifecycle 仅在较大里程碑、
 发布/合并前，或发现无法由定向测试覆盖的具体跨场景风险时
 运行，不是每个 Txx 阶段的关闭门槛。公共 replay、资源生命周期或 UI 代码变更先按受影响路径
@@ -223,8 +229,22 @@ T00-T17 L3 与最新 qrenderdoc L4 均通过。`PHASE19.md` 的 T18 已补 fragm
 slot/offset、reflection/descriptor/usage、FS 标准页面、Buffer/Resource 跳转与 HTML/CSV 导出；
 T00-T18 L3 与最新 qrenderdoc L4 均通过。`PHASE20.md` 的 T19 已补 vertex storage buffer、
 IA/storage 分类、VS 标准页面和 `VS_Resource`；T19/T18/T16/T02/T05 定向与最新 qrenderdoc L4
-通过，未触发全量 L3。下一批按 `BATCH21-22.md` 连续完成 T20 单命令 ICB 和 T21 indexed indirect，
-随后继续按 D3D/Vulkan 核对字段顺序与紧凑布局。
+通过，未触发全量 L3。`BATCH21-22.md` 又完成 T20 单命令 ICB、T21 indexed indirect、
+联合 T01/T02/T05/T13/T14/T20/T21 自动验证及同轮 qrenderdoc L4；T21 的 20-byte 五字段
+参数、6-byte 精确 index 范围和标准 IA/Mesh/Buffer/Resource 均通过，通用 Viewer 的 indirect
+标签/格式修正后 T13 非索引路径也复验通过。`BATCH23-24.md` 又完成 T22 非零 range 的多命令
+ICB 和 T23 indexed ICB：逐命令 action/state/usage、UInt16 index 4/6、两实例 Mesh 与标准
+Viewer 均通过；最终联合 T01/T02/T13/T14/T20/T21/T22/T23 自动、9×10 lifecycle 和最新
+qrenderdoc 同轮 L4 通过，L3 未触发。`BATCH25-26.md` 又完成 T24 reset 后重编码与 T25
+混合非索引/indexed ICB：reset snapshot、组合 commandTypes、逐命令 action/state/usage、
+联合 11×10 lifecycle 和最新 qrenderdoc 同轮 L4 通过，L3 未触发。`BATCH27-28.md`
+又完成 T26 pipeline inheritance 与 T27 buffers inheritance：两次 execute 的 pipeline
+17/18 和 Buffer 16/17 offset 16、逐 draw state/usage、红蓝输出、异常拒绝均通过；联合
+11×10 lifecycle 和同轮 qrenderdoc L4 通过，L3 未触发。此后 `BATCH29-30.md`
+完成 T28 compute `dispatchThreads` 与 T29 compute buffer binding；当前计划批次
+`BATCH31-32.md` 已规划 T30 compute sampler 直接绑定与 T31 compute texture/sampler/
+buffer 批量绑定，尚未实施。GPU 生成、compute ICB、heap、blit ICB 管理和多 queue
+仍由后续独立场景推进。
 
 任务：
 
@@ -293,9 +313,9 @@ MSL；绑定资源可跳转到对应 Buffer/Texture。
 
 任务：
 
-- [ ] M6.1 支持 compute pipeline、dispatch threadgroups/threads 和资源绑定。（T11 已覆盖
-  `dispatchThreadgroups` + 直接读写 2D texture；`dispatchThreads`、compute buffer/sampler 与更广
-  范围的资源绑定仍未覆盖。）
+- [ ] M6.1 支持 compute pipeline、dispatch threadgroups/threads 和资源绑定。（T11 已完成
+  `dispatchThreadgroups` + 直接读写 2D texture；T28 `dispatchThreads` 与 T29 直接 compute
+  buffer 绑定的自动验证与用户 L4 均已通过。compute sampler 与更广资源绑定仍未覆盖。）
 - [ ] M6.2 支持常用 blit encoder 操作以及 encoder/command buffer 间资源可见性。（T10 已完成
   同一 command buffer 中 blit→render 的 copy/fill/mipgen 与可见性；跨 command buffer/queue、
   更多 blit overload 和 managed-resource 同步待独立 fixture 验证。）
@@ -305,7 +325,8 @@ MSL；绑定资源可跳转到对应 Buffer/Texture。
   通用 descriptor/reflection、标准 Buffer/Texture/Resource Viewer 跳转与 DDS 保存；嵌套、数组、
   bindless/heap 和 compute argument buffer 不在本项范围。）
 - [x] M6.5 根据样例结果决定是否把 indirect command buffer/heaps 纳入首版扩展。（T13 证明单次
-  CPU/shared indirect draw 可独立闭环；ICB/heaps 保留为后续 P2 fixture，暂不纳入首版 P1 门槛。）
+  CPU/shared indirect draw；T20–T27 又完成单/多/混合/indexed ICB、reset、pipeline/buffer
+  inheritance 与标准 Viewer。heap、GPU 生成与 compute ICB 不纳入首版 P1 门槛。）
 
 阶段验收：compute texture processing 样例可 replay，dispatch 前后资源值正确；不支持的高级能力
 有明确诊断且不会破坏同帧其他事件。
@@ -429,3 +450,26 @@ pixel history、histogram、post-VS 和 custom/target shader build 均返回稳�
   对 binary library 只展示真实可用信息。
 - Apple Silicon unified memory 会掩盖离散 GPU storage 问题：测试矩阵仍区分 shared/private/managed，
   无法在本机验证的模式标记为待外部机器验证。
+
+## 最近批次记录
+
+- 2026-09-24：BATCH21-22 完成 T20 单命令 ICB 与 T21 indexed indirect；联合
+  T01/T02/T05/T13/T14/T20/T21 native/capture/XML/Replay API/CLI、异常拒绝、8×10 lifecycle
+  及最新 qrenderdoc 同轮 L4 通过。修正 T21 indirect 五字段 Viewer 标签/格式并复验 T13；
+  L3 未触发。下一批 BATCH23-24，第一项 P23.1。
+- 2026-09-24：BATCH23-24 完成 T22 多命令 ICB 与 T23 indexed ICB；联合
+  T01/T02/T13/T14/T20/T21/T22/T23 native/capture/XML/Replay API/CLI、异常拒绝、
+  9×10 lifecycle 和最新 qrenderdoc 同轮 L4 通过。L3 未触发。下一批 BATCH25-26，
+  第一项 P25.1。
+- 2026-09-24：BATCH25-26 完成 T24 ICB reset 后重编码与 T25 混合非索引/indexed ICB；联合
+  T01/T02/T13/T14/T20/T21/T22/T23/T24/T25 native/capture/XML/Replay API/CLI、异常拒绝、
+  11×10 lifecycle 和最新 qrenderdoc 同轮 L4 通过。L3 未触发。下一批 BATCH27-28，
+  第一项 P27.1。
+- 2026-09-24：BATCH27-28 完成 T26 ICB pipeline inheritance 与 T27 buffer inheritance；
+  联合 T01/T05/T16/T19/T20/T22/T24/T25/T26/T27 自动、异常拒绝、逐份 CLI replay、
+  11×10 lifecycle 和最新 qrenderdoc 同轮 L4 通过。L3 未触发。下一批 BATCH29-30，
+  第一项 P29.1。
+
+- 2026-09-24：BATCH29-30 的 T28/T29 自动链路、10 类异常拒绝、联合
+  T11/T10/T01/T18/T19/T12/T16/T17、11×10 lifecycle 全部通过；L3 未触发。
+  此后用户同轮 L4 已确认，T28/T29 与批次关闭；下一批 BATCH31-32 从 P31.1 开始。

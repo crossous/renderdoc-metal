@@ -591,3 +591,138 @@
 - 验证：T19 的 slot 4 used、slot 6 unused、256+512/320+448 descriptor、四象限、raw/seek/usage，
   T18/T16 必跑及因分类改动触发的 T02/T05 均通过；最新 qrenderdoc 的 IA 空表、VS Storage Buffers、
   Buffer/Resource、HTML/CSV/bin 与 `No problems detected` 已核对。定向证据界定了风险，未执行 L3。
+
+## D043：单命令 ICB 的 execute marker 与展开 draw 各占真实事件
+
+- 日期：2026-09-24
+- 状态：已采用；T20 联合 L1/L2/L4 通过，批次已关闭
+- 决策：T20 保存 ICB descriptor、index 0 的 pipeline/vertex buffer/draw 编码及
+  `executeCommandsInBuffer` 的 range `0+1`。捕获时为 execute marker 和实际执行各写一个 chunk，
+  replay 中分别形成连续事件；展开 draw 使用真实 Metal ICB 执行，并把 pipeline、offset 16 的
+  vertex binding、拓扑与资源 usage 写入标准 action/pipeline 来源。
+- 原因：独立的 marker 和 draw 事件使 Event/API 能显示执行边界，同时事件 seek 可在两者之间区分
+  clear 与 draw 输出；把两者压在同一事件会让标准 Viewer 的 draw-time 状态和导航不稳定。
+- 边界：仅支持 CPU 编码、单 render pass、容量 2 中 index 0 的一条非索引 draw；不承诺 GPU
+  命令生成、inherit pipeline/buffers、indexed ICB、reset、多命令或多 queue。无效 descriptor、
+  缺失资源和越界 range/index 在 replay 明确拒绝。
+- 验证：T20 native/capture/XML、Replay API action/state/usage/readback/seek、原始字节、6 类
+  异常 RDC、联合清单与 lifecycle 通过；最新 qrenderdoc 的 Event/API、IA/Mesh/Buffer/
+  Resource、红色输出及 HTML/CSV 验收通过。
+
+## D044：indexed indirect 用真实五字段确定 action 和精确 IA 子范围
+
+- 日期：2026-09-24
+- 状态：已采用；T21 联合 L1/L2/L4 通过，批次已关闭
+- 决策：T21 保存 indexed indirect overload 的 index/参数 buffer 与各自 offset。replay 从
+  20-byte shared 参数包读取 indexCount、instanceCount、indexStart、baseVertex、baseInstance；
+  IA index binding 指向 `indexBufferOffset + indexStart * stride`，长度为
+  `indexCount * stride`，action 的 indexOffset 相对该 binding 为 0。indirect 参数 binding
+  精确指向 20-byte 子范围；通用 index buffer description 标为 `Index`，resource usage 分别
+  标为 `IndexBuffer` 与 `Indirect`。
+- 原因：indexStart 属于参数包而非 API offset；若 IA 仍从 API offset 展示，会让 Mesh/Buffer
+  Viewer 看到被跳过的哨兵，并与实际 GPU 绘制及 action 不一致。
+- 边界：仅支持单次 CPU 写入 shared 参数的 UInt16/UInt32 indexed indirect；不承诺 GPU 生成
+  参数、indexed ICB、heap 或多 queue。缺失资源、错位/越界 offset、越界或零 index 数在
+  replay 明确拒绝。
+- 验证：T21 native/capture/XML、Replay API 五字段/IA/Mesh/usage/readback/seek、9 类异常
+  RDC、T02/T14 分类路径与联合清单通过；最新 qrenderdoc 的 Event/API、IA/Mesh/Buffer/
+  Resource、红蓝输出及 HTML/CSV 验收通过。
+
+## D045：Metal Pipeline 的 indirect 参数格式按 action 区分
+
+- 日期：2026-09-24
+- 状态：已采用；T13/T21 最新 qrenderdoc L4 通过
+- 决策：Metal Pipeline 的 Indirect Buffer 行根据当前 action 的 `Indexed` 标志展示
+  `Draw Indexed Primitives` 或 `Draw Primitives`；跳转标准 Buffer Viewer 时分别使用
+  五字段 `indexCount/instanceCount/indexStart/baseVertex/baseInstance` 或四字段
+  `vertexCount/instanceCount/vertexStart/baseInstance` 格式。
+- 原因：T21 的参数包是 20-byte indexed 布局。固定四字段格式会把 `baseVertex` 误读为
+  `baseInstance`，并隐藏真正的第五字段，尽管底层 replay 数据正确。
+- 边界：仅修正通用 Viewer 显示与跳转格式，capture/replay 文件及 action/state 不变。
+- 验证：最终 `build-qrenderdoc` 成功；T13 Replay API smoke 通过。相同进程中 T21 显示
+  20-byte 五字段 `3/2/1/1/1` 和 `Draw Indexed Primitives`，T13 显示 16-byte 四字段
+  `3/2/1/1` 和 `Draw Primitives`；T20/T21 同一轮 L4 与导出通过。
+
+## D046：多命令 ICB 的 execute 保留原始 marker，各 draw 各占一条回放 chunk
+
+- 日期：2026-09-24
+- 状态：已采用；T22 与 T23 最终联合自动及同轮 qrenderdoc L4 通过
+- 决策：一次真实 Metal `executeCommandsInBuffer(icb, range)` 在 capture 中保留完整
+  `range` 的 marker，并为范围内每个 command 写独立的 draw 回放 chunk。回放以单 command
+  子范围调用真实 ICB，使每个 draw 有不同文件偏移和 EID、可独立 seek 与保存 draw-time
+  pipeline/vertex state。
+- 原因：单个 chunk 内连续生成多个事件会共享文件偏移，无法通过现有 ReplayLog 事件范围
+  精确回放第一条与第二条 draw。拆为逐命令 chunk 后，Event/API、回退和标准 Viewer 均使用
+  原有事件语义；捕获进程仍只执行一次原始 range。
+- 边界：T22 支持 CPU 编码的非索引多命令 ICB；indexed command 由 T23 接入。无效 range、
+  未编码命令、缺失资源和不支持 inheritance 在 replay 明确拒绝。
+- 验证：T22 native/capture/XML、逐命令 Replay API action/state/usage/readback/seek、11 类
+  异常拒绝及最终联合定向、CLI、9×10 lifecycle 通过；与 T23 同轮 qrenderdoc L4 核对
+  `1+2` range、两个 draw、IA/Mesh/Buffer/Resource、HTML/CSV 和无错误状态栏。
+
+## D047：indexed ICB command 保留独立 index 子范围与 draw-time 状态
+
+- 日期：2026-09-24
+- 状态：已采用；T23 最终联合自动及同轮 qrenderdoc L4 通过
+- 决策：T23 在 CPU 编码的 render ICB command 中保存 index type/buffer/byte offset、
+  indexCount、instanceCount、baseVertex、baseInstance；replay 重建真实 ICB indexed command，
+  展开 draw 使用 `Drawcall|Indexed|Indirect|Instanced` 和精确 index 子范围。Metal 的 ICB
+  indexed 方法没有独立 `indexStart`，本场景用非零 `indexBufferOffset` 表示索引起点。
+- 原因：T21 的 indexed indirect 参数 buffer 与 T23 的 ICB command 是不同 API 路径。
+  index 子范围、两条 vertex binding 和实例布局需在同一 draw-time state 中一致，才能让
+  IA/Mesh/Buffer/Resource Viewer 显示真实执行的输入。
+- 边界：本场景仅承诺 CPU 编码、UInt16 fixture 与非继承 descriptor；实现可接收经检查的
+  UInt16/UInt32，GPU 生成命令、reset、继承绑定、heap 和多 queue 留待独立场景。
+- 验证：T23 native/capture/XML/Replay API、6-byte index raw、18 类异常拒绝、联合定向、
+  CLI、9×10 lifecycle 通过。最新 qrenderdoc 显示 command index 1、UInt16 Buffer 18
+  offset 4/size 6、Buffer 16/17 与 Mesh 两实例、Index Buffer/ICB usage、红蓝输出、
+  HTML/CSV/DDS 和无错误状态栏。
+
+## D048：ICB reset chunk 追加编号并同步清空真实命令与 capture snapshot
+
+- 日期：2026-09-24
+- 状态：已采用；T24 最终联合 L1/L2/L4 通过，批次已关闭
+- 决策：把 `MTLIndirectCommandBuffer_reset` 作为新的 Metal chunk 追加在既有 indexed ICB
+  chunk 之后，避免重编号已产生 capture 的 chunk id。capture 记录 `resetWithRange`；replay 先
+  严格验证非空、无溢出且在容量内的 range，再对真实 ICB 调用 reset，并把同范围的
+  `MetalIndirectDraw` snapshot 清空。后续对相同 command index 的编码从空 snapshot 重建。
+- 原因：只重置真实 Metal 对象会让旧 pipeline/vertex/index 资源继续出现在 action/state/usage；
+  只清 snapshot 又会让 GPU 执行旧命令。追加 chunk id 同时保持现有测试 capture 的枚举稳定。
+- 边界：当前承诺 ICB buffer 的 `resetWithRange`；单个 `MTLIndirectRenderCommand::reset`、blit
+  encoder 的 reset/copy/optimize、GPU 生成命令另立场景。重置后未重编码的 execute 明确失败。
+- 验证：T24 native/capture/XML、三个展开 draw、4×104-byte 原始包、旧资源无 VertexBuffer
+  usage、8 类异常、T20/T22/T23 定向、CLI/lifecycle 与最新 qrenderdoc replacement/邻居/
+  HTML/CSV/红绿蓝输出通过。
+
+## D049：混合 ICB descriptor 保留 commandTypes 位掩码并按每条命令验证类型
+
+- 日期：2026-09-24
+- 状态：已采用；T25 最终联合 L1/L2/L4 通过，批次已关闭
+- 决策：`WrappedMTLIndirectCommandBuffer` 保存原始 `MTLIndirectCommandType` 位掩码；当前
+  允许 Draw、DrawIndexed，以及二者组合且最多两个 vertex buffer 的非继承 descriptor。
+  `drawPrimitives`/`drawIndexedPrimitives` 分别检查对应 bit，再为每个 command snapshot 保存
+  独立类型与资源。execute 展开时非索引 action 明确清空 index state，indexed action 保留精确
+  UInt16/UInt32 子范围。
+- 原因：把组合 descriptor 折叠成单一类型会错误拒绝其中一条命令，或让非索引 draw 继承前一条
+  indexed binding。保留位掩码并在命令入口验证，能让真实 Metal、capture 诊断和 Viewer 状态一致。
+- 边界：当前组合场景只承诺 CPU 编码、非继承 pipeline/buffers、零 fragment bind count；
+  inheritance 由 T26/T27 覆盖，compute ICB、ray tracing、heap、GPU 生成与多 queue 不在本决策内。
+- 验证：T25 native/capture/XML、两个 action、252-byte 原始资源、15 类异常、联合定向、CLI、
+  11×10 lifecycle 通过；最新 qrenderdoc 显示 direct 无 index、indexed UInt16 4/6 与两实例、
+  独立 IA/Mesh/Buffer/Resource、红绿蓝输出、HTML/CSV/DDS 和无错误状态栏。
+
+## D050：compute thread grid 与 buffer descriptor 沿标准 replay action/state/Viewer 接入
+
+- 日期：2026-09-24
+- 状态：已采用；T28/T29 自动验证通过，用户 L4 待验
+- 决策：`dispatchThreads` 与 compute `setBuffer` 各追加 Metal chunk id，保持旧 capture
+  编号稳定。T28 action 保存 total grid 与 threadsPerThreadgroup，并验证非零、尺寸和资源。
+  T29 将 buffer slot/offset/剩余范围写入 `MetalPipe::State::computeBuffers`；descriptor access
+  以独立偏移段区分 compute 只读和读写 buffer，CS Pipeline 使用标准 Buffer Viewer 跳转。
+  output buffer 在 frame 内经 blit fill 为哨兵，支持 event seek 的前后对比。
+- 原因：仅转发真实 Metal 调用无法在 RDC 中重建绑定和 dispatch，也无法让标准 CS
+  Viewer、Resource usage 与逐事件数据保持一致。
+- 边界：本批 fixture 限 2D RGBA8 texture 和 shared uint buffer；未覆盖 compute sampler、
+  间接 dispatch、跨 queue、heap 或 compute ICB。非法 slot/offset/resource/grid 稳定拒绝。
+- 验证：T28/T29 native/capture/XML/Replay API、10 类异常 RDC、联合定向、CLI、
+  11×10 lifecycle 与 DDS/raw 内容自动通过；合并 GUI L4 见 `QA_BATCH29-30.md`。

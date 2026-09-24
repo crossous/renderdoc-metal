@@ -50,25 +50,48 @@ MetalFX、任意第三方应用注入或完整 capture 产品化为目标。为�
 - [PHASE18.md](PHASE18.md)：已完成的 T17 texture/sampler 批量绑定纵向切片。
 - [PHASE19.md](PHASE19.md)：已完成的 T18 fragment storage buffer 纵向切片。
 - [PHASE20.md](PHASE20.md)：已完成的 T19 vertex storage buffer 纵向切片。
-- [BATCH21-22.md](BATCH21-22.md)：下一批 T20/T21 的联合验收与批内状态规则。
-- [PHASE21.md](PHASE21.md)：批内第一条 T20 单命令 indirect command buffer 纵向切片。
-- [PHASE22.md](PHASE22.md)：批内第二条 T21 indexed indirect draw 纵向切片。
+- [BATCH21-22.md](BATCH21-22.md)：已关闭的 T20/T21 联合验收记录。
+- [PHASE21.md](PHASE21.md)：已完成的 T20 单命令 indirect command buffer 纵向切片。
+- [PHASE22.md](PHASE22.md)：已完成的 T21 indexed indirect draw 纵向切片。
+- [BATCH23-24.md](BATCH23-24.md)：已关闭的 T22/T23 多命令与 indexed ICB 联合验收记录。
+- [PHASE23.md](PHASE23.md)：已完成的 T22 多命令 ICB 与非零 execute range 纵向切片。
+- [PHASE24.md](PHASE24.md)：已完成的 T23 indexed ICB command 纵向切片。
+- [BATCH25-26.md](BATCH25-26.md)：已关闭的 T24/T25 ICB reset 与混合命令联合验收记录。
+- [PHASE25.md](PHASE25.md)：已完成的 T24 ICB resetWithRange 与重编码纵向切片。
+- [PHASE26.md](PHASE26.md)：已完成的 T25 混合非索引与 indexed ICB 纵向切片。
+- [BATCH27-28.md](BATCH27-28.md)：已关闭的 T26/T27 ICB pipeline/buffers inheritance 联合验收记录。
+- [PHASE27.md](PHASE27.md)：已完成的 T26 ICB 继承 render pipeline 纵向切片。
+- [PHASE28.md](PHASE28.md)：已完成的 T27 ICB 继承 vertex buffers 纵向切片。
+- [BATCH29-30.md](BATCH29-30.md)：已关闭的 T28/T29 compute dispatch 与 buffer binding 联合验收记录。
+- [PHASE29.md](PHASE29.md)：已完成的 T28 compute dispatchThreads 纵向切片。
+- [PHASE30.md](PHASE30.md)：已完成的 T29 compute buffer binding 纵向切片。
+- [BATCH31-32.md](BATCH31-32.md)：当前计划批次 T30/T31 compute sampler 与批量资源绑定；尚未实施。
+- [PHASE31.md](PHASE31.md)：T30 compute sampler 直接绑定计划。
+- [PHASE32.md](PHASE32.md)：T31 compute texture/sampler/buffer 批量绑定计划。
 - [STATUS.md](STATUS.md)：当前状态、最近验证结果、阻塞项和下一步。
 - [TEST_MATRIX.md](TEST_MATRIX.md)：Metal API/资源/UI 覆盖矩阵与测试样例来源。
 - [HANDOFF.md](HANDOFF.md)：新 agent 的接手规则、省额度验证节奏、compact/新任务边界和可复制提示。
+- [QA_GUIDE.md](QA_GUIDE.md)：从 BATCH29-30 起的命令行 QA 与用户 GUI L4 分工、一次性验收单格式。
+- [QA_PENDING.md](QA_PENDING.md)：跨批次保留每个 T 的人工 L4 待验状态与用户反馈。
+- [QA_BATCH29-30.md](QA_BATCH29-30.md)：最终 T28/T29 正式 captures 的合并 GUI 验收单。
 - [HANDOFF_HISTORY.md](HANDOFF_HISTORY.md)：按需追查的历史阶段交接证据。
 - [DECISIONS.md](DECISIONS.md)：关键架构与范围决策。
 
 ## 当前状态
 
-T00-T19 的 Native/Capture/RDC inspect/Replay/UI 纵向切片已关闭。最新 T19 完成 vertex
-storage buffer 的非零 slot/offset、reflection/descriptor/usage、VS Storage Buffers、标准 Buffer
-Viewer 与资源跳转；T19/T18/T16/T02/T05 定向回归和最新 qrenderdoc 实机验收通过，未触发
-T00-T19 全量 L3。下一批按 `BATCH21-22.md` 连续实现 `PHASE21.md` 的 T20 单命令 ICB 与
-`PHASE22.md` 的 T21 indexed indirect。每条切片立即完成必要自动验证；批末在最终构建上做一次
-去重的联合定向测试和同一轮 qrenderdoc 实机验收，两条阶段一起关闭。接手时只需阅读本入口、
-`STATUS.md` 当前批次与恢复检查点、BATCH/两份 PHASE 和 `HANDOFF.md` 的验证规则；`PLAN.md` 与
-历史阶段文档按需查阅。
+T00-T29 的 Native/Capture/RDC inspect/Replay/UI 纵向切片已关闭。
+最近一批 `BATCH29-30.md` 的 T28 `dispatchThreads`、T29 compute buffer binding
+完成自动验证与同轮用户 L4。用户确认 T28/T29 右侧缩略图、T29 `$action()`
+筛选及先前各项；T28 DDS 与自动参考一致，T22/T25 事件树复验通过。
+Texture Viewer 缩略图空白已通过 Metal Headless output 修复。当前
+`QA_PENDING.md` 无待验项。下一批 `BATCH31-32.md` 计划 T30 compute sampler
+直接绑定与 T31 compute 批量资源绑定；第一项 P31.1，尚未开始实现。
+接手时只读本入口、`STATUS.md` 当前批次与最新检查点、当前 BATCH/两份 PHASE 和
+`HANDOFF.md`、`QA_GUIDE.md` 验证规则及 `QA_PENDING.md` 待验清单；`PLAN.md` 与历史文档
+按需查阅。正式 captures 与本机构建仍保留在各自的忽略目录。
+从 BATCH29-30 起，agent 完成终端可判定的 QA；最终 GUI 交互由用户按合并的验收单
+一次完成。未收到用户明确反馈的功能会持续列在 `QA_PENDING.md`，以后每次结果都会提示；
+下一功能可以继续开发，未验批次不会被标为关闭。当前无人工待验项。
 
 ## 初始基线结论（2026-09-20）
 

@@ -52,8 +52,18 @@
 | T17 | texture/sampler batch binding | vertex/fragment range、空槽与 used/unused | P1 | Native/Capture/XML/Replay、4 份异常 RDC、descriptor/usage/seek、DDS/HTML、18×10 lifecycle 与最新 qrenderdoc L4 通过 |
 | T18 | fragment storage buffer | 非零 slot、结构化只读 buffer、PS Resource | P1 | Native/Capture/XML/Replay、descriptor/usage/seek、raw/CSV/HTML、19×10 lifecycle 与最新 qrenderdoc L4 通过 |
 | T19 | vertex storage buffer | 非零 slot、只读 buffer、VS Resource | P1 | Native/Capture/XML/Replay、descriptor/usage/seek、raw/CSV/HTML、本场景 lifecycle 与最新 qrenderdoc L4 通过；T18/T16/T02/T05 定向通过，L3 未触发 |
-| T20 | indirect command buffer | 单命令 ICB、execute range、资源与 action | P2 | 待开始；批内自动验证后标“批末 UI 待验”，见 `BATCH21-22.md` / `PHASE21.md` |
-| T21 | indexed indirect draw | 间接五字段、非零 index/参数 offset、IA/Mesh | P2 | 待 T20 自动链路完成后开始；与 T20 批末联合验收，见 `PHASE22.md` |
+| T20 | indirect command buffer | 单命令 ICB、execute range、资源与 action | P2 | Native/Capture/XML/Replay/readback/action/state、6 类异常 RDC、联合 T01/T02/T05/T13/T14 定向、CLI/8×10 lifecycle 与最新 qrenderdoc Event/API/IA/Mesh/Buffer/Resource/HTML/CSV L4 通过；L3 未触发 |
+| T21 | indexed indirect draw | 间接五字段、非零 index/参数 offset、IA/Mesh | P2 | Native/Capture/XML/Replay/readback/action/state、9 类异常 RDC、联合清单/CLI/8×10 lifecycle 与最新 qrenderdoc Event/API/IA/Mesh/Buffer/Resource/五字段 CSV/HTML L4 通过；T13 四字段 UI 复验通过，L3 未触发 |
+| T22 | 多命令 ICB | 非零 execute range、多个展开 draw 与逐命令 state | P2 | Native/Capture/XML/Replay API/CLI、三包原始字节、逐事件 seek、11 类异常拒绝、联合 9×10 lifecycle 与最新 qrenderdoc Event/API/IA/Mesh/Buffer/Resource/HTML/CSV L4 通过；L3 未触发 |
+| T23 | indexed ICB | ICB indexed command、index offset/base vertex/instance | P2 | Native/Capture/XML/Replay API/CLI、6-byte index raw、两实例 Mesh、18 类异常拒绝、联合 9×10 lifecycle 与最新 qrenderdoc Event/API/IA/Mesh/Buffer/Resource/HTML/CSV/DDS L4 通过；L3 未触发 |
+| T24 | ICB reset 后重编码 | `resetWithRange` 失效旧命令、替换与邻居保留 | P2 | Native/Capture/XML/Replay API/CLI、4 包原始字节、逐事件 seek、旧资源无 draw usage、8 类异常拒绝、联合 11×10 lifecycle 与最新 qrenderdoc Event/API/IA/Mesh/Buffer/Resource/HTML/CSV L4 通过；L3 未触发 |
+| T25 | 混合命令 ICB | 同一 descriptor/range 的非索引与 indexed draw | P2 | Native/Capture/XML/Replay API/CLI、252-byte 原始资源、逐事件 seek、15 类异常拒绝、联合清单/lifecycle 与最新 qrenderdoc 两类 action、IA/Mesh/Buffer/Resource、HTML/CSV/DDS L4 通过；L3 未触发 |
+| T26 | ICB inherit pipeline | execute 时继承 render encoder pipeline | P2 | Native/Capture/XML/Replay API/CLI、24-byte 原始顶点、逐事件 state/seek、异常拒绝、联合 11×10 lifecycle 与同轮最新 qrenderdoc Pipeline 17/18、IA/Mesh/Buffer/Resource、HTML/CSV/DDS L4 通过；L3 未触发 |
+| T27 | ICB inherit buffers | execute 时继承 vertex buffer 与动态 offset | P2 | Native/Capture/XML/Replay API/CLI、2×104-byte 原始 packet、逐事件 state/seek、异常拒绝、联合 11×10 lifecycle 与同轮最新 qrenderdoc Buffer 16/17 offset 16、IA/Mesh/Resource、HTML/CSV/DDS L4 通过；L3 未触发 |
+| T28 | compute dispatchThreads | thread-level grid、非整除边界与 action | P2 | Native/Capture/XML/Replay API action/state/usage/readback/seek、10×7 局部更新/透明边界、DDS、异常拒绝、联合 CLI/lifecycle 与 GUI L4 通过；右侧缩略图已验 |
+| T29 | compute buffer binding | 非零 offset 的 compute buffer 输入/输出 | P2 | Native/Capture/XML/Replay API buffer slot 2/4、offset 32/64、272-byte descriptor、原始字节/像素/seek、异常拒绝、联合 CLI/lifecycle 与 GUI L4 通过；`$action()` 和右侧缩略图已验 |
+| T30 | compute sampler 直接绑定 | CS sampler slot、采样过滤/寻址、状态与输出 | P2 | 下一批已规划，尚未实施；见 `PHASE31.md` |
+| T31 | compute 批量资源绑定 | 非零 range、空槽/覆盖、texture/sampler/buffer 批量入口 | P2 | 下一批已规划，尚未实施；见 `PHASE32.md` |
 
 ## 外部样例候选
 
@@ -286,7 +296,8 @@ History/Debug 按钮明确显示不支持且保持禁用。
 
 ```text
 每个 T：Native reference -> Capture -> RDC/chunk inspection -> Replay/readback/state 自动断言
-批次末：最终构建 -> 去重的 L1/L2 + CLI/lifecycle -> 同一轮 qrenderdoc L4 -> 两阶段关闭
+批次末：最终构建 -> agent 完成去重的 L1/L2 + CLI/lifecycle -> 用户按 QA_GUIDE.md
+在同一轮 qrenderdoc 完成 L4 并反馈 -> 两阶段关闭
 ```
 
 T19 使用 768-byte shared buffer，在 byte offset 256 保存 24 个 `float4` 位置；vertex shader 从
@@ -296,6 +307,18 @@ T19/T18/T16/T02/T05 定向、CLI replay 与本场景 10 轮 lifecycle 通过；�
 VS Storage Buffers、used/unused、标准 Buffer/Resource、HTML/CSV/raw 与状态栏。未触发 T00-T19 L3；
 最近完整基线仍为 T00-T18。
 
-T00-T19 已完成整条链路；T19 当前证据与限制集中在 `PHASE20.md`。下一批是
-`BATCH21-22.md` 的 T20 单命令 ICB 与 T21 indexed indirect：每条切片立即验证功能自动链路，
-最终构建上联合去重测试，并在同一轮 qrenderdoc 验收两份 capture 后一起关闭。
+T00-T29 已完成整条链路；T26/T27 的联合自动与同轮 qrenderdoc 证据集中在
+`BATCH27-28.md`。T28/T29 的自动链路、最终联合定向及用户同轮 L4
+均已通过，两条及批次关闭；见 `BATCH29-30.md`。每条切片立即验证功能自动链路，
+最终构建上由 agent 联合去重测试；用户按 `QA_GUIDE.md` 的一次性验收单，在同一轮
+qrenderdoc 验收两份 capture 并反馈后一起关闭。
+
+## T28/T29 自动与验收摘要
+
+T28 用 7×5 `dispatchThreads`、4×3 threadgroup 更新 10×7 RGBA8 texture，右三列与下两行
+保持零；T29 用 compute buffer slot 2/4、offset 32/64 读写 64 个 uint，前后哨兵保持
+`0xa5`。两项的 action/state/usage/descriptor、逐事件 seek、原始字节、最终像素、DDS/raw
+输出均自动断言；10 类异常 RDC 被拒绝。联合 T11/T10/T01/T18/T19/T12/T16/T17
+通过，11×10 lifecycle resident growth 1,638,400 bytes。随后缩略图修复追加
+T01/T03/T09/T11/T12/T16/T17/T22/T25/T28/T29 Replay API 与 CLI，12×10
+lifecycle 通过；GUI L4 见 `QA_BATCH29-30.md`，L3 未触发。
