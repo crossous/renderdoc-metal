@@ -872,13 +872,10 @@
                indirectBuffer:(id<MTLBuffer>)indirectBuffer
          indirectBufferOffset:(NSUInteger)indirectBufferOffset API_AVAILABLE(macos(10.11), ios(9.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawIndexedPrimitives:primitiveType
-                                indexType:indexType
-                              indexBuffer:indexBuffer
-                        indexBufferOffset:indexBufferOffset
-                           indirectBuffer:indirectBuffer
-                     indirectBufferOffset:indirectBufferOffset];
+  GetWrapped(self)->drawIndexedPrimitives((MTL::PrimitiveType)primitiveType,
+                                          (MTL::IndexType)indexType, GetWrapped(indexBuffer),
+                                          indexBufferOffset, GetWrapped(indirectBuffer),
+                                          indirectBufferOffset);
 }
 
 #pragma clang diagnostic push
@@ -1214,8 +1211,9 @@
 - (void)executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)indirectCommandBuffer
                       withRange:(NSRange)executionRange API_AVAILABLE(macos(10.14), ios(12.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real executeCommandsInBuffer:indirectCommandBuffer withRange:executionRange];
+  GetWrapped(self)->executeCommandsInBuffer(GetWrapped(indirectCommandBuffer),
+                                             NS::Range::Make(executionRange.location,
+                                                             executionRange.length));
 }
 
 - (void)executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)indirectCommandbuffer

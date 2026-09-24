@@ -573,6 +573,11 @@ MainWindow::MainWindow(ICaptureContext &ctx) : QMainWindow(NULL), ui(new Ui::Mai
     QKeySequence ks = a->shortcut();
     if(!ks.isEmpty())
     {
+      // The menu action already owns this shortcut. Running it from ShortcutOverride as well
+      // makes one Cmd+O open two file dialogs on macOS after the first capture finishes loading.
+      if(a == ui->action_Open_Capture)
+        continue;
+
       m_GlobalShortcutCallbacks[ks] = [a](QWidget *) {
         if(a->isEnabled())
           a->trigger();

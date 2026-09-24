@@ -27,6 +27,7 @@
 #include "metal_compute_pipeline_state.h"
 #include "metal_replay.h"
 #include "metal_texture.h"
+#include "metal_buffer.h"
 
 WrappedMTLComputeCommandEncoder::WrappedMTLComputeCommandEncoder(MTL::ComputeCommandEncoder *real,
                                                                  ResourceId id,
@@ -143,6 +144,46 @@ void WrappedMTLComputeCommandEncoder::setTexture(WrappedMTLTexture *texture, NS:
 }
 
 template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setBuffer(SerialiserType &ser,
+                                                            WrappedMTLBuffer *buffer,
+                                                            NS::UInteger offset,
+                                                            NS::UInteger index)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(buffer).Important();
+  SERIALISE_ELEMENT(offset).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    if(!buffer || index >= 31 || offset >= Unwrap(buffer)->length())
+    {
+      RDCERR("Invalid Metal compute buffer binding or offset");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->setBuffer(Unwrap(buffer), offset, index);
+    m_Device->GetReplay()->BindComputeBuffer((uint32_t)index, GetResID(buffer), (uint64_t)offset);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setBuffer(WrappedMTLBuffer *buffer, NS::UInteger offset,
+                                                  NS::UInteger index)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->setBuffer(Unwrap(buffer), offset, index));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setBuffer);
+    Serialise_setBuffer(ser, buffer, offset, index);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(buffer), eFrameRef_ReadBeforeWrite);
+  }
+}
+
+template <typename SerialiserType>
 bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserType &ser,
                                                                         MTL::Size &groups,
                                                                         MTL::Size &threadsPerGroup)
@@ -172,6 +213,16 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       RDCERR("Invalid Metal compute texture binding or dispatch grid");
       return false;
     }
+    const MetalPipe::BufferBinding input = replay->GetComputeBuffer(2);
+    const MetalPipe::BufferBinding output = replay->GetComputeBuffer(4);
+    if((input.resourceId != ResourceId() || output.resourceId != ResourceId()) &&
+       (input.resourceId == ResourceId() || output.resourceId == ResourceId() ||
+        input.byteSize < (uint64_t)destination.width * destination.height * 4 ||
+        output.byteSize < (uint64_t)destination.width * destination.height * 4))
+    {
+      RDCERR("Invalid Metal compute buffer range");
+      return false;
+    }
     realEncoder->dispatchThreadgroups(groups, threadsPerGroup);
     if(IsLoading(m_State))
     {
@@ -191,6 +242,11 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       AddAction(action);
       replay->AddUsage(replay->GetComputeTexture(0), ResourceUsage::CS_Resource);
       replay->AddUsage(replay->GetComputeTexture(1), ResourceUsage::CS_RWResource);
+      if(input.resourceId != ResourceId())
+      {
+        replay->AddUsage(input.resourceId, ResourceUsage::CS_Resource);
+        replay->AddUsage(output.resourceId, ResourceUsage::CS_RWResource);
+      }
     }
   }
   return true;
@@ -209,10 +265,79 @@ void WrappedMTLComputeCommandEncoder::dispatchThreadgroups(MTL::Size &groups,
   }
 }
 
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreads(SerialiserType &ser,
+                                                                  MTL::Size &grid,
+                                                                  MTL::Size &threadsPerGroup)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(grid).Important();
+  SERIALISE_ELEMENT(threadsPerGroup).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    MetalReplay *replay = m_Device->GetReplay();
+    const TextureDescription source = replay->GetTexture(replay->GetComputeTexture(0));
+    const TextureDescription destination = replay->GetTexture(replay->GetComputeTexture(1));
+    if(source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
+       source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
+       source.width != destination.width || source.height != destination.height ||
+       source.format != destination.format || grid.width == 0 || grid.height == 0 ||
+       grid.depth != 1 || grid.width > destination.width || grid.height > destination.height ||
+       threadsPerGroup.width == 0 || threadsPerGroup.height == 0 ||
+       threadsPerGroup.depth != 1 || threadsPerGroup.width > 1024 ||
+       threadsPerGroup.height > 1024 ||
+       threadsPerGroup.width * threadsPerGroup.height > 1024)
+    {
+      RDCERR("Invalid Metal compute texture binding or thread grid");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->dispatchThreads(grid, threadsPerGroup);
+    if(IsLoading(m_State))
+    {
+      AddEvent();
+      ActionDescription action;
+      action.customName = StringFormat::Fmt("dispatchThreads(%llux%llux1, %llux%llux1)",
+                                             (uint64_t)grid.width, (uint64_t)grid.height,
+                                             (uint64_t)threadsPerGroup.width,
+                                             (uint64_t)threadsPerGroup.height);
+      action.flags = ActionFlags::Dispatch;
+      action.dispatchDimension[0] = (uint32_t)grid.width;
+      action.dispatchDimension[1] = (uint32_t)grid.height;
+      action.dispatchDimension[2] = 1;
+      action.dispatchThreadsDimension[0] = (uint32_t)threadsPerGroup.width;
+      action.dispatchThreadsDimension[1] = (uint32_t)threadsPerGroup.height;
+      action.dispatchThreadsDimension[2] = 1;
+      AddAction(action);
+      replay->AddUsage(replay->GetComputeTexture(0), ResourceUsage::CS_Resource);
+      replay->AddUsage(replay->GetComputeTexture(1), ResourceUsage::CS_RWResource);
+    }
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::dispatchThreads(MTL::Size &grid,
+                                                        MTL::Size &threadsPerGroup)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->dispatchThreads(grid, threadsPerGroup));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_dispatchThreads);
+    Serialise_dispatchThreads(ser, grid, threadsPerGroup);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
 INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, endEncoding);
 INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setComputePipelineState,
                                 WrappedMTLComputePipelineState *pipeline);
 INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setTexture,
                                 WrappedMTLTexture *texture, NS::UInteger index);
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setBuffer,
+                                WrappedMTLBuffer *buffer, NS::UInteger offset, NS::UInteger index);
 INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, dispatchThreadgroups,
                                 MTL::Size &groups, MTL::Size &threadsPerGroup);
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, dispatchThreads,
+                                MTL::Size &grid, MTL::Size &threadsPerGroup);

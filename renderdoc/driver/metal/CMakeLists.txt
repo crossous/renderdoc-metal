@@ -35,6 +35,9 @@ set(sources
     metal_sampler_state.cpp
     metal_sampler_state.h
     metal_sampler_state_bridge.mm
+    metal_indirect_command_buffer.cpp
+    metal_indirect_command_buffer.h
+    metal_indirect_command_buffer_bridge.mm
     metal_texture.cpp
     metal_texture.h
     metal_texture_bridge.mm

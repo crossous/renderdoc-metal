@@ -503,6 +503,25 @@ ResourceId MetalReplay::GetComputeTexture(uint32_t index) const
              : ResourceId();
 }
 
+void MetalReplay::BindComputeBuffer(uint32_t index, ResourceId id, uint64_t offset)
+{
+  m_CurrentPipelineState.computeBuffers.resize_for_index(index);
+  MetalPipe::BufferBinding &binding = m_CurrentPipelineState.computeBuffers[index];
+  binding.resourceId = id;
+  binding.byteOffset = offset;
+  const BufferDescription buffer = GetBuffer(id);
+  binding.byteSize = buffer.resourceId != ResourceId() && offset < buffer.length
+                         ? buffer.length - offset
+                         : 0;
+}
+
+MetalPipe::BufferBinding MetalReplay::GetComputeBuffer(uint32_t index) const
+{
+  return index < m_CurrentPipelineState.computeBuffers.size()
+             ? m_CurrentPipelineState.computeBuffers[index]
+             : MetalPipe::BufferBinding();
+}
+
 void MetalReplay::AddDepthStencilState(ResourceId id,
                                        const RDMTL::DepthStencilDescriptor &descriptor)
 {
@@ -958,6 +977,12 @@ void MetalReplay::BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType
                          : 0;
   if(indexCount > 0)
     binding.byteSize = RDCMIN(binding.byteSize, indexCount * binding.byteStride);
+  for(BufferDescription &description : m_Buffers)
+    if(description.resourceId == id)
+    {
+      description.creationFlags |= BufferCategory::Index;
+      break;
+    }
 }
 
 void MetalReplay::SetIndirectBuffer(ResourceId id, uint64_t offset, uint64_t size)
@@ -1063,6 +1088,8 @@ rdcarray<Descriptor> MetalReplay::GetDescriptors(ResourceId descriptorStore,
   static const uint32_t BufferOffset = 0x200;
   static const uint32_t ComputeReadOffset = 0x300;
   static const uint32_t ComputeWriteOffset = 0x400;
+  static const uint32_t ComputeReadBufferOffset = 0xB00;
+  static const uint32_t ComputeWriteBufferOffset = 0xC00;
   static const uint32_t ArgumentTextureOffset = 0x500;
   static const uint32_t VertexTextureOffset = 0xD00;
   static const uint32_t VertexBufferOffset = 0xF00;
@@ -1136,6 +1163,23 @@ rdcarray<Descriptor> MetalReplay::GetDescriptors(ResourceId descriptorStore,
         {
           const MetalPipe::BufferBinding &binding =
               m_MetalPipelineState->fragmentBuffers[slot];
+          descriptor.type = range.type;
+          descriptor.resource = binding.resourceId;
+          descriptor.byteOffset = binding.byteOffset;
+          descriptor.byteSize = binding.byteSize;
+        }
+      }
+      else if(((range.type == DescriptorType::Buffer &&
+                offset >= ComputeReadBufferOffset && offset < ComputeWriteBufferOffset) ||
+               (range.type == DescriptorType::ReadWriteBuffer &&
+                offset >= ComputeWriteBufferOffset && offset < VertexTextureOffset)))
+      {
+        const uint32_t slot = offset - (range.type == DescriptorType::Buffer
+                                            ? ComputeReadBufferOffset
+                                            : ComputeWriteBufferOffset);
+        if(slot < m_MetalPipelineState->computeBuffers.size())
+        {
+          const MetalPipe::BufferBinding &binding = m_MetalPipelineState->computeBuffers[slot];
           descriptor.type = range.type;
           descriptor.resource = binding.resourceId;
           descriptor.byteOffset = binding.byteOffset;
@@ -1303,6 +1347,8 @@ rdcarray<DescriptorAccess> MetalReplay::GetDescriptorAccess(uint32_t eventId)
   static const uint32_t BufferOffset = 0x200;
   static const uint32_t ComputeReadOffset = 0x300;
   static const uint32_t ComputeWriteOffset = 0x400;
+  static const uint32_t ComputeReadBufferOffset = 0xB00;
+  static const uint32_t ComputeWriteBufferOffset = 0xC00;
   static const uint32_t ArgumentTextureOffset = 0x500;
   static const uint32_t ArgumentSamplerOffset = 0x900;
   static const uint32_t VertexTextureOffset = 0xD00;
@@ -1640,6 +1686,53 @@ rdcarray<DescriptorAccess> MetalReplay::GetDescriptorAccess(uint32_t eventId)
     access.byteSize = 1;
     ret.push_back(access);
   }
+  for(size_t slot = 0; slot < state->computeBuffers.size(); slot++)
+  {
+    if(state->computeBuffers[slot].resourceId == ResourceId())
+      continue;
+    bool readOnly = true;
+    size_t bindingIndex = slot;
+    if(hasComputeReflection)
+    {
+      const ShaderReflection &reflection = reflectionIt->second;
+      bool found = false;
+      for(size_t bind = 0; bind < reflection.readOnlyResources.size(); bind++)
+        if(!reflection.readOnlyResources[bind].isTexture &&
+           reflection.readOnlyResources[bind].fixedBindNumber == slot)
+        {
+          bindingIndex = bind;
+          found = true;
+          break;
+        }
+      if(!found)
+      {
+        readOnly = false;
+        for(size_t bind = 0; bind < reflection.readWriteResources.size(); bind++)
+          if(!reflection.readWriteResources[bind].isTexture &&
+             reflection.readWriteResources[bind].fixedBindNumber == slot)
+          {
+            bindingIndex = bind;
+            found = true;
+            break;
+          }
+      }
+      if(!found)
+        continue;
+    }
+    DescriptorAccess access;
+    access.stage = ShaderStage::Compute;
+    access.type = readOnly ? DescriptorType::Buffer : DescriptorType::ReadWriteBuffer;
+    access.index = (uint16_t)bindingIndex;
+    access.staticallyUnused = hasComputeReflection &&
+        (readOnly ? bindingIndex >= usageIt->second.readOnlyResources.size() ||
+                    !usageIt->second.readOnlyResources[bindingIndex]
+                  : bindingIndex >= usageIt->second.readWriteResources.size() ||
+                    !usageIt->second.readWriteResources[bindingIndex]);
+    access.descriptorStore = store;
+    access.byteOffset = (readOnly ? ComputeReadBufferOffset : ComputeWriteBufferOffset) + (uint32_t)slot;
+    access.byteSize = 1;
+    ret.push_back(access);
+  }
   return ret;
 }
 
@@ -1652,6 +1745,7 @@ void MetalReplay::AddEvent(uint32_t chunkIndex, uint64_t fileOffset)
   m_PendingEvents.push_back(event);
   m_Events.resize_for_index(event.eventId);
   m_Events[event.eventId] = event;
+  m_EventPipelineStates[event.eventId] = m_CurrentPipelineState;
 }
 
 void MetalReplay::AddAction(const ActionDescription &in)
@@ -1660,8 +1754,24 @@ void MetalReplay::AddAction(const ActionDescription &in)
   action.eventId = m_PendingEvents.empty() ? m_NextEventID++ : m_PendingEvents.back().eventId;
   action.actionId = m_NextActionID++;
   action.events.swap(m_PendingEvents);
+  m_LastActionEventID = action.eventId;
   m_EventPipelineStates[action.eventId] = m_CurrentPipelineState;
-  m_FrameRecord.actionList.push_back(action);
+  if(m_MultiActionChildrenRemaining)
+  {
+    ActionDescription &parent = m_FrameRecord.actionList.back();
+    parent.children.push_back(action);
+    if(--m_MultiActionChildrenRemaining == 0)
+    {
+      m_MultiActionEndEvents[parent.eventId] = action.eventId;
+      parent.outputs = action.outputs;
+      parent.depthOut = action.depthOut;
+      m_EventPipelineStates[parent.eventId] = m_CurrentPipelineState;
+    }
+  }
+  else
+  {
+    m_FrameRecord.actionList.push_back(action);
+  }
 
   if(action.flags & ActionFlags::Drawcall)
   {
@@ -1700,12 +1810,25 @@ void MetalReplay::AddAction(const ActionDescription &in)
   }
 }
 
+void MetalReplay::BeginMultiAction(uint32_t childCount)
+{
+  RDCASSERT(m_MultiActionChildrenRemaining == 0 && childCount > 0 &&
+            !m_FrameRecord.actionList.empty());
+  m_MultiActionChildrenRemaining = childCount;
+}
+
+uint32_t MetalReplay::GetMultiActionEndEvent(uint32_t eventId) const
+{
+  auto it = m_MultiActionEndEvents.find(eventId);
+  return it == m_MultiActionEndEvents.end() ? eventId : it->second;
+}
+
 void MetalReplay::AddUsage(ResourceId id, ResourceUsage usage)
 {
   if(id == ResourceId() || m_FrameRecord.actionList.empty())
     return;
 
-  m_ResourceUses[id].push_back(EventUsage(m_FrameRecord.actionList.back().eventId, usage));
+  m_ResourceUses[id].push_back(EventUsage(m_LastActionEventID, usage));
 }
 
 rdcarray<EventUsage> MetalReplay::GetUsage(ResourceId id)
@@ -1726,6 +1849,9 @@ RDResult MetalReplay::ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBu
   m_EventPipelineStates.clear();
   m_NextEventID = 1;
   m_NextActionID = 1;
+  m_LastActionEventID = 0;
+  m_MultiActionChildrenRemaining = 0;
+  m_MultiActionEndEvents.clear();
 
   RDResult ret = m_pDriver->ReadLogInitialisation(rdc, storeStructuredBuffers);
   if(ret != ResultCode::Succeeded)
@@ -1833,38 +1959,54 @@ bool MetalReplay::IsRenderOutput(ResourceId id)
 
 uint64_t MetalReplay::MakeOutputWindow(WindowingData window, bool depth)
 {
-  if(window.system != WindowingSystem::MacOS || window.macOS.layer == NULL)
+  if(window.system != WindowingSystem::MacOS && window.system != WindowingSystem::Headless)
   {
-    RDCERR("Metal replay requires a macOS CAMetalLayer output window");
+    RDCERR("Metal replay requires a macOS CAMetalLayer or headless output window");
     return 0;
   }
 
-  CA::MetalLayer *layer = (CA::MetalLayer *)window.macOS.layer;
-  layer->retain();
-  layer->setDevice(Unwrap(m_pDriver));
-  layer->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
-  layer->setFramebufferOnly(true);
-
-  CGRect bounds = layer->bounds();
-  CGFloat scale = layer->contentsScale();
-  int32_t width = (int32_t)(bounds.size.width * scale);
-  int32_t height = (int32_t)(bounds.size.height * scale);
-  if(width <= 0 || height <= 0)
+  OutputWindow output;
+  int32_t width = 0;
+  int32_t height = 0;
+  if(window.system == WindowingSystem::Headless)
   {
-    CGSize drawableSize = layer->drawableSize();
-    width = (int32_t)drawableSize.width;
-    height = (int32_t)drawableSize.height;
+    width = window.headless.width;
+    height = window.headless.height;
   }
   else
   {
-    layer->setDrawableSize(CGSizeMake(width, height));
+    CA::MetalLayer *layer = (CA::MetalLayer *)window.macOS.layer;
+    if(layer == NULL)
+    {
+      RDCERR("Metal replay macOS output window has no CAMetalLayer");
+      return 0;
+    }
+    layer->retain();
+    layer->setDevice(Unwrap(m_pDriver));
+    layer->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
+    layer->setFramebufferOnly(true);
+    output.layer = layer;
+
+    CGRect bounds = layer->bounds();
+    CGFloat scale = layer->contentsScale();
+    width = (int32_t)(bounds.size.width * scale);
+    height = (int32_t)(bounds.size.height * scale);
+    if(width <= 0 || height <= 0)
+    {
+      CGSize drawableSize = layer->drawableSize();
+      width = (int32_t)drawableSize.width;
+      height = (int32_t)drawableSize.height;
+    }
+    else
+    {
+      layer->setDrawableSize(CGSizeMake(width, height));
+    }
   }
 
-  OutputWindow output;
-  output.layer = layer;
   if(!ResizeOutputWindow(output, RDCMAX(1, width), RDCMAX(1, height)))
   {
-    layer->release();
+    if(output.layer)
+      output.layer->release();
     return 0;
   }
 

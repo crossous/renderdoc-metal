@@ -88,6 +88,15 @@ public:
                               WrappedMTLBuffer *indexBuffer, NS::UInteger indexBufferOffset,
                               NS::UInteger instanceCount, NS::Integer baseVertex,
                               NS::UInteger baseInstance);
+  DECLARE_FUNCTION_SERIALISED(void, drawIndexedPrimitives, MTL::PrimitiveType primitiveType,
+                              MTL::IndexType indexType, WrappedMTLBuffer *indexBuffer,
+                              NS::UInteger indexBufferOffset, WrappedMTLBuffer *indirectBuffer,
+                              NS::UInteger indirectBufferOffset);
+  DECLARE_FUNCTION_SERIALISED(void, executeCommandsInBuffer,
+                              WrappedMTLIndirectCommandBuffer *icb, NS::Range range);
+  template <typename SerialiserType>
+  bool Serialise_executeCommandsMarker(SerialiserType &ser,
+                                       WrappedMTLIndirectCommandBuffer *icb, NS::Range range);
   DECLARE_FUNCTION_SERIALISED(void, endEncoding);
 
   enum
@@ -97,4 +106,7 @@ public:
 
 private:
   WrappedMTLCommandBuffer *m_CommandBuffer;
+  WrappedMTLRenderPipelineState *m_EncoderPipeline = NULL;
+  WrappedMTLBuffer *m_EncoderVertexBuffers[2] = {};
+  NS::UInteger m_EncoderVertexOffsets[2] = {};
 };

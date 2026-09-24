@@ -37,6 +37,7 @@
 #include "metal_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
+#include "metal_indirect_command_buffer.h"
 #include "metal_texture.h"
 
 ResourceId GetResID(WrappedMTLObject *obj)

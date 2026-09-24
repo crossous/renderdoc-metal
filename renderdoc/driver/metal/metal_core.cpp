@@ -35,6 +35,7 @@
 #include "metal_render_command_encoder.h"
 #include "metal_replay.h"
 #include "metal_sampler_state.h"
+#include "metal_indirect_command_buffer.h"
 #include "metal_texture.h"
 
 static Threading::CriticalSection s_DrawableTexturesLock;
@@ -145,7 +146,10 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLDevice_supportsRasterizationRateMapWithLayerCount:
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLDevice_newRasterizationRateMapWithDescriptor: METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLDevice_newIndirectCommandBufferWithDescriptor: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLDevice_newIndirectCommandBufferWithDescriptor:
+      return Serialise_newIndirectCommandBufferWithDescriptor(
+          ser, NULL, MTL::IndirectCommandTypeDraw, false, false, 0, 0, 0,
+          MTL::ResourceStorageModeShared);
     case MetalChunk::MTLDevice_newEvent: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLDevice_newSharedEvent: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLDevice_newSharedEventWithHandle: METAL_CHUNK_NOT_HANDLED();
@@ -357,7 +361,8 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       return m_DummyReplayRenderCommandEncoder->Serialise_drawIndexedPrimitives(
           ser, MTL::PrimitiveTypePoint, 0, MTL::IndexTypeUInt16, NULL, 0, 0, 0, 0);
     case MetalChunk::MTLRenderCommandEncoder_drawIndexedPrimitives_indirect:
-      METAL_CHUNK_NOT_HANDLED();
+      return m_DummyReplayRenderCommandEncoder->Serialise_drawIndexedPrimitives(
+          ser, MTL::PrimitiveTypeTriangle, MTL::IndexTypeUInt16, NULL, 0, NULL, 0);
     case MetalChunk::MTLRenderCommandEncoder_textureBarrier: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_updateFence: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_waitForFence: METAL_CHUNK_NOT_HANDLED();
@@ -400,7 +405,12 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLRenderCommandEncoder_useHeap_stages: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_useHeaps: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_useHeaps_stages: METAL_CHUNK_NOT_HANDLED();
-    case MetalChunk::MTLRenderCommandEncoder_executeCommandsInBuffer: METAL_CHUNK_NOT_HANDLED();
+    case MetalChunk::MTLRenderCommandEncoder_executeCommandsInBuffer:
+      return m_DummyReplayRenderCommandEncoder->Serialise_executeCommandsInBuffer(
+          ser, NULL, NS::Range::Make(0, 0));
+    case MetalChunk::MTLRenderCommandEncoder_executeCommandsMarker:
+      return m_DummyReplayRenderCommandEncoder->Serialise_executeCommandsMarker(
+          ser, NULL, NS::Range::Make(0, 0));
     case MetalChunk::MTLRenderCommandEncoder_executeCommandsInBuffer_indirect:
       METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLRenderCommandEncoder_memoryBarrierWithScope: METAL_CHUNK_NOT_HANDLED();
@@ -479,6 +489,8 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       return m_DummyReplayComputeCommandEncoder->Serialise_setComputePipelineState(ser, NULL);
     case MetalChunk::MTLComputeCommandEncoder_setTexture:
       return m_DummyReplayComputeCommandEncoder->Serialise_setTexture(ser, NULL, 0);
+    case MetalChunk::MTLComputeCommandEncoder_setBuffer:
+      return m_DummyReplayComputeCommandEncoder->Serialise_setBuffer(ser, NULL, 0, 0);
     case MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups:
     {
       MTL::Size groups = MTL::Size::Make(0, 0, 0);
@@ -486,12 +498,32 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       return m_DummyReplayComputeCommandEncoder->Serialise_dispatchThreadgroups(ser, groups,
                                                                                 threads);
     }
+    case MetalChunk::MTLComputeCommandEncoder_dispatchThreads:
+    {
+      MTL::Size grid = MTL::Size::Make(0, 0, 0);
+      MTL::Size threads = MTL::Size::Make(0, 0, 0);
+      return m_DummyReplayComputeCommandEncoder->Serialise_dispatchThreads(ser, grid, threads);
+    }
     case MetalChunk::MTLArgumentEncoder_setArgumentBuffer:
       return m_DummyReplayArgumentEncoder->Serialise_setArgumentBuffer(ser, NULL, 0);
     case MetalChunk::MTLArgumentEncoder_setTexture:
       return m_DummyReplayArgumentEncoder->Serialise_setTexture(ser, NULL, 0);
     case MetalChunk::MTLArgumentEncoder_setSamplerState:
       return m_DummyReplayArgumentEncoder->Serialise_setSamplerState(ser, NULL, 0);
+    case MetalChunk::MTLIndirectCommandBuffer_indirectRenderCommand:
+      return m_DummyReplayIndirectCommandBuffer->Serialise_indirectRenderCommand(ser, NULL, 0);
+    case MetalChunk::MTLIndirectRenderCommand_setRenderPipelineState:
+      return m_DummyReplayIndirectRenderCommand->Serialise_setRenderPipelineState(ser, NULL);
+    case MetalChunk::MTLIndirectRenderCommand_setVertexBuffer:
+      return m_DummyReplayIndirectRenderCommand->Serialise_setVertexBuffer(ser, NULL, 0, 0);
+    case MetalChunk::MTLIndirectRenderCommand_drawPrimitives:
+      return m_DummyReplayIndirectRenderCommand->Serialise_drawPrimitives(
+          ser, MTL::PrimitiveTypeTriangle, 0, 0, 0, 0);
+    case MetalChunk::MTLIndirectRenderCommand_drawIndexedPrimitives:
+      return m_DummyReplayIndirectRenderCommand->Serialise_drawIndexedPrimitives(
+          ser, MTL::PrimitiveTypeTriangle, 0, MTL::IndexTypeUInt16, NULL, 0, 0, 0, 0);
+    case MetalChunk::MTLIndirectCommandBuffer_reset:
+      return m_DummyReplayIndirectCommandBuffer->Serialise_reset(ser, NS::Range::Make(0, 0));
 
     // no default to get compile error if a chunk is not handled
     case MetalChunk::Max: break;
@@ -704,7 +736,8 @@ RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endE
     }
     else
     {
-      endOffset = GetReplay()->GetNextEventOffset(event->eventId, ser.GetReader()->GetSize());
+      const uint32_t replayEndEvent = GetReplay()->GetMultiActionEndEvent(event->eventId);
+      endOffset = GetReplay()->GetNextEventOffset(replayEndEvent, ser.GetReader()->GetSize());
       if(replayType == eReplay_OnlyDraw)
       {
         startOffset = event->fileOffset;
@@ -720,7 +753,11 @@ RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endE
     if(ser.IsErrored())
       break;
 
+    const uint32_t eventBeforeChunk = IsLoading(m_State) ? GetReplay()->GetNextEventID() : 0;
     bool success = ProcessChunk(ser, chunk);
+    // Keep every frame call addressable. Actions already call AddEvent() themselves.
+    if(IsLoading(m_State) && success && GetReplay()->GetNextEventID() == eventBeforeChunk)
+      AddEvent();
     ser.EndChunk();
 
     if(ser.IsErrored())

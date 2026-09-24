@@ -50,6 +50,8 @@ enum MetalResourceType
   eResComputeCommandEncoder,
   eResArgumentEncoder,
   eResSamplerState,
+  eResIndirectCommandBuffer,
+  eResIndirectRenderCommand,
   eResMax
 };
 

@@ -37,6 +37,7 @@
 #include "metal_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
+#include "metal_indirect_command_buffer.h"
 #include "metal_replay.h"
 #include "metal_texture.h"
 
@@ -79,6 +80,10 @@ WrappedMTLDevice::WrappedMTLDevice(MTL::Device *realMTLDevice, ResourceId objId)
     m_DummyReplayComputeCommandEncoder =
         new WrappedMTLComputeCommandEncoder(NULL, ResourceId(), this);
     m_DummyReplayArgumentEncoder = new WrappedMTLArgumentEncoder(NULL, ResourceId(), this);
+    m_DummyReplayIndirectCommandBuffer =
+        new WrappedMTLIndirectCommandBuffer(NULL, ResourceId(), this);
+    m_DummyReplayIndirectRenderCommand =
+        new WrappedMTLIndirectRenderCommand(NULL, ResourceId(), this);
   }
 
   if(!RenderDoc::Inst().IsReplayApp())
@@ -130,6 +135,8 @@ WrappedMTLDevice::~WrappedMTLDevice()
 {
   SAFE_DELETE(m_FrameReader);
   SAFE_DELETE(m_DummyReplayArgumentEncoder);
+  SAFE_DELETE(m_DummyReplayIndirectRenderCommand);
+  SAFE_DELETE(m_DummyReplayIndirectCommandBuffer);
   SAFE_DELETE(m_DummyReplayBlitCommandEncoder);
   SAFE_DELETE(m_DummyReplayComputeCommandEncoder);
   SAFE_DELETE(m_DummyReplayRenderCommandEncoder);
@@ -627,6 +634,122 @@ WrappedMTLSamplerState *WrappedMTLDevice::newSamplerStateWithDescriptor(
 }
 
 template <typename SerialiserType>
+bool WrappedMTLDevice::Serialise_newIndirectCommandBufferWithDescriptor(
+    SerialiserType &ser, WrappedMTLIndirectCommandBuffer *icb,
+    MTL::IndirectCommandType commandTypes, bool inheritPipelineState, bool inheritBuffers,
+    NS::UInteger maxVertexBufferBindCount, NS::UInteger maxFragmentBufferBindCount,
+    NS::UInteger maxCount, MTL::ResourceOptions options)
+{
+  SERIALISE_ELEMENT_LOCAL(IndirectCommandBuffer, GetResID(icb))
+      .TypedAs("MTLIndirectCommandBuffer"_lit);
+  SERIALISE_ELEMENT(commandTypes).Important();
+  SERIALISE_ELEMENT(inheritPipelineState).Important();
+  SERIALISE_ELEMENT(inheritBuffers).Important();
+  SERIALISE_ELEMENT(maxVertexBufferBindCount).Important();
+  SERIALISE_ELEMENT(maxFragmentBufferBindCount).Important();
+  SERIALISE_ELEMENT(maxCount).Important();
+  SERIALISE_ELEMENT(options);
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    const bool supportedType =
+        (commandTypes == MTL::IndirectCommandTypeDraw &&
+         ((inheritBuffers && !inheritPipelineState && maxVertexBufferBindCount == 0) ||
+          (!inheritBuffers && maxVertexBufferBindCount == 1))) ||
+        (!inheritPipelineState && !inheritBuffers &&
+         commandTypes == MTL::IndirectCommandTypeDrawIndexed && maxVertexBufferBindCount == 2) ||
+        (!inheritPipelineState && !inheritBuffers &&
+         (uint64_t)commandTypes == ((uint64_t)MTL::IndirectCommandTypeDraw |
+                                    (uint64_t)MTL::IndirectCommandTypeDrawIndexed) &&
+         maxVertexBufferBindCount == 2);
+    if(!supportedType ||
+       maxFragmentBufferBindCount != 0 || maxCount == 0 ||
+       maxCount > 1024)
+    {
+      RDCERR("Unsupported Metal ICB descriptor: command type or inheritance/binding limits");
+      return false;
+    }
+    MTL::IndirectCommandBufferDescriptor *descriptor =
+        MTL::IndirectCommandBufferDescriptor::alloc()->init();
+    descriptor->setCommandTypes(commandTypes);
+    descriptor->setInheritPipelineState(inheritPipelineState);
+    descriptor->setInheritBuffers(inheritBuffers);
+    descriptor->setMaxVertexBufferBindCount(maxVertexBufferBindCount);
+    descriptor->setMaxFragmentBufferBindCount(maxFragmentBufferBindCount);
+    MTL::IndirectCommandBuffer *real = Unwrap(this)->newIndirectCommandBuffer(descriptor, maxCount,
+                                                                               options);
+    descriptor->release();
+    if(!real)
+    {
+      RDCERR("Failed to recreate Metal indirect command buffer");
+      return false;
+    }
+    WrappedMTLIndirectCommandBuffer *wrapped = NULL;
+    GetResourceManager()->WrapResource(IndirectCommandBuffer, real, wrapped, true);
+    wrapped->SetCount(maxCount);
+    wrapped->SetMaxVertexBufferBindCount(maxVertexBufferBindCount);
+    wrapped->SetCommandTypes(commandTypes);
+    wrapped->SetInheritPipelineState(inheritPipelineState);
+    wrapped->SetInheritBuffers(inheritBuffers);
+    wrapped->SetSupportedDescriptor(true);
+    AddResource(IndirectCommandBuffer, ResourceType::StateObject, "Indirect Command Buffer");
+    DerivedResource(this, IndirectCommandBuffer);
+  }
+  return true;
+}
+
+WrappedMTLIndirectCommandBuffer *WrappedMTLDevice::newIndirectCommandBufferWithDescriptor(
+    MTL::IndirectCommandType commandTypes, bool inheritPipelineState, bool inheritBuffers,
+    NS::UInteger maxVertexBufferBindCount, NS::UInteger maxFragmentBufferBindCount,
+    NS::UInteger maxCount, MTL::ResourceOptions options)
+{
+  MTL::IndirectCommandBufferDescriptor *descriptor =
+      MTL::IndirectCommandBufferDescriptor::alloc()->init();
+  descriptor->setCommandTypes(commandTypes);
+  descriptor->setInheritPipelineState(inheritPipelineState);
+  descriptor->setInheritBuffers(inheritBuffers);
+  descriptor->setMaxVertexBufferBindCount(maxVertexBufferBindCount);
+  descriptor->setMaxFragmentBufferBindCount(maxFragmentBufferBindCount);
+  MTL::IndirectCommandBuffer *real = Unwrap(this)->newIndirectCommandBuffer(descriptor, maxCount,
+                                                                             options);
+  descriptor->release();
+  if(!real)
+    return NULL;
+  WrappedMTLIndirectCommandBuffer *wrapped = NULL;
+  GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
+  wrapped->SetCount(maxCount);
+  wrapped->SetMaxVertexBufferBindCount(maxVertexBufferBindCount);
+  wrapped->SetCommandTypes(commandTypes);
+  wrapped->SetInheritPipelineState(inheritPipelineState);
+  wrapped->SetInheritBuffers(inheritBuffers);
+  wrapped->SetSupportedDescriptor(((commandTypes == MTL::IndirectCommandTypeDraw &&
+                                    ((inheritBuffers && !inheritPipelineState &&
+                                      maxVertexBufferBindCount == 0) ||
+                                     (!inheritBuffers && maxVertexBufferBindCount == 1))) ||
+                                   (!inheritPipelineState && !inheritBuffers &&
+                                    commandTypes == MTL::IndirectCommandTypeDrawIndexed &&
+                                    maxVertexBufferBindCount == 2) ||
+                                   (!inheritPipelineState && !inheritBuffers &&
+                                    (uint64_t)commandTypes ==
+                                        ((uint64_t)MTL::IndirectCommandTypeDraw |
+                                         (uint64_t)MTL::IndirectCommandTypeDrawIndexed) &&
+                                    maxVertexBufferBindCount == 2)) &&
+                                  maxFragmentBufferBindCount == 0);
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLDevice_newIndirectCommandBufferWithDescriptor);
+    Serialise_newIndirectCommandBufferWithDescriptor(
+        ser, wrapped, commandTypes, inheritPipelineState, inheritBuffers,
+        maxVertexBufferBindCount, maxFragmentBufferBindCount, maxCount, options);
+    MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
+    record->AddChunk(scope.Get());
+  }
+  return wrapped;
+}
+
+template <typename SerialiserType>
 bool WrappedMTLDevice::Serialise_newRenderPipelineStateWithDescriptor(
     SerialiserType &ser, WrappedMTLRenderPipelineState *pipelineState,
     RDMTL::RenderPipelineDescriptor &descriptor, NS::Error **error)
@@ -1094,6 +1217,10 @@ INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLDevice, WrappedMTLDepthSte
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLDevice, WrappedMTLSamplerState *,
                                             newSamplerStateWithDescriptor,
                                             RDMTL::SamplerDescriptor &descriptor);
+INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(
+    WrappedMTLDevice, WrappedMTLIndirectCommandBuffer *,
+    newIndirectCommandBufferWithDescriptor, MTL::IndirectCommandType, bool, bool,
+    NS::UInteger, NS::UInteger, NS::UInteger, MTL::ResourceOptions);
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLDevice,
                                             WrappedMTLRenderPipelineState *renderPipelineState,
                                             newRenderPipelineStateWithDescriptor,

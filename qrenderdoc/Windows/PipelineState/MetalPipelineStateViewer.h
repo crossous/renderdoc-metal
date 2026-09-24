@@ -86,6 +86,8 @@ private:
   RDTreeWidget *m_ComputeShader = NULL;
   RDTreeWidget *m_ComputeReadTextures = NULL;
   RDTreeWidget *m_ComputeWriteTextures = NULL;
+  RDTreeWidget *m_ComputeReadBuffers = NULL;
+  RDTreeWidget *m_ComputeWriteBuffers = NULL;
   RDTreeWidget *m_VertexAttributes = NULL;
   RDTreeWidget *m_VertexBuffers = NULL;
   RDTreeWidget *m_IndexBuffer = NULL;

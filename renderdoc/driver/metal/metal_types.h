@@ -52,6 +52,8 @@ const uint32_t MAX_COMPUTE_PASS_SAMPLE_BUFFER_ATTACHMENTS = 4;
   FUNC(RenderPipelineState);             \
   FUNC(ComputePipelineState);            \
   FUNC(ArgumentEncoder);                 \
+  FUNC(IndirectCommandBuffer);           \
+  FUNC(IndirectRenderCommand);           \
   FUNC(SamplerState);                    \
   FUNC(Texture);                         \
   FUNC(RenderCommandEncoder);            \
@@ -89,7 +91,6 @@ METALCPP_WRAPPED_PROTOCOLS(DECLARE_OBJC_HELPERS)
 // TODO: Wrapped types that need implementing
 #define METALCPP_UNIMPLEMENTED_WRAPPED_PROTOCOLS(FUNC) \
   FUNC(Fence);                                         \
-  FUNC(IndirectCommandBuffer);                         \
   FUNC(CounterSampleBuffer);
 
 #define DECLARE_UNIMPLEMENTED_WRAPPED_CPP_HELPERS(CPPTYPE) \
@@ -173,6 +174,7 @@ MTL_DECLARE_REFLECTION_TYPE(DepthClipMode);
 MTL_DECLARE_REFLECTION_TYPE(TriangleFillMode);
 MTL_DECLARE_REFLECTION_TYPE(CullMode);
 MTL_DECLARE_REFLECTION_TYPE(IndexType);
+MTL_DECLARE_REFLECTION_TYPE(IndirectCommandType);
 MTL_DECLARE_REFLECTION_TYPE(SamplerMinMagFilter);
 MTL_DECLARE_REFLECTION_TYPE(SamplerMipFilter);
 MTL_DECLARE_REFLECTION_TYPE(SamplerAddressMode);

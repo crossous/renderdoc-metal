@@ -62,6 +62,8 @@ public:
   void SetComputePipeline(ResourceId id);
   void SetComputeTexture(uint32_t index, ResourceId id);
   ResourceId GetComputeTexture(uint32_t index) const;
+  void BindComputeBuffer(uint32_t index, ResourceId id, uint64_t offset);
+  MetalPipe::BufferBinding GetComputeBuffer(uint32_t index) const;
   void AddDepthStencilState(ResourceId id, const RDMTL::DepthStencilDescriptor &descriptor);
   void AddSamplerState(ResourceId id, const RDMTL::SamplerDescriptor &descriptor);
   void BeginRenderPass(const RDMTL::RenderPassDescriptor &descriptor);
@@ -126,7 +128,10 @@ public:
   FrameRecord &WriteFrameRecord() { return m_FrameRecord; }
   FrameRecord GetFrameRecord() { return m_FrameRecord; }
   void AddEvent(uint32_t chunkIndex, uint64_t fileOffset);
+  uint32_t GetNextEventID() const { return m_NextEventID; }
   void AddAction(const ActionDescription &action);
+  void BeginMultiAction(uint32_t childCount);
+  uint32_t GetMultiActionEndEvent(uint32_t eventId) const;
   void AddUsage(ResourceId id, ResourceUsage usage);
   const APIEvent *GetEvent(uint32_t eventId) const;
   uint64_t GetNextEventOffset(uint32_t eventId, uint64_t frameSize) const;
@@ -212,7 +217,10 @@ public:
   void FileChanged() {}
   bool NeedRemapForFetch(const ResourceFormat &format) { return false; }
 
-  rdcarray<WindowingSystem> GetSupportedWindowSystems() { return {WindowingSystem::MacOS}; }
+  rdcarray<WindowingSystem> GetSupportedWindowSystems()
+  {
+    return {WindowingSystem::MacOS, WindowingSystem::Headless};
+  }
   AMDRGPControl *GetRGPControl() { return NULL; }
   uint64_t MakeOutputWindow(WindowingData window, bool depth);
   void DestroyOutputWindow(uint64_t id);
@@ -284,6 +292,9 @@ private:
   std::map<ResourceId, rdcarray<EventUsage>> m_ResourceUses;
   uint32_t m_NextEventID = 1;
   uint32_t m_NextActionID = 1;
+  uint32_t m_LastActionEventID = 0;
+  uint32_t m_MultiActionChildrenRemaining = 0;
+  std::map<uint32_t, uint32_t> m_MultiActionEndEvents;
 
   rdcarray<ResourceDescription> m_Resources;
   std::map<ResourceId, size_t> m_ResourceIdx;

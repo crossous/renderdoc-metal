@@ -228,7 +228,7 @@ void APIInspector::fillAPIView()
     {
       for(const APIEvent &ev : action->events)
       {
-        addEvent(ev, ev.eventId == action->eventId);
+        addEvent(ev, ev.eventId == m_Ctx.CurSelectedEvent());
       }
     }
   }
@@ -248,15 +248,21 @@ void APIInspector::addEvent(const APIEvent &ev, bool primary)
   if(ev.chunkIndex == APIEvent::NoChunk)
     return;
 
+  addChunk(ev.chunkIndex, ev.eventId, primary);
+}
+
+void APIInspector::addChunk(uint32_t chunkIndex, uint32_t eventId, bool primary)
+{
   const SDFile &file = m_Ctx.GetStructuredFile();
 
-  RDTreeWidgetItem *root = new RDTreeWidgetItem({QString::number(ev.eventId), QString()});
+  RDTreeWidgetItem *root =
+      new RDTreeWidgetItem({eventId ? QString::number(eventId) : lit("—"), QString()});
 
   SDChunk *chunk = NULL;
 
-  if(ev.chunkIndex < file.chunks.size())
+  if(chunkIndex < file.chunks.size())
   {
-    chunk = file.chunks[ev.chunkIndex];
+    chunk = file.chunks[chunkIndex];
 
     m_Chunks.push_back(chunk);
 
@@ -266,7 +272,7 @@ void APIInspector::addEvent(const APIEvent &ev, bool primary)
   }
   else
   {
-    root->setText(1, tr("Invalid chunk index %1").arg(ev.chunkIndex));
+    root->setText(1, tr("Invalid chunk index %1").arg(chunkIndex));
   }
 
   if(primary)

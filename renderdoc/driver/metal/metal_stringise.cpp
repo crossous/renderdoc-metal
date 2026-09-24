@@ -31,7 +31,7 @@
 template <>
 rdcstr DoStringise(const MetalChunk &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1236, "Chunks changed without updating names");
+  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1245, "Chunks changed without updating names");
 
   BEGIN_ENUM_STRINGISE(MetalChunk)
   {
@@ -467,12 +467,30 @@ rdcstr DoStringise(const MetalChunk &el)
                                "MTLComputeCommandEncoder::setTexture");
     STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_dispatchThreadgroups,
                                "MTLComputeCommandEncoder::dispatchThreadgroups");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_dispatchThreads,
+                               "MTLComputeCommandEncoder::dispatchThreads");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setBuffer,
+                               "MTLComputeCommandEncoder::setBuffer");
     STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setArgumentBuffer,
                                "MTLArgumentEncoder::setArgumentBuffer");
     STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setTexture,
                                "MTLArgumentEncoder::setTexture");
     STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setSamplerState,
                                "MTLArgumentEncoder::setSamplerState");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIndirectCommandBuffer_indirectRenderCommand,
+                               "MTLIndirectCommandBuffer::indirectRenderCommand");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIndirectRenderCommand_setRenderPipelineState,
+                               "MTLIndirectRenderCommand::setRenderPipelineState");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIndirectRenderCommand_setVertexBuffer,
+                               "MTLIndirectRenderCommand::setVertexBuffer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIndirectRenderCommand_drawPrimitives,
+                               "MTLIndirectRenderCommand::drawPrimitives");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIndirectRenderCommand_drawIndexedPrimitives,
+                               "MTLIndirectRenderCommand::drawIndexedPrimitives");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIndirectCommandBuffer_reset,
+                               "MTLIndirectCommandBuffer::resetWithRange");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_executeCommandsMarker,
+                               "MTLRenderCommandEncoder::executeCommandsInBuffer (begin)");
     STRINGISE_ENUM_CLASS_NAMED(Max, "Max Chunk");
   }
   END_ENUM_STRINGISE()
@@ -1328,9 +1346,20 @@ rdcstr DoStringise(const MTL::SamplerBorderColor &el)
 }
 
 template <>
+rdcstr DoStringise(const MTL::IndirectCommandType &el)
+{
+  BEGIN_ENUM_STRINGISE(MTL::IndirectCommandType)
+  {
+    MTL_STRINGISE_ENUM(IndirectCommandTypeDraw);
+    MTL_STRINGISE_ENUM(IndirectCommandTypeDrawIndexed);
+  }
+  END_ENUM_STRINGISE()
+}
+
+template <>
 rdcstr DoStringise(const MetalResourceType &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)MetalResourceType::eResMax == 16, "MetalResourceType changed");
+  RDCCOMPILE_ASSERT((uint32_t)MetalResourceType::eResMax == 18, "MetalResourceType changed");
   BEGIN_ENUM_STRINGISE(MetalResourceType);
   {
     STRINGISE_ENUM(eResUnknown);
@@ -1349,6 +1378,8 @@ rdcstr DoStringise(const MetalResourceType &el)
     STRINGISE_ENUM(eResComputeCommandEncoder);
     STRINGISE_ENUM(eResArgumentEncoder);
     STRINGISE_ENUM(eResSamplerState);
+    STRINGISE_ENUM(eResIndirectCommandBuffer);
+    STRINGISE_ENUM(eResIndirectRenderCommand);
   }
   END_ENUM_STRINGISE();
 }

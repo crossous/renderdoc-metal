@@ -93,6 +93,13 @@ public:
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLSamplerState *,
                                           newSamplerStateWithDescriptor,
                                           RDMTL::SamplerDescriptor &descriptor);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLIndirectCommandBuffer *,
+                                          newIndirectCommandBufferWithDescriptor,
+                                          MTL::IndirectCommandType commandTypes,
+                                          bool inheritPipelineState, bool inheritBuffers,
+                                          NS::UInteger maxVertexBufferBindCount,
+                                          NS::UInteger maxFragmentBufferBindCount,
+                                          NS::UInteger maxCount, MTL::ResourceOptions options);
   WrappedMTLTexture *newTextureWithDescriptor(RDMTL::TextureDescriptor &descriptor,
                                               IOSurfaceRef iosurface, NS::UInteger plane);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLTexture *, newTextureWithDescriptor,
@@ -266,6 +273,8 @@ private:
   WrappedMTLBlitCommandEncoder *m_DummyReplayBlitCommandEncoder = NULL;
   WrappedMTLComputeCommandEncoder *m_DummyReplayComputeCommandEncoder = NULL;
   WrappedMTLArgumentEncoder *m_DummyReplayArgumentEncoder = NULL;
+  WrappedMTLIndirectCommandBuffer *m_DummyReplayIndirectCommandBuffer = NULL;
+  WrappedMTLIndirectRenderCommand *m_DummyReplayIndirectRenderCommand = NULL;
 
   MetalReplay *m_Replay = NULL;
 

@@ -39,7 +39,11 @@ public:
   DECLARE_FUNCTION_SERIALISED(void, setComputePipelineState,
                               WrappedMTLComputePipelineState *pipeline);
   DECLARE_FUNCTION_SERIALISED(void, setTexture, WrappedMTLTexture *texture, NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setBuffer, WrappedMTLBuffer *buffer, NS::UInteger offset,
+                              NS::UInteger index);
   DECLARE_FUNCTION_SERIALISED(void, dispatchThreadgroups, MTL::Size &groups,
+                              MTL::Size &threadsPerGroup);
+  DECLARE_FUNCTION_SERIALISED(void, dispatchThreads, MTL::Size &grid,
                               MTL::Size &threadsPerGroup);
 
   enum

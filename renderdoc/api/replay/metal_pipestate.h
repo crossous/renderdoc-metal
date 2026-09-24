@@ -297,6 +297,12 @@ struct State
 )");
   rdcarray<ResourceId> computeTextures;
 
+  DOCUMENT(R"(The direct compute buffer bindings, indexed by Metal buffer slot.
+
+:type: List[MetalBufferBinding]
+)");
+  rdcarray<BufferBinding> computeBuffers;
+
   DOCUMENT(R"(The bound vertex function.
 
 :type: MetalShader

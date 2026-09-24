@@ -74,12 +74,25 @@
   GetWrapped(self)->setTexture(GetWrapped(texture), index);
 }
 
+- (void)setBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index
+{
+  GetWrapped(self)->setBuffer(GetWrapped(buffer), offset, index);
+}
+
 - (void)dispatchThreadgroups:(MTLSize)groups threadsPerThreadgroup:(MTLSize)threadsPerGroup
 {
   MTL::Size cppGroups = MTL::Size::Make(groups.width, groups.height, groups.depth);
   MTL::Size cppThreads =
       MTL::Size::Make(threadsPerGroup.width, threadsPerGroup.height, threadsPerGroup.depth);
   GetWrapped(self)->dispatchThreadgroups(cppGroups, cppThreads);
+}
+
+- (void)dispatchThreads:(MTLSize)grid threadsPerThreadgroup:(MTLSize)threadsPerGroup
+{
+  MTL::Size cppGrid = MTL::Size::Make(grid.width, grid.height, grid.depth);
+  MTL::Size cppThreads =
+      MTL::Size::Make(threadsPerGroup.width, threadsPerGroup.height, threadsPerGroup.depth);
+  GetWrapped(self)->dispatchThreads(cppGrid, cppThreads);
 }
 
 @end

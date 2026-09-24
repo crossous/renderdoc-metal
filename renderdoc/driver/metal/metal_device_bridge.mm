@@ -612,10 +612,10 @@
                                    options:(MTLResourceOptions)options
     API_AVAILABLE(macos(10.14), ios(12.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newIndirectCommandBufferWithDescriptor:descriptor
-                                           maxCommandCount:maxCount
-                                                   options:options];
+  return id<MTLIndirectCommandBuffer>(GetWrapped(self)->newIndirectCommandBufferWithDescriptor(
+      (MTL::IndirectCommandType)descriptor.commandTypes, descriptor.inheritPipelineState,
+      descriptor.inheritBuffers, descriptor.maxVertexBufferBindCount,
+      descriptor.maxFragmentBufferBindCount, maxCount, (MTL::ResourceOptions)options));
 }
 
 - (nullable id<MTLEvent>)newEvent API_AVAILABLE(macos(10.14), ios(12.0))

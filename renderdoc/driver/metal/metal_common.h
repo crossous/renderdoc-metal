@@ -270,6 +270,15 @@ enum class MetalChunk : uint32_t
   MTLArgumentEncoder_setArgumentBuffer,
   MTLArgumentEncoder_setTexture,
   MTLArgumentEncoder_setSamplerState,
+  MTLIndirectCommandBuffer_indirectRenderCommand,
+  MTLIndirectRenderCommand_setRenderPipelineState,
+  MTLIndirectRenderCommand_setVertexBuffer,
+  MTLIndirectRenderCommand_drawPrimitives,
+  MTLRenderCommandEncoder_executeCommandsMarker,
+  MTLIndirectRenderCommand_drawIndexedPrimitives,
+  MTLIndirectCommandBuffer_reset,
+  MTLComputeCommandEncoder_dispatchThreads,
+  MTLComputeCommandEncoder_setBuffer,
   Max
 };
 

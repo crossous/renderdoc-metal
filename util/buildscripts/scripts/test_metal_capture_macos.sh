@@ -31,6 +31,11 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
       "${CAPTURE_DIR}/t14_capture.rdc" "${CAPTURE_DIR}/t15_capture.rdc" \
       "${CAPTURE_DIR}/t16_capture.rdc" "${CAPTURE_DIR}/t17_capture.rdc" \
       "${CAPTURE_DIR}/t18_capture.rdc" "${CAPTURE_DIR}/t19_capture.rdc" \
+      "${CAPTURE_DIR}/t20_capture.rdc" "${CAPTURE_DIR}/t21_capture.rdc" \
+      "${CAPTURE_DIR}/t22_capture.rdc" "${CAPTURE_DIR}/t23_capture.rdc" \
+      "${CAPTURE_DIR}/t24_capture.rdc" "${CAPTURE_DIR}/t25_capture.rdc" \
+      "${CAPTURE_DIR}/t26_capture.rdc" "${CAPTURE_DIR}/t27_capture.rdc" \
+      "${CAPTURE_DIR}/t28_capture.rdc" "${CAPTURE_DIR}/t29_capture.rdc" \
       "${CAPTURE_DIR}/t00.xml" "${CAPTURE_DIR}/t01.xml" "${CAPTURE_DIR}/t02.xml" \
       "${CAPTURE_DIR}/t03.xml" "${CAPTURE_DIR}/t04.xml" "${CAPTURE_DIR}/t05.xml" \
       "${CAPTURE_DIR}/t06.xml" "${CAPTURE_DIR}/t07.xml" "${CAPTURE_DIR}/t08.xml" \
@@ -38,7 +43,11 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
       "${CAPTURE_DIR}/t10.xml" "${CAPTURE_DIR}/t11.xml" "${CAPTURE_DIR}/t12.xml" \
       "${CAPTURE_DIR}/t13.xml" "${CAPTURE_DIR}/t14.xml" "${CAPTURE_DIR}/t15.xml" \
       "${CAPTURE_DIR}/t16.xml" "${CAPTURE_DIR}/t17.xml" "${CAPTURE_DIR}/t18.xml" \
-      "${CAPTURE_DIR}/t19.xml" \
+      "${CAPTURE_DIR}/t19.xml" "${CAPTURE_DIR}/t20.xml" "${CAPTURE_DIR}/t21.xml" \
+      "${CAPTURE_DIR}/t22.xml" "${CAPTURE_DIR}/t23.xml" \
+      "${CAPTURE_DIR}/t24.xml" "${CAPTURE_DIR}/t25.xml" \
+      "${CAPTURE_DIR}/t26.xml" "${CAPTURE_DIR}/t27.xml" \
+      "${CAPTURE_DIR}/t28.xml" "${CAPTURE_DIR}/t29.xml" \
       "${CAPTURE_DIR}/t01_event_clear.ppm" "${CAPTURE_DIR}/t01_event_draw.ppm" \
       "${CAPTURE_DIR}/t01_event_rewind.ppm" "${CAPTURE_DIR}/t01_texture.dds" \
       "${CAPTURE_DIR}/t02_replay.ppm" "${CAPTURE_DIR}/t03_replay.ppm" \
@@ -50,12 +59,22 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
       "${CAPTURE_DIR}/t14_replay.ppm" "${CAPTURE_DIR}/t15_replay.ppm" \
       "${CAPTURE_DIR}/t16_replay.ppm" "${CAPTURE_DIR}/t17_replay.ppm" \
       "${CAPTURE_DIR}/t18_replay.ppm" "${CAPTURE_DIR}/t19_replay.ppm" \
+      "${CAPTURE_DIR}/t20_replay.ppm" "${CAPTURE_DIR}/t21_replay.ppm" \
+      "${CAPTURE_DIR}/t22_replay.ppm" "${CAPTURE_DIR}/t23_replay.ppm" \
+      "${CAPTURE_DIR}/t24_replay.ppm" "${CAPTURE_DIR}/t25_replay.ppm" \
+      "${CAPTURE_DIR}/t26_replay.ppm" "${CAPTURE_DIR}/t27_replay.ppm" \
+      "${CAPTURE_DIR}/t28_replay.ppm" "${CAPTURE_DIR}/t29_replay.ppm" \
       "${CAPTURE_DIR}/t09_cube.dds" "${CAPTURE_DIR}/t10_mips.dds" \
       "${CAPTURE_DIR}/t11_filtered.dds" "${CAPTURE_DIR}/t12_argument_texture.dds" \
       "${CAPTURE_DIR}/t13_arguments.bin" "${CAPTURE_DIR}/t14_indices.bin" \
       "${CAPTURE_DIR}/t15_output.dds" "${CAPTURE_DIR}/t16_output.dds" \
       "${CAPTURE_DIR}/t17_output.dds" "${CAPTURE_DIR}/t18_storage.bin" \
-      "${CAPTURE_DIR}/t19_storage.bin"
+      "${CAPTURE_DIR}/t19_storage.bin" "${CAPTURE_DIR}/t20_vertices.bin" \
+      "${CAPTURE_DIR}/t21_arguments.bin" "${CAPTURE_DIR}/t22_packets.bin" \
+      "${CAPTURE_DIR}/t23_indices.bin" "${CAPTURE_DIR}/t24_packets.bin" \
+      "${CAPTURE_DIR}/t25_resources.bin" "${CAPTURE_DIR}/t26_vertices.bin" \
+      "${CAPTURE_DIR}/t27_packets.bin" \
+      "${CAPTURE_DIR}/t29_output.bin"
 
 "${DEMO_BIN}" Metal_Empty_Frame --frames 5
 "${DEMO_BIN}" Metal_Simple_Triangle --frames 5
@@ -77,6 +96,16 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
 "${DEMO_BIN}" Metal_Batch_Texture --frames 5
 "${DEMO_BIN}" Metal_Fragment_Storage_Buffer --frames 5
 "${DEMO_BIN}" Metal_Vertex_Storage_Buffer --frames 5
+"${DEMO_BIN}" Metal_Indirect_Command_Buffer --frames 5
+"${DEMO_BIN}" Metal_Indexed_Indirect_Draw --frames 5
+"${DEMO_BIN}" Metal_Multi_Command_ICB --frames 5
+"${DEMO_BIN}" Metal_Indexed_ICB --frames 5
+"${DEMO_BIN}" Metal_ICB_Reset_Reencode --frames 5
+"${DEMO_BIN}" Metal_Mixed_ICB --frames 5
+"${DEMO_BIN}" Metal_ICB_Inherit_Pipeline --frames 5
+"${DEMO_BIN}" Metal_ICB_Inherit_Buffers --frames 5
+"${DEMO_BIN}" Metal_Compute_Dispatch_Threads --frames 5
+"${DEMO_BIN}" Metal_Compute_Buffer_Binding --frames 5
 
 RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t00" \
 DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
@@ -158,6 +187,45 @@ RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t19" \
 DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
   "${DEMO_BIN}" Metal_Vertex_Storage_Buffer --frames 8
 
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t20" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Indirect_Command_Buffer --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t21" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Indexed_Indirect_Draw --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t22" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Multi_Command_ICB --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t23" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Indexed_ICB --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t24" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_ICB_Reset_Reencode --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t25" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_Mixed_ICB --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t26" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_ICB_Inherit_Pipeline --frames 8
+
+RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t27" \
+DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+  "${DEMO_BIN}" Metal_ICB_Inherit_Buffers --frames 8
+
+for spec in '28 Metal_Compute_Dispatch_Threads' '29 Metal_Compute_Buffer_Binding'; do
+  read -r index name <<< "$spec"
+  RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t${index}" \
+  DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
+    "${DEMO_BIN}" "$name" --frames 8
+done
+
 test -s "${CAPTURE_DIR}/t00_capture.rdc"
 test -s "${CAPTURE_DIR}/t01_capture.rdc"
 test -s "${CAPTURE_DIR}/t02_capture.rdc"
@@ -178,6 +246,16 @@ test -s "${CAPTURE_DIR}/t16_capture.rdc"
 test -s "${CAPTURE_DIR}/t17_capture.rdc"
 test -s "${CAPTURE_DIR}/t18_capture.rdc"
 test -s "${CAPTURE_DIR}/t19_capture.rdc"
+test -s "${CAPTURE_DIR}/t20_capture.rdc"
+test -s "${CAPTURE_DIR}/t21_capture.rdc"
+test -s "${CAPTURE_DIR}/t22_capture.rdc"
+test -s "${CAPTURE_DIR}/t23_capture.rdc"
+test -s "${CAPTURE_DIR}/t24_capture.rdc"
+test -s "${CAPTURE_DIR}/t25_capture.rdc"
+test -s "${CAPTURE_DIR}/t26_capture.rdc"
+test -s "${CAPTURE_DIR}/t27_capture.rdc"
+test -s "${CAPTURE_DIR}/t28_capture.rdc"
+test -s "${CAPTURE_DIR}/t29_capture.rdc"
 
 "${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t00_capture.rdc" \
   -o "${CAPTURE_DIR}/t00.xml" -c xml
@@ -219,6 +297,22 @@ test -s "${CAPTURE_DIR}/t19_capture.rdc"
   -o "${CAPTURE_DIR}/t18.xml" -c xml
 "${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t19_capture.rdc" \
   -o "${CAPTURE_DIR}/t19.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t20_capture.rdc" \
+  -o "${CAPTURE_DIR}/t20.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t21_capture.rdc" \
+  -o "${CAPTURE_DIR}/t21.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t22_capture.rdc" \
+  -o "${CAPTURE_DIR}/t22.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t23_capture.rdc" \
+  -o "${CAPTURE_DIR}/t23.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t24_capture.rdc" \
+  -o "${CAPTURE_DIR}/t24.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t25_capture.rdc" \
+  -o "${CAPTURE_DIR}/t25.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t26_capture.rdc" \
+  -o "${CAPTURE_DIR}/t26.xml" -c xml
+"${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t27_capture.rdc" \
+  -o "${CAPTURE_DIR}/t27.xml" -c xml
 
 rg -q 'driver id="11">Metal<' "${CAPTURE_DIR}/t00.xml"
 rg -q 'name="MTLCommandBuffer::presentDrawable"' "${CAPTURE_DIR}/t00.xml"
@@ -438,6 +532,57 @@ rg -q 'name="offset" typename="uint64_t" width="8">256<' "${CAPTURE_DIR}/t19.xml
 rg -q 'name="offset" typename="uint64_t" width="8">320<' "${CAPTURE_DIR}/t19.xml"
 rg -q 'name="index" typename="uint64_t" width="8" important="true">4<' "${CAPTURE_DIR}/t19.xml"
 rg -q 'name="index" typename="uint64_t" width="8" important="true">6<' "${CAPTURE_DIR}/t19.xml"
+rg -q 'name="MTLRenderCommandEncoder::executeCommandsInBuffer"' "${CAPTURE_DIR}/t20.xml"
+rg -q 'name="MTLIndirectRenderCommand::drawPrimitives"' "${CAPTURE_DIR}/t20.xml"
+rg -q 'name="MTLRenderCommandEncoder::drawIndexedPrimitives"' "${CAPTURE_DIR}/t21.xml"
+rg -q 'name="indexBufferOffset" typename="uint64_t" width="8" important="true">4<' "${CAPTURE_DIR}/t21.xml"
+rg -q 'name="indirectBufferOffset" typename="uint64_t" width="8" important="true">16<' "${CAPTURE_DIR}/t21.xml"
+test "$(rg -c 'name="MTLRenderCommandEncoder::executeCommandsInBuffer"' "${CAPTURE_DIR}/t22.xml")" = "2"
+test "$(rg -c 'name="MTLIndirectRenderCommand::drawPrimitives"' "${CAPTURE_DIR}/t22.xml")" = "3"
+rg -q 'name="MTLIndirectRenderCommand::drawIndexedPrimitives"' "${CAPTURE_DIR}/t23.xml"
+rg -q 'name="indexType" typename="MTLIndexType" width="8" important="true" string="MTLIndexTypeUInt16"' "${CAPTURE_DIR}/t23.xml"
+rg -q 'name="indexBufferOffset" typename="uint64_t" width="8" important="true">4<' "${CAPTURE_DIR}/t23.xml"
+rg -q 'name="baseVertex" typename="int64_t" width="8" important="true">1<' "${CAPTURE_DIR}/t23.xml"
+rg -q 'name="baseInstance" typename="uint64_t" width="8" important="true">1<' "${CAPTURE_DIR}/t23.xml"
+rg -q 'name="MTLIndirectCommandBuffer::resetWithRange"' "${CAPTURE_DIR}/t24.xml"
+rg -q 'name="location" typename="uint64_t" width="8">1<' "${CAPTURE_DIR}/t24.xml"
+rg -q 'name="length" typename="uint64_t" width="8">1<' "${CAPTURE_DIR}/t24.xml"
+test "$(rg -c 'name="MTLIndirectRenderCommand::drawPrimitives"' "${CAPTURE_DIR}/t24.xml")" = "4"
+test "$(rg -c 'name="MTLRenderCommandEncoder::executeCommandsInBuffer"' "${CAPTURE_DIR}/t24.xml")" = "3"
+rg -q 'name="commandTypes".*string="MTL::IndirectCommandType\(3\)">3<' "${CAPTURE_DIR}/t25.xml"
+rg -q 'name="MTLIndirectRenderCommand::drawPrimitives"' "${CAPTURE_DIR}/t25.xml"
+rg -q 'name="MTLIndirectRenderCommand::drawIndexedPrimitives"' "${CAPTURE_DIR}/t25.xml"
+rg -q 'name="indexBufferOffset" typename="uint64_t" width="8" important="true">4<' "${CAPTURE_DIR}/t25.xml"
+rg -q 'name="baseVertex" typename="int64_t" width="8" important="true">1<' "${CAPTURE_DIR}/t25.xml"
+rg -q 'name="baseInstance" typename="uint64_t" width="8" important="true">1<' "${CAPTURE_DIR}/t25.xml"
+for index in 28 29; do
+  "${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t${index}_capture.rdc" \
+    -o "${CAPTURE_DIR}/t${index}.xml" -c xml
+done
+rg -q 'name="MTLComputeCommandEncoder::dispatchThreads"' "${CAPTURE_DIR}/t28.xml"
+rg -q 'name="MTLComputeCommandEncoder::setBuffer"' "${CAPTURE_DIR}/t29.xml"
+python3 - "${CAPTURE_DIR}/t28.xml" "${CAPTURE_DIR}/t29.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+t28, t29 = [ET.parse(path).getroot() for path in sys.argv[1:]]
+def chunks(root, name):
+    return [node for node in root.findall('./chunks/chunk') if node.get('name') == name]
+dispatch = chunks(t28, 'MTLComputeCommandEncoder::dispatchThreads')
+assert len(dispatch) == 1
+assert [int(node.text) for node in dispatch[0].find("./struct[@name='grid']")] == [7, 5, 1]
+assert [int(node.text) for node in dispatch[0].find("./struct[@name='threadsPerGroup']")] == [4, 3, 1]
+bindings = chunks(t29, 'MTLComputeCommandEncoder::setBuffer')
+assert len(bindings) == 2
+assert [(int(node.find("./uint[@name='index']").text),
+         int(node.find("./uint[@name='offset']").text)) for node in bindings] == [(2, 32), (4, 64)]
+PY
+
+rg -q 'name="inheritPipelineState" typename="bool" important="true">true<' "${CAPTURE_DIR}/t26.xml"
+test "$(rg -c 'name="MTLRenderCommandEncoder::executeCommandsInBuffer"' "${CAPTURE_DIR}/t26.xml")" = "2"
+rg -q 'name="inheritBuffers" typename="bool" important="true">true<' "${CAPTURE_DIR}/t27.xml"
+rg -q 'name="maxVertexBufferBindCount" typename="uint64_t" width="8" important="true">0<' "${CAPTURE_DIR}/t27.xml"
+test "$(rg -c 'name="MTLRenderCommandEncoder::executeCommandsInBuffer"' "${CAPTURE_DIR}/t27.xml")" = "2"
 
 clang++ -std=c++17 -arch "${TARGET_ARCH}" -mmacosx-version-min=12.0 \
   -DRENDERDOC_PLATFORM_APPLE -I"${REPO_ROOT}" \
@@ -489,6 +634,44 @@ clang++ -std=c++17 -arch "${TARGET_ARCH}" -mmacosx-version-min=12.0 \
   "${CAPTURE_DIR}/t18_storage.bin"
 "${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t19_capture.rdc" "${CAPTURE_DIR}/t19_replay.ppm" \
   "${CAPTURE_DIR}/t19_storage.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t20_capture.rdc" "${CAPTURE_DIR}/t20_replay.ppm" \
+  "${CAPTURE_DIR}/t20_vertices.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t21_capture.rdc" "${CAPTURE_DIR}/t21_replay.ppm" \
+  "${CAPTURE_DIR}/t21_arguments.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t22_capture.rdc" "${CAPTURE_DIR}/t22_replay.ppm" \
+  "${CAPTURE_DIR}/t22_packets.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t23_capture.rdc" "${CAPTURE_DIR}/t23_replay.ppm" \
+  "${CAPTURE_DIR}/t23_indices.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t24_capture.rdc" "${CAPTURE_DIR}/t24_replay.ppm" \
+  "${CAPTURE_DIR}/t24_packets.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t25_capture.rdc" "${CAPTURE_DIR}/t25_replay.ppm" \
+  "${CAPTURE_DIR}/t25_resources.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t26_capture.rdc" "${CAPTURE_DIR}/t26_replay.ppm" \
+  "${CAPTURE_DIR}/t26_vertices.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t27_capture.rdc" "${CAPTURE_DIR}/t27_replay.ppm" \
+  "${CAPTURE_DIR}/t27_packets.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t28_capture.rdc" "${CAPTURE_DIR}/t28_replay.ppm"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t29_capture.rdc" "${CAPTURE_DIR}/t29_replay.ppm" \
+  "${CAPTURE_DIR}/t29_output.bin"
+python3 "${REPO_ROOT}/util/test/metal/metal_compute_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t28_capture.rdc" \
+  "${CAPTURE_DIR}/t29_capture.rdc"
+
+python3 "${REPO_ROOT}/util/test/metal/metal_icb_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t20_capture.rdc"
+python3 "${REPO_ROOT}/util/test/metal/metal_indexed_indirect_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t21_capture.rdc"
+python3 "${REPO_ROOT}/util/test/metal/metal_multi_icb_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t22_capture.rdc"
+python3 "${REPO_ROOT}/util/test/metal/metal_indexed_icb_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t23_capture.rdc"
+python3 "${REPO_ROOT}/util/test/metal/metal_icb_reset_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t24_capture.rdc"
+python3 "${REPO_ROOT}/util/test/metal/metal_mixed_icb_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t25_capture.rdc"
+python3 "${REPO_ROOT}/util/test/metal/metal_icb_inheritance_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t26_capture.rdc" \
+  "${CAPTURE_DIR}/t27_capture.rdc" "${CAPTURE_DIR}/t20_capture.rdc"
 
 read_rgb()
 {
@@ -560,6 +743,29 @@ test "$(read_rgb "${CAPTURE_DIR}/t14_replay.ppm" 144 240)" = "ff2010"
 test "$(read_rgb "${CAPTURE_DIR}/t14_replay.ppm" 320 240)" = "06090e"
 test "$(read_rgb "${CAPTURE_DIR}/t14_replay.ppm" 496 240)" = "1840ff"
 test "$(xxd -p "${CAPTURE_DIR}/t14_indices.bin" | tr -d '\n')" = "000001000200"
+test "$(read_rgb "${CAPTURE_DIR}/t20_replay.ppm" 144 240)" = "06090e"
+test "$(read_rgb "${CAPTURE_DIR}/t20_replay.ppm" 320 240)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t20_replay.ppm" 496 240)" = "06090e"
+test "$(read_rgb "${CAPTURE_DIR}/t21_replay.ppm" 144 240)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t21_replay.ppm" 320 240)" = "06090e"
+test "$(read_rgb "${CAPTURE_DIR}/t21_replay.ppm" 496 240)" = "1840ff"
+test "$(read_rgb "${CAPTURE_DIR}/t22_replay.ppm" 192 240)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t22_replay.ppm" 320 240)" = "1020ff"
+test "$(read_rgb "${CAPTURE_DIR}/t22_replay.ppm" 448 240)" = "1020ff"
+test "$(read_rgb "${CAPTURE_DIR}/t22_replay.ppm" 560 60)" = "06090e"
+test "$(read_rgb "${CAPTURE_DIR}/t23_replay.ppm" 144 240)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t23_replay.ppm" 320 240)" = "06090e"
+test "$(read_rgb "${CAPTURE_DIR}/t23_replay.ppm" 496 240)" = "1840ff"
+test "$(read_rgb "${CAPTURE_DIR}/t24_replay.ppm" 96 240)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t24_replay.ppm" 320 240)" = "10ff20"
+test "$(read_rgb "${CAPTURE_DIR}/t24_replay.ppm" 544 240)" = "1020ff"
+test "$(read_rgb "${CAPTURE_DIR}/t24_replay.ppm" 240 280)" = "06090e"
+test "$(read_rgb "${CAPTURE_DIR}/t25_replay.ppm" 112 240)" = "ff2010"
+test "$(read_rgb "${CAPTURE_DIR}/t25_replay.ppm" 432 240)" = "10ff20"
+test "$(read_rgb "${CAPTURE_DIR}/t25_replay.ppm" 550 240)" = "1840ff"
+test "$(read_rgb "${CAPTURE_DIR}/t25_replay.ppm" 320 240)" = "06090e"
+test "$(xxd -p "${CAPTURE_DIR}/t21_arguments.bin" | tr -d '\n')" = \
+  "0300000002000000010000000100000001000000"
 test "$(read_rgb "${CAPTURE_DIR}/t15_replay.ppm" 160 120)" = "ff2010"
 test "$(read_rgb "${CAPTURE_DIR}/t15_replay.ppm" 320 240)" = "06090e"
 test -s "${CAPTURE_DIR}/t15_output.dds"
@@ -583,6 +789,14 @@ test "$(read_rgb "${CAPTURE_DIR}/t19_replay.ppm" 480 120)" = "efcf00"
 test "$(read_rgb "${CAPTURE_DIR}/t19_replay.ppm" 160 360)" = "ff2010"
 test "$(read_rgb "${CAPTURE_DIR}/t19_replay.ppm" 480 360)" = "10df30"
 test "$(stat -f %z "${CAPTURE_DIR}/t19_storage.bin")" = "768"
+test "$(stat -f %z "${CAPTURE_DIR}/t20_vertices.bin")" = "152"
+test "$(stat -f %z "${CAPTURE_DIR}/t21_arguments.bin")" = "20"
+test "$(stat -f %z "${CAPTURE_DIR}/t22_packets.bin")" = "312"
+test "$(xxd -p "${CAPTURE_DIR}/t23_indices.bin" | tr -d '\n')" = "000001000200"
+test "$(stat -f %z "${CAPTURE_DIR}/t24_packets.bin")" = "416"
+test "$(stat -f %z "${CAPTURE_DIR}/t25_resources.bin")" = "252"
+test "$(stat -f %z "${CAPTURE_DIR}/t26_vertices.bin")" = "24"
+test "$(stat -f %z "${CAPTURE_DIR}/t27_packets.bin")" = "208"
 
 "${LIFECYCLE_SMOKE}" "${CAPTURE_DIR}/t00_capture.rdc" \
   "${CAPTURE_DIR}/t01_capture.rdc" "${CAPTURE_DIR}/t02_capture.rdc" \
@@ -594,9 +808,14 @@ test "$(stat -f %z "${CAPTURE_DIR}/t19_storage.bin")" = "768"
   "${CAPTURE_DIR}/t13_capture.rdc" "${CAPTURE_DIR}/t14_capture.rdc" \
   "${CAPTURE_DIR}/t15_capture.rdc" "${CAPTURE_DIR}/t16_capture.rdc" \
   "${CAPTURE_DIR}/t17_capture.rdc" "${CAPTURE_DIR}/t18_capture.rdc" \
-  "${CAPTURE_DIR}/t19_capture.rdc" 10
+  "${CAPTURE_DIR}/t19_capture.rdc" "${CAPTURE_DIR}/t20_capture.rdc" \
+  "${CAPTURE_DIR}/t21_capture.rdc" "${CAPTURE_DIR}/t22_capture.rdc" \
+  "${CAPTURE_DIR}/t23_capture.rdc" "${CAPTURE_DIR}/t24_capture.rdc" \
+  "${CAPTURE_DIR}/t25_capture.rdc" "${CAPTURE_DIR}/t26_capture.rdc" \
+  "${CAPTURE_DIR}/t27_capture.rdc" \
+  "${CAPTURE_DIR}/t28_capture.rdc" "${CAPTURE_DIR}/t29_capture.rdc" 10
 
-for index in 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19; do
+for index in 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29; do
   "${RENDERDOCCMD}" replay --loops 1 "${CAPTURE_DIR}/t${index}_capture.rdc"
 done
 
@@ -621,6 +840,16 @@ echo "T16: ${CAPTURE_DIR}/t16_capture.rdc"
 echo "T17: ${CAPTURE_DIR}/t17_capture.rdc"
 echo "T18: ${CAPTURE_DIR}/t18_capture.rdc"
 echo "T19: ${CAPTURE_DIR}/t19_capture.rdc"
+echo "T20: ${CAPTURE_DIR}/t20_capture.rdc"
+echo "T21: ${CAPTURE_DIR}/t21_capture.rdc"
+echo "T22: ${CAPTURE_DIR}/t22_capture.rdc"
+echo "T23: ${CAPTURE_DIR}/t23_capture.rdc"
+echo "T24: ${CAPTURE_DIR}/t24_capture.rdc"
+echo "T25: ${CAPTURE_DIR}/t25_capture.rdc"
+echo "T26: ${CAPTURE_DIR}/t26_capture.rdc"
+echo "T27: ${CAPTURE_DIR}/t27_capture.rdc"
+echo "T28: ${CAPTURE_DIR}/t28_capture.rdc"
+echo "T29: ${CAPTURE_DIR}/t29_capture.rdc"
 echo "T00 replay: ${CAPTURE_DIR}/t00_replay.ppm"
 echo "T01 replay: ${CAPTURE_DIR}/t01_replay.ppm"
 echo "T01 event replay: clear -> draw -> clear verified for 10 cycles"
@@ -645,4 +874,12 @@ echo "T16 vertex texture/sampler binding, reflection, VS descriptors, usage, see
 echo "T17 vertex/fragment batch texture/sampler ranges, empty slots, descriptors, usage, seek, DDS, and output verified"
 echo "T18 fragment storage-buffer slot/range, reflection, descriptors, usage, raw export, seek, and output verified"
 echo "T19 vertex storage-buffer slot/range, reflection, descriptors, usage, raw export, seek, and output verified"
-echo "T00-T19 CLI replay, lifecycle, and unsupported-interface stability verified"
+echo "T20 ICB execute/draw actions, range, IA/Mesh, resource usage, raw export, seek, and output verified"
+echo "T21 indexed indirect arguments/indexStart/base vertex/instance, exact IA ranges, usage, invalid captures, seek, and output verified"
+echo "T22 multi-command ICB nonzero range, ordered actions, per-command IA/Mesh, usage, invalid captures, seek, and output verified"
+echo "T23 indexed ICB index offset/base vertex/instance, exact IA/Mesh, usage, invalid captures, seek, and output verified"
+echo "T24 ICB reset/re-encode range, replacement state, old-resource invalidation, invalid captures, seek, and output verified"
+echo "T25 mixed non-indexed/indexed ICB actions, exact IA/Mesh, usage, invalid captures, seek, and output verified"
+echo "T26 inherited pipeline and T27 inherited buffers, exact draw state, usage, invalid captures, seek, and output verified"
+echo "T28 dispatchThreads and T29 compute buffer binding, seek, resource data, and invalid captures verified"
+echo "T00-T29 CLI replay, lifecycle, and unsupported-interface stability verified"

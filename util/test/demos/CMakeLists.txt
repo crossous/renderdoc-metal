@@ -237,9 +237,19 @@ set(METAL_SRC
         metal/metal_test.h
         metal/metal_blit_operations.cpp
         metal/metal_compute_texture_filter.cpp
+        metal/metal_compute_dispatch_threads.cpp
+        metal/metal_compute_buffer_binding.cpp
         metal/metal_argument_buffer.cpp
         metal/metal_indirect_draw.cpp
+        metal/metal_indirect_command_buffer.cpp
+        metal/metal_icb_reset_reencode.cpp
+        metal/metal_mixed_icb.cpp
+        metal/metal_icb_inherit_pipeline.cpp
+        metal/metal_icb_inherit_buffers.cpp
+        metal/metal_multi_command_icb.cpp
         metal/metal_indexed_instancing.cpp
+        metal/metal_indexed_icb.cpp
+        metal/metal_indexed_indirect_draw.cpp
         metal/metal_point_line.cpp
         metal/metal_vertex_texture.cpp
         metal/metal_batch_texture.cpp
