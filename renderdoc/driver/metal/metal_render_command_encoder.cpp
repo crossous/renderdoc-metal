@@ -1342,7 +1342,9 @@ bool WrappedMTLRenderCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
     ActionDescription action;
     if(IsLoading(m_State))
     {
-      action.customName = "End Metal Render Pass";
+      action.customName = StringFormat::Fmt(
+          "End Metal Render Pass (%s)",
+          RDMTL::RenderPassOpString(m_Device->GetReplay()->GetRenderPassDescriptor(), true).c_str());
       action.flags = ActionFlags::PassBoundary | ActionFlags::EndPass;
       m_Device->GetReplay()->SetActionOutputs(action);
     }
@@ -1353,6 +1355,8 @@ bool WrappedMTLRenderCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
     {
       AddEvent();
       AddAction(action);
+      m_Device->GetReplay()->AddRenderPassStoreUsage(
+          m_Device->GetReplay()->GetRenderPassDescriptor());
     }
   }
   return true;

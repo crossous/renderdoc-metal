@@ -29,15 +29,23 @@
 - L2 必跑一次：T11/T28/T29（现有 compute）；T03/T16/T17（直接和批量
   texture/sampler）；T18/T19（buffer storage 分类）；T01（render/output 基线）。
 - L2 条件：若改动通用 argument buffer 或 descriptor reflection，追加 T12；
-  改动 render pass/attachment，追加 T06/T07/T08；改动资源初始内容/所有权，
-  追加 T00/T09/T10；改动 ICB 或公共事件层级，追加 T20/T22/T23/T24/T25/T26/T27。
+  改动 render pass/attachment，追加 T06/T07/T08；改动 blit 前后事件分组，
+  追加 T10；改动资源初始内容/所有权，追加 T00/T09/T10；改动 ICB 或公共事件层级，
+  追加 T20/T22/T23/T24/T25/T26/T27。
   任何新受影响旧路径先补具体 T 编号和原因，再跑测试。
 - L4：由用户在当前最终 qrenderdoc 同轮检查 T30/T31 的 Event/API、CS Pipeline
   sampler 与批量 slot/空槽、Texture/Buffer/Resource 跳转、逐事件输出、保存/export
   和 `No problems detected`。准确 EID、资源编号和画面以最终 capture/自动断言
-  写入验收单；未验项持续记在 `QA_PENDING.md`。
+  写入验收单；未验项持续记在 `QA_PENDING.md`。T31 的 GUI 导出入口由用户
+  明确免除本轮复验，自动 DDS/raw 数据已核对。
 - L3 默认不执行。若 L1/L2 暴露不能由上列编号圈定的跨场景风险，或进入发布/
   合并门槛，记录原因后在最终代码上覆盖 T00–T31 全部 native、capture/XML、
   Replay API/output、逐份 CLI replay 与 lifecycle。
 
-当前状态：计划与验证范围已写定，T30/T31 尚未实现、构建或验收。
+关闭状态：T30/T31 的最终构建联合自动验证和用户 GUI L4 均通过。T30 原功能
+及公共事件树修改后的 EID 4/13 顶层、`$action()` 最短复验已由用户确认；
+T31 EID 7 分组修复、空槽/筛选/画面/状态栏已确认。T31 GUI 导出入口经用户
+明确免除本轮复验，自动 DDS/raw 数据已核对；不记作 GUI 实测。
+L3 条件未触发，故未执行全量回归。PHASE31、PHASE32 与本批次已关闭；
+`QA_PENDING.md` 当前无待验项。最终证据见 `STATUS.md` 顶部，下一批为
+`BATCH33-34.md`，第一项 `PHASE33.md` P33.1。

@@ -5,9 +5,25 @@
 
 ## 当前待验
 
-无。用户已在同一轮 qrenderdoc 确认 T28 右侧缩略图、T29 `$action()` 筛选及
-右侧缩略图均正常；T28/T29 的其余 L4 项此前已确认，BATCH29-30 L4 完成。
-下一批 T30/T31 尚未开发，形成正式 capture 后再登记。
+无。用户已确认 T32/T33 的新版 Event Browser 摘要；此前参数、CS、
+资源和画面等项目也已确认。T32/T33、PHASE33/34 与 BATCH33-34 已关闭。
+后续 action 名称一致性工作见 `ACTION_NAME_ALIGNMENT.md`；尚未实施，
+因此当前不产生新的人工 L4 待验项。T31 GUI 导出入口此前由用户明确免除
+本轮复验，不记作 GUI 实测。
+
+## BATCH33-34 验收归档
+
+| 批次 / 功能 | 状态 | 验收单与版本 | 用户反馈 |
+| --- | --- | --- | --- |
+| BATCH33-34 / T32 compute indirect dispatch | 自动与 GUI L4 通过；批次已关闭 | `QA_BATCH33-34.md`；`t32_capture.rdc` SHA-256 `9aa1432c8d9a…`；GUI `f1ebea2ddb86…`；库 `aa21c9a6983d…` | EID 6/12 的参数、CS、资源、画面、状态栏及新版 `<2, 2, 1>` 摘要已确认 |
+| BATCH33-34 / T33 GPU 生成间接参数 | 自动与 GUI L4 通过；批次已关闭 | `QA_BATCH33-34.md`；`t33_capture.rdc` SHA-256 `4478197f9994…`；同一 GUI/库 | EID 7/10/12/18 的参数、CS、资源、画面、状态栏及新版 `<2, 2, 1>` 摘要已确认 |
+
+## BATCH31-32 验收归档
+
+| 批次 / 功能 | 状态 | 最终构建与 capture | 验收单 | 用户反馈与备注 |
+| --- | --- | --- | --- | --- |
+| BATCH31-32 / T30 compute sampler | 自动与 GUI L4 通过；批次已关闭 | `build-macos-debug/bin/qrenderdoc.app`；`captures/metal-smoke/t30_capture.rdc`；capture SHA-256 `8bfe33501fad…`；最新库 `7a494e202d1b…` | `QA_BATCH31-32.md` | 原功能已验；用户进一步确认 EID 4/13 顶层及 `$action()` 筛选符合预期 |
+| BATCH31-32 / T31 compute batch binding | 自动与 GUI L4 通过；批次已关闭 | 同一 app；`captures/metal-smoke/t31_capture.rdc`；capture SHA-256 `f5ad1c86660b…`；最新库 `7a494e202d1b…` | `QA_BATCH31-32.md` | EID 7、12–14、18 及后续画面/空槽/筛选/状态栏已确认；GUI 导出入口本轮免复验，自动 DDS/raw 已核对 |
 
 ## BATCH29-30 验收归档
 
@@ -69,4 +85,5 @@
    精简复验；沟通仍无法确认或用户明确要求时，才由 agent 用 Computer Use 定向检查。
 
 本表记录结果而非替代验收单。T28/T29 的正式 captures 与验收步骤见
-`QA_BATCH29-30.md`；当前无人工待验项。
+`QA_BATCH29-30.md`；T30/T31 的正式 captures 与验收记录见 `QA_BATCH31-32.md`。
+当前无人工 GUI L4 待验项；T30–T33 所在批次均已关闭。

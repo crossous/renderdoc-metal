@@ -62,8 +62,10 @@
 | T27 | ICB inherit buffers | execute 时继承 vertex buffer 与动态 offset | P2 | Native/Capture/XML/Replay API/CLI、2×104-byte 原始 packet、逐事件 state/seek、异常拒绝、联合 11×10 lifecycle 与同轮最新 qrenderdoc Buffer 16/17 offset 16、IA/Mesh/Resource、HTML/CSV/DDS L4 通过；L3 未触发 |
 | T28 | compute dispatchThreads | thread-level grid、非整除边界与 action | P2 | Native/Capture/XML/Replay API action/state/usage/readback/seek、10×7 局部更新/透明边界、DDS、异常拒绝、联合 CLI/lifecycle 与 GUI L4 通过；右侧缩略图已验 |
 | T29 | compute buffer binding | 非零 offset 的 compute buffer 输入/输出 | P2 | Native/Capture/XML/Replay API buffer slot 2/4、offset 32/64、272-byte descriptor、原始字节/像素/seek、异常拒绝、联合 CLI/lifecycle 与 GUI L4 通过；`$action()` 和右侧缩略图已验 |
-| T30 | compute sampler 直接绑定 | CS sampler slot、采样过滤/寻址、状态与输出 | P2 | 下一批已规划，尚未实施；见 `PHASE31.md` |
-| T31 | compute 批量资源绑定 | 非零 range、空槽/覆盖、texture/sampler/buffer 批量入口 | P2 | 下一批已规划，尚未实施；见 `PHASE32.md` |
+| T30 | compute sampler 直接绑定 | CS sampler slot、采样过滤/寻址、状态与输出 | P2 | 自动与 GUI L4 通过；公共事件树 EID 4/13 顶层及 `$action()` 最短复验已确认；阶段已关闭 |
+| T31 | compute 批量资源绑定 | 非零 range、空槽/覆盖、texture/sampler/buffer 批量入口 | P2 | 自动与 GUI L4 通过；EID 7 分组、空槽、筛选、状态栏已验，GUI 导出入口由用户本轮免复验且自动 DDS/raw 已核对；阶段已关闭 |
+| T32 | CPU 参数 compute indirect dispatch | 非零 offset、间接 threadgroup 数量与资源 usage | P2 | Native/Capture/XML/Replay API、5 类异常拒绝、联合 CLI/lifecycle 与 GUI L4 通过；新版实际执行数量摘要已验，阶段已关闭 |
+| T33 | GPU 生成参数 compute indirect dispatch | compute 写入参数、跨 encoder 可见性与间接 dispatch | P2 | Native/Capture/XML/Replay API、6 类异常拒绝、写入前后/dispatch 后 seek、联合 CLI/lifecycle 与 GUI L4 通过；新版实际执行数量摘要已验，阶段已关闭 |
 
 ## 外部样例候选
 

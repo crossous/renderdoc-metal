@@ -2,7 +2,8 @@
 
 T11/T28/T29 已覆盖 compute pipeline、texture/buffer 与两种 dispatch，但尚无
 compute sampler 直接绑定。T30 用固定纹理和采样坐标区分采样器状态；与
-`PHASE32.md` 组成 `BATCH31-32.md`。状态：计划就绪，未开始实现。
+`PHASE32.md` 组成 `BATCH31-32.md`。状态：自动与 GUI L4 均通过；用户确认
+公共事件树修改后的 EID 4/13 Begin/End 顶层与 `$action()` 筛选，阶段已关闭。
 
 ## 验证清单
 
@@ -11,7 +12,7 @@ compute sampler 直接绑定。T30 用固定纹理和采样坐标区分采样器
 - L2 必跑：T11/T28/T29、T03/T16/T17、T01。若涉及 buffer/storage 映射，
   补 T18/T19；批末联合清单仍包含它们。
 - L2 条件：通用 argument buffer/descriptor reflection 改动加 T12；render-pass
-  改动加 T06/T07/T08；初始内容/所有权改动加 T00/T09/T10；公共事件/ICB
+  改动加 T06/T07/T08；blit 前后事件分组改动加 T10；初始内容/所有权改动加 T00/T09/T10；公共事件/ICB
   改动加 T20/T22/T23/T24/T25/T26/T27。其他影响先补编号。
 - L4：批末用户检查 Event/API、CS sampler 的 slot/过滤/寻址、Texture/Resource、
   dispatch 前后输出、HTML/DDS 与状态栏；agent 完成全部终端可判定项。

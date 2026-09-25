@@ -61,12 +61,19 @@ public:
   void BeginComputePass();
   void SetComputePipeline(ResourceId id);
   void SetComputeTexture(uint32_t index, ResourceId id);
+  void BindComputeSampler(uint32_t index, ResourceId id);
   ResourceId GetComputeTexture(uint32_t index) const;
+  ResourceId GetComputeTextureForAccess(bool write) const;
   void BindComputeBuffer(uint32_t index, ResourceId id, uint64_t offset);
   MetalPipe::BufferBinding GetComputeBuffer(uint32_t index) const;
+  MetalPipe::BufferBinding GetComputeBufferForAccess(bool write) const;
   void AddDepthStencilState(ResourceId id, const RDMTL::DepthStencilDescriptor &descriptor);
   void AddSamplerState(ResourceId id, const RDMTL::SamplerDescriptor &descriptor);
   void BeginRenderPass(const RDMTL::RenderPassDescriptor &descriptor);
+  const RDMTL::RenderPassDescriptor &GetRenderPassDescriptor() const
+  {
+    return m_CurrentRenderPassDescriptor;
+  }
   void EndRenderPass();
   void BindRenderPipeline(ResourceId id);
   bool IsVertexStorageBufferSlot(uint32_t index) const;
@@ -130,9 +137,14 @@ public:
   void AddEvent(uint32_t chunkIndex, uint64_t fileOffset);
   uint32_t GetNextEventID() const { return m_NextEventID; }
   void AddAction(const ActionDescription &action);
+  void RegisterComputeIndirectAction(uint32_t eventId, ResourceId buffer, uint64_t offset);
+  bool HasPendingComputeIndirectActions() const { return !m_PendingComputeIndirectActions.empty(); }
+  void ResolvePendingComputeIndirectActions();
   void BeginMultiAction(uint32_t childCount);
   uint32_t GetMultiActionEndEvent(uint32_t eventId) const;
   void AddUsage(ResourceId id, ResourceUsage usage);
+  void AddRenderPassLoadUsage(const RDMTL::RenderPassDescriptor &descriptor);
+  void AddRenderPassStoreUsage(const RDMTL::RenderPassDescriptor &descriptor);
   const APIEvent *GetEvent(uint32_t eventId) const;
   uint64_t GetNextEventOffset(uint32_t eventId, uint64_t frameSize) const;
 
@@ -287,6 +299,13 @@ private:
   RDResult m_FatalError;
   DriverInformation m_DriverInfo = {};
   FrameRecord m_FrameRecord;
+  struct PendingComputeIndirectAction
+  {
+    uint32_t eventId;
+    ResourceId buffer;
+    uint64_t offset;
+  };
+  rdcarray<PendingComputeIndirectAction> m_PendingComputeIndirectActions;
   rdcarray<APIEvent> m_PendingEvents;
   rdcarray<APIEvent> m_Events;
   std::map<ResourceId, rdcarray<EventUsage>> m_ResourceUses;
@@ -329,6 +348,7 @@ private:
   std::map<ResourceId, RDMTL::SamplerDescriptor> m_SamplerStates;
   std::map<ResourceId, MetalPipe::ArgumentBuffer> m_ArgumentBuffers;
   MetalPipe::State m_CurrentPipelineState;
+  RDMTL::RenderPassDescriptor m_CurrentRenderPassDescriptor;
   std::map<uint32_t, MetalPipe::State> m_EventPipelineStates;
   MetalPipe::State *m_MetalPipelineState = NULL;
 

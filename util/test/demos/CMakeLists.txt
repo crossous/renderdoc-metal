@@ -239,6 +239,10 @@ set(METAL_SRC
         metal/metal_compute_texture_filter.cpp
         metal/metal_compute_dispatch_threads.cpp
         metal/metal_compute_buffer_binding.cpp
+        metal/metal_compute_sampler.cpp
+        metal/metal_compute_batch_binding.cpp
+        metal/metal_compute_indirect_dispatch.cpp
+        metal/metal_compute_gpu_indirect_dispatch.cpp
         metal/metal_argument_buffer.cpp
         metal/metal_indirect_draw.cpp
         metal/metal_indirect_command_buffer.cpp

@@ -346,16 +346,28 @@ void ReplayController::AddFakeMarkers()
 
   for(int32_t i = 1; i < actions.count(); i++)
   {
-    if(actions[refaction].flags & actionFlags)
+    // Pass boundaries delimit real encoder scopes. Keep them outside heuristic fake passes,
+    // even when their empty output set matches a neighboring copy/clear action.
+    if(actions[start].flags & ActionFlags::PassBoundary)
+    {
+      ret.push_back(actions[start]);
+      start = i;
+      refaction = i;
+      continue;
+    }
+
+    const bool atPassBoundary = bool(actions[i].flags & ActionFlags::PassBoundary);
+
+    if(!atPassBoundary && (actions[refaction].flags & actionFlags))
     {
       refaction = i;
       continue;
     }
 
-    if(actions[i].flags & actionFlags)
+    if(!atPassBoundary && (actions[i].flags & actionFlags))
       continue;
 
-    if(PassEquivalent(actions[i], actions[refaction]))
+    if(!atPassBoundary && PassEquivalent(actions[i], actions[refaction]))
       continue;
 
     int end = i - 1;

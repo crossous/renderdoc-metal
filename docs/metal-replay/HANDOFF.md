@@ -1,5 +1,119 @@
 # Agent 交接规范
 
+## 2026-09-26 真实应用目标与本机能力评估
+
+用户希望本项目最终能截取 macOS 图形应用/游戏并接入 UE/Unity，重点是 UE
+Nanite、光追、mesh shading。当前 T00–T33 是受控场景，不等于真实引擎
+兼容。`REAL_WORLD_CAPTURE_ROADMAP.md` 给出缺口、建议从 UE 普通场景
+首帧开始的真实应用里程碑、自动化 triage 与 M2 Pro/M4 分工。本轮未实施
+代码或新 capture，`QA_PENDING.md` 仍无待验项；全部未提交改动保留。
+
+## 2026-09-26 BATCH33-34 关闭与 action 名称审查
+
+用户确认 T32 EID 12 与 T33 EID 18 新版
+`dispatchThreadgroups(indirect, <2, 2, 1>)` 摘要符合预期；此前参数、
+CS 间接栏、资源、画面和状态栏已验。T32/T33 GUI L4 通过，PHASE33、
+PHASE34、BATCH33-34 已关闭，`QA_PENDING.md` 当前无待验项。
+
+已对照 Vulkan/D3D11/D3D12/GL 审查 Metal custom action names：间接
+compute 摘要一致，部分直接 draw/dispatch、单次 indirect draw、ICB、blit
+名称存在详细程度或格式差异。后续工作和定向验证见
+`ACTION_NAME_ALIGNMENT.md`。此次只改文档，不改 app、代码或 captures，
+沿用 `STATUS.md` 上一检查点的最终自动证据；全部未提交改动保留。
+
+## 2026-09-26 T32/T33 新间接摘要待最短 GUI 复验
+
+与 Vulkan/D3D11/GL/D3D12 对齐，Metal compute indirect 的 Event Browser
+自定义摘要现显示实际 threadgroup 数量：
+`dispatchThreadgroups(indirect, <2, 2, 1>)`。T33 在 command buffer 完成后
+解析 GPU writer 的参数，避免误显示零值。用户此前已验 CS 间接参数栏、
+资源、画面及状态栏；只需按 `QA_BATCH33-34.md` 顶部复验 T32 EID 12 与
+T33 EID 18 的新摘要。最终库 `aa21c9a6983d…`，GUI `f1ebea2ddb86…`；
+11 份定向 Replay API/CLI、12×10 lifecycle 与异常拒绝通过。
+T32/T33 在 `QA_PENDING.md` 待确认，PHASE33/34 与 BATCH33-34 不关闭。
+全部未提交改动保留。
+
+## 2026-09-26 T32/T33 用户部分验收，最短复验待完成
+
+用户确认两份 capture 原验收单中除 IA 栏位以外的参数、资源、画面和状态栏。
+compute indirect buffer 已移至 CS 的 `Indirect Dispatch`，图形 draw 的 IA
+位置不变；Event Browser 自定义 action 摘要新增 offset 与 threads/group。
+最终 GUI `f1ebea2ddb86…`、库 `9c0b65bea9f5…`，T32/T33 capture 不变。
+只请用户按 `QA_BATCH33-34.md` 顶部两步，在同一 app 中分别看 EID 12/18；
+T32/T33 仍在 `QA_PENDING.md` 待人工确认，两阶段和批次不得关闭。
+全部未提交改动保留。
+
+## 2026-09-26 BATCH33-34 自动完成，T32/T33 GUI L4 待用户
+
+无需新对话或 compact。T32 CPU 参数和 T33 GPU 生成参数的 compute 间接
+dispatch 已完成 P33.1–P34.4 功能与最终联合自动验证。正式 capture、最终
+app 和按 EID 排序的同轮 GUI 验收步骤见 `QA_BATCH33-34.md`；T32/T33
+均在 `QA_PENDING.md` 标为待人工 L4，PHASE33、PHASE34 和 BATCH33-34
+不得关闭。用户反馈不符时先分析/修复并给最短复验；仅沟通仍无法确认或用户
+明确要求时用 Computer Use。可继续后续功能，但每次结果和交接须提醒这两项。
+
+最终库 `8c05d8b03281…`、GUI `5b2bc3aa95cf…`，T32/T33 capture 分别为
+`9aa1432c8d9a…`、`4478197f9994…`。16 份定向 Replay API 和逐份 CLI、
+17 份 capture × 10 轮 lifecycle、T32/T33 的 5/6 类异常拒绝通过；
+自动 DDS 完全相同，raw 参数各 44 字节。L3 条件未触发。
+全部未提交改动保留。
+
+## 2026-09-26 BATCH31-32 关闭，下一批 BATCH33-34
+
+用户确认 T30 本次公共事件树改动后的 EID 4/13 顶层与 `$action()` 筛选均符合
+预期。T30 原功能与 T31 GUI L4 此前已通过；T31 GUI 导出入口由用户明确
+免除本轮复验，自动 DDS/raw 数据已核对，不记作 GUI 实测。最终联合定向的
+17 份 Replay API/CLI、18×10 lifecycle 与 L3 决策见 `STATUS.md` 顶部。
+PHASE31、PHASE32、BATCH31-32 已关闭，`QA_PENDING.md` 无待验项，
+全部未提交改动保留。
+
+下一批 `BATCH33-34.md` 已拆成 `PHASE33.md` T32 CPU 参数 compute indirect
+dispatch 与 `PHASE34.md` T33 GPU 生成参数 compute indirect dispatch。第一项
+P33.1：建立固定参数/输出的 native fixture，先证明未注入运行正确；之后再接
+capture/XML、replay/state 与按编号列明的定向验证。下一批尚未实施。
+
+## 2026-09-26 T31 L4 收口，T30 事件树待复验
+
+用户确认 T31 EID 18 Show Empty Items 中 sampler 0/1/3/4、只读 texture
+0/2/4、只读 buffer 0/1/2/3/5/7 为空；`$action()` 隐藏状态调用、清空后恢复，
+状态栏为 `No problems detected`。合并此前 EID 7、12–14、18 及后续反馈，
+T31 GUI L4 已通过。用户明确免除本轮 GUI 导出入口复验；自动 DDS/raw 已核对，
+不要把 GUI 导出写成实测。唯一待验是 T30 本次公共事件树修改后的 EID 4/13
+顶层与 `$action()` 最短复验，见 `QA_PENDING.md`。PHASE31、PHASE32 和
+BATCH31-32 随批次保持开放，全部未提交改动保留。
+
+## 2026-09-26 T31 部分验收补充
+
+用户确认 T31 EID 7 层级/Texture 零值/Buffer 哨兵，EID 12/13/14 的
+`location, length` 参数正确，EID 18 及后续绑定和画面符合预期。
+`Copy/Clear Pass #1` 消失符合通用自动分组规则。原验收单把 API Inspector
+和 Pipeline State 混写，已改为 EID 18 在 **Window → Pipeline State → CS**
+勾选 **Show Empty Items** 检查 texture 2、sampler 3、buffer 5。
+T30 公共事件树最短复验、T31 其他未确认 L4 继续见 `QA_PENDING.md`；
+PHASE31/PHASE32/BATCH31-32 不关闭。最新代码与 capture 标识不变。
+
+## 2026-09-26 T31 分组修复与 Vulkan pass 标注对齐
+
+用户确认 T30 全部通过；T31 EID 7 Begin Compute 被 `Copy/Clear Pass` 错收。
+`AddFakeMarkers()` 已修复，显式 pass 边界保持顶层；T31 EID 7/23 为 compute
+Begin/End，EID 7 无 Output attachment。Metal render pass 已参考 Vulkan
+标注 load/store 并登记 Clear/Discard/Resolve usage；`$action()` 保留 pass
+边界，边界不消耗 action 编号。最终 app/库与 T30/T31 capture SHA、17 份
+定向 Replay API+CLI、18×10 lifecycle 见 `STATUS.md` 顶部。
+`QA_BATCH31-32.md` 已更新最短复验。T30 原 L4 通过，但本次公共事件树需
+复验其 Begin/End 与 `$action()`；T31 其他 UI 项仍待明确确认。
+`QA_PENDING.md` 是当前待验清单。PHASE32/BATCH31-32 未关闭，工作区改动保留。
+
+## 2026-09-26 BATCH31-32 自动验证完成，L4 待验
+
+T30 compute sampler 直接绑定和 T31 compute texture/sampler/buffer 批量绑定已完成
+最终定向自动验证，正式 captures 与准确 EID 见 `QA_BATCH31-32.md`。T01/T03/
+T11/T12/T16/T17/T18/T19/T28/T29/T30/T31 的 native、Replay API、逐份 CLI
+通过；T30/T31 异常拒绝、13 份 capture × 10 轮 lifecycle 通过。
+L3 条件未触发。`QA_PENDING.md` 保留 T30/T31；用户尚未完成 L4，
+PHASE31/PHASE32/BATCH31-32 不关闭。全部未提交改动保留。
+下一安全操作是收集用户同轮 qrenderdoc 反馈；若不符先分析修复并给最短复验。
+
 ## 2026-09-24 BATCH29-30 关闭交接
 
 用户确认 T28/T29 右侧缩略图和 T29 `$action()` 筛选正常；此前其余 L4
@@ -29,8 +143,8 @@ captures 已重生成。当前 GUI 和 EID 见 `STATUS.md` 顶部及 `QA_BATCH29
 
 ## 默认工作周期
 
-一个 agent 默认连续负责一个已定边界的相邻阶段批次；当前计划批次为 `BATCH31-32.md`：从
-`PHASE31.md` P31.1 推进至 `PHASE32.md` P32.4。批次以 2–3 个相关 T 为宜；改变边界前先更新
+一个 agent 默认连续负责一个已定边界的相邻阶段批次；最近完成的批次为
+`BATCH33-34.md`。下一批须先写明边界、PHASE 与验证清单；批次以 2–3 个相关 T 为宜，改变边界前先更新
 批次计划与验证清单，不因单条切片的自动验证通过就停下。只有以下情况可以在批次关闭前停下：
 
 1. 需要用户选择会显著改变范围、兼容策略或用户可见行为。
@@ -54,7 +168,7 @@ captures 已重生成。当前 GUI 和 EID 见 `STATUS.md` 顶部及 `QA_BATCH29
 ## 新 agent 的最短接手路径
 
 1. 阅读 `README.md` 入口、`STATUS.md` 顶部当前批次与最近恢复检查点、当前 BATCH 文档
-   （目前为 `BATCH29-30.md`）、其中两份 PHASE 文档，以及本文件、`QA_GUIDE.md` 和
+   （最近完成的是 `BATCH33-34.md`）、其中两份 PHASE 文档，以及本文件、`QA_GUIDE.md` 和
    `QA_PENDING.md` 的接手/验证规则与待验项；`PLAN.md` 和历史阶段文档按需追查。
 2. 执行 `git status --short --branch`，把工作区视为可能包含前任未提交的有效修改，不得清理、覆盖或
    回退未知改动。

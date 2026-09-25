@@ -36,6 +36,8 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
       "${CAPTURE_DIR}/t24_capture.rdc" "${CAPTURE_DIR}/t25_capture.rdc" \
       "${CAPTURE_DIR}/t26_capture.rdc" "${CAPTURE_DIR}/t27_capture.rdc" \
       "${CAPTURE_DIR}/t28_capture.rdc" "${CAPTURE_DIR}/t29_capture.rdc" \
+      "${CAPTURE_DIR}/t30_capture.rdc" "${CAPTURE_DIR}/t31_capture.rdc" \
+      "${CAPTURE_DIR}/t32_capture.rdc" "${CAPTURE_DIR}/t33_capture.rdc" \
       "${CAPTURE_DIR}/t00.xml" "${CAPTURE_DIR}/t01.xml" "${CAPTURE_DIR}/t02.xml" \
       "${CAPTURE_DIR}/t03.xml" "${CAPTURE_DIR}/t04.xml" "${CAPTURE_DIR}/t05.xml" \
       "${CAPTURE_DIR}/t06.xml" "${CAPTURE_DIR}/t07.xml" "${CAPTURE_DIR}/t08.xml" \
@@ -48,6 +50,8 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
       "${CAPTURE_DIR}/t24.xml" "${CAPTURE_DIR}/t25.xml" \
       "${CAPTURE_DIR}/t26.xml" "${CAPTURE_DIR}/t27.xml" \
       "${CAPTURE_DIR}/t28.xml" "${CAPTURE_DIR}/t29.xml" \
+      "${CAPTURE_DIR}/t30.xml" "${CAPTURE_DIR}/t31.xml" \
+      "${CAPTURE_DIR}/t32.xml" "${CAPTURE_DIR}/t33.xml" \
       "${CAPTURE_DIR}/t01_event_clear.ppm" "${CAPTURE_DIR}/t01_event_draw.ppm" \
       "${CAPTURE_DIR}/t01_event_rewind.ppm" "${CAPTURE_DIR}/t01_texture.dds" \
       "${CAPTURE_DIR}/t02_replay.ppm" "${CAPTURE_DIR}/t03_replay.ppm" \
@@ -64,6 +68,8 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
       "${CAPTURE_DIR}/t24_replay.ppm" "${CAPTURE_DIR}/t25_replay.ppm" \
       "${CAPTURE_DIR}/t26_replay.ppm" "${CAPTURE_DIR}/t27_replay.ppm" \
       "${CAPTURE_DIR}/t28_replay.ppm" "${CAPTURE_DIR}/t29_replay.ppm" \
+      "${CAPTURE_DIR}/t30_replay.ppm" "${CAPTURE_DIR}/t31_replay.ppm" \
+      "${CAPTURE_DIR}/t32_replay.ppm" "${CAPTURE_DIR}/t33_replay.ppm" \
       "${CAPTURE_DIR}/t09_cube.dds" "${CAPTURE_DIR}/t10_mips.dds" \
       "${CAPTURE_DIR}/t11_filtered.dds" "${CAPTURE_DIR}/t12_argument_texture.dds" \
       "${CAPTURE_DIR}/t13_arguments.bin" "${CAPTURE_DIR}/t14_indices.bin" \
@@ -74,7 +80,11 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
       "${CAPTURE_DIR}/t23_indices.bin" "${CAPTURE_DIR}/t24_packets.bin" \
       "${CAPTURE_DIR}/t25_resources.bin" "${CAPTURE_DIR}/t26_vertices.bin" \
       "${CAPTURE_DIR}/t27_packets.bin" \
-      "${CAPTURE_DIR}/t29_output.bin"
+      "${CAPTURE_DIR}/t29_output.bin" \
+      "${CAPTURE_DIR}/t30_linear.dds" "${CAPTURE_DIR}/t31_linear.dds" \
+      "${CAPTURE_DIR}/t31_linear.dds.bin" \
+      "${CAPTURE_DIR}/t32_output.dds" "${CAPTURE_DIR}/t33_output.dds" \
+      "${CAPTURE_DIR}/t32_output.dds.bin" "${CAPTURE_DIR}/t33_output.dds.bin"
 
 "${DEMO_BIN}" Metal_Empty_Frame --frames 5
 "${DEMO_BIN}" Metal_Simple_Triangle --frames 5
@@ -106,6 +116,10 @@ rm -f "${CAPTURE_DIR}/t00_capture.rdc" "${CAPTURE_DIR}/t01_capture.rdc" \
 "${DEMO_BIN}" Metal_ICB_Inherit_Buffers --frames 5
 "${DEMO_BIN}" Metal_Compute_Dispatch_Threads --frames 5
 "${DEMO_BIN}" Metal_Compute_Buffer_Binding --frames 5
+"${DEMO_BIN}" Metal_Compute_Sampler --frames 5
+"${DEMO_BIN}" Metal_Compute_Batch_Binding --frames 5
+"${DEMO_BIN}" Metal_Compute_Indirect_Dispatch --frames 5
+"${DEMO_BIN}" Metal_Compute_GPU_Indirect_Dispatch --frames 5
 
 RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t00" \
 DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
@@ -219,7 +233,9 @@ RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t27" \
 DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
   "${DEMO_BIN}" Metal_ICB_Inherit_Buffers --frames 8
 
-for spec in '28 Metal_Compute_Dispatch_Threads' '29 Metal_Compute_Buffer_Binding'; do
+for spec in '28 Metal_Compute_Dispatch_Threads' '29 Metal_Compute_Buffer_Binding' \
+            '30 Metal_Compute_Sampler' '31 Metal_Compute_Batch_Binding' \
+            '32 Metal_Compute_Indirect_Dispatch' '33 Metal_Compute_GPU_Indirect_Dispatch'; do
   read -r index name <<< "$spec"
   RENDERDOC_METAL_CAPTURE_PATH="${CAPTURE_DIR}/t${index}" \
   DYLD_INSERT_LIBRARIES="${RENDERDOC_LIB}" \
@@ -256,6 +272,10 @@ test -s "${CAPTURE_DIR}/t26_capture.rdc"
 test -s "${CAPTURE_DIR}/t27_capture.rdc"
 test -s "${CAPTURE_DIR}/t28_capture.rdc"
 test -s "${CAPTURE_DIR}/t29_capture.rdc"
+test -s "${CAPTURE_DIR}/t30_capture.rdc"
+test -s "${CAPTURE_DIR}/t31_capture.rdc"
+test -s "${CAPTURE_DIR}/t32_capture.rdc"
+test -s "${CAPTURE_DIR}/t33_capture.rdc"
 
 "${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t00_capture.rdc" \
   -o "${CAPTURE_DIR}/t00.xml" -c xml
@@ -559,6 +579,52 @@ for index in 28 29; do
   "${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t${index}_capture.rdc" \
     -o "${CAPTURE_DIR}/t${index}.xml" -c xml
 done
+for index in 30 31 32 33; do
+  "${RENDERDOCCMD}" convert -f "${CAPTURE_DIR}/t${index}_capture.rdc" \
+    -o "${CAPTURE_DIR}/t${index}.xml" -c xml
+done
+python3 - "${CAPTURE_DIR}/t30.xml" "${CAPTURE_DIR}/t31.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+t30, t31 = [ET.parse(path).getroot() for path in sys.argv[1:]]
+def chunks(root, name):
+    return [node for node in root.findall('./chunks/chunk') if node.get('name') == name]
+assert len(chunks(t30, 'MTLComputeCommandEncoder::setSamplerState')) == 2
+assert [int(node.find("./uint[@name='index']").text) for node in
+        chunks(t30, 'MTLComputeCommandEncoder::setSamplerState')] == [0, 0]
+for method, location, length, bound in [
+    ('setTextures', 1, 3, [1, 0, 1]),
+    ('setSamplerStates', 2, 2, [1, 0]),
+    ('setBuffers', 4, 3, [1, 0, 1]),
+]:
+    calls = chunks(t31, 'MTLComputeCommandEncoder::' + method)
+    assert len(calls) == 1
+    call = calls[0]
+    assert int(call.find("./struct[@name='range']/uint[@name='location']").text) == location
+    assert int(call.find("./struct[@name='range']/uint[@name='length']").text) == length
+    assert [int(node.text) for node in call.find("./array[@name='bound']")] == bound
+assert [int(node.text) for node in chunks(t31, 'MTLComputeCommandEncoder::setBuffers')[0]
+        .find("./array[@name='offsets']")] == [32, 0, 64]
+PY
+python3 - "${CAPTURE_DIR}/t32.xml" "${CAPTURE_DIR}/t33.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+for index, path in enumerate(sys.argv[1:], start=32):
+    root = ET.parse(path).getroot()
+    chunks = root.findall('./chunks/chunk')
+    indirect = [node for node in chunks if node.get('name') ==
+                'MTLComputeCommandEncoder::dispatchThreadgroups(indirect)']
+    assert len(indirect) == 1
+    node = indirect[0]
+    assert int(node.find("./uint[@name='indirectBufferOffset']").text) == 16
+    assert [int(item.text) for item in node.find("./struct[@name='threadsPerGroup']")] == [4, 4, 1]
+    assert int(node.find("./ResourceId[@name='indirectBuffer']").text) > 0
+    if index == 33:
+        assert any(item.get('name') == 'MTLComputeCommandEncoder::dispatchThreadgroups'
+                   for item in chunks)
+PY
 rg -q 'name="MTLComputeCommandEncoder::dispatchThreads"' "${CAPTURE_DIR}/t28.xml"
 rg -q 'name="MTLComputeCommandEncoder::setBuffer"' "${CAPTURE_DIR}/t29.xml"
 python3 - "${CAPTURE_DIR}/t28.xml" "${CAPTURE_DIR}/t29.xml" <<'PY'
@@ -653,6 +719,23 @@ clang++ -std=c++17 -arch "${TARGET_ARCH}" -mmacosx-version-min=12.0 \
 "${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t28_capture.rdc" "${CAPTURE_DIR}/t28_replay.ppm"
 "${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t29_capture.rdc" "${CAPTURE_DIR}/t29_replay.ppm" \
   "${CAPTURE_DIR}/t29_output.bin"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t30_capture.rdc" "${CAPTURE_DIR}/t30_replay.ppm" \
+  "${CAPTURE_DIR}/t30_linear.dds"
+"${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t31_capture.rdc" "${CAPTURE_DIR}/t31_replay.ppm" \
+  "${CAPTURE_DIR}/t31_linear.dds"
+for index in 32 33; do
+  "${OUTPUT_SMOKE}" "${CAPTURE_DIR}/t${index}_capture.rdc" \
+    "${CAPTURE_DIR}/t${index}_replay.ppm" "${CAPTURE_DIR}/t${index}_output.dds"
+  test "$(stat -f %z "${CAPTURE_DIR}/t${index}_output.dds")" = "384"
+  test "$(stat -f %z "${CAPTURE_DIR}/t${index}_output.dds.bin")" = "44"
+  python3 "${REPO_ROOT}/util/test/metal/metal_compute_indirect_invalid.py" \
+    "${RENDERDOCCMD}" "${CAPTURE_DIR}/t${index}_capture.rdc"
+done
+cmp "${CAPTURE_DIR}/t32_output.dds" "${CAPTURE_DIR}/t33_output.dds"
+python3 "${REPO_ROOT}/util/test/metal/metal_compute_sampler_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t30_capture.rdc"
+python3 "${REPO_ROOT}/util/test/metal/metal_compute_batch_invalid.py" \
+  "${RENDERDOCCMD}" "${CAPTURE_DIR}/t31_capture.rdc"
 python3 "${REPO_ROOT}/util/test/metal/metal_compute_invalid.py" \
   "${RENDERDOCCMD}" "${CAPTURE_DIR}/t28_capture.rdc" \
   "${CAPTURE_DIR}/t29_capture.rdc"
@@ -813,9 +896,11 @@ test "$(stat -f %z "${CAPTURE_DIR}/t27_packets.bin")" = "208"
   "${CAPTURE_DIR}/t23_capture.rdc" "${CAPTURE_DIR}/t24_capture.rdc" \
   "${CAPTURE_DIR}/t25_capture.rdc" "${CAPTURE_DIR}/t26_capture.rdc" \
   "${CAPTURE_DIR}/t27_capture.rdc" \
-  "${CAPTURE_DIR}/t28_capture.rdc" "${CAPTURE_DIR}/t29_capture.rdc" 10
+  "${CAPTURE_DIR}/t28_capture.rdc" "${CAPTURE_DIR}/t29_capture.rdc" \
+  "${CAPTURE_DIR}/t30_capture.rdc" "${CAPTURE_DIR}/t31_capture.rdc" \
+  "${CAPTURE_DIR}/t32_capture.rdc" "${CAPTURE_DIR}/t33_capture.rdc" 10
 
-for index in 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29; do
+for index in 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33; do
   "${RENDERDOCCMD}" replay --loops 1 "${CAPTURE_DIR}/t${index}_capture.rdc"
 done
 
@@ -882,4 +967,5 @@ echo "T24 ICB reset/re-encode range, replacement state, old-resource invalidatio
 echo "T25 mixed non-indexed/indexed ICB actions, exact IA/Mesh, usage, invalid captures, seek, and output verified"
 echo "T26 inherited pipeline and T27 inherited buffers, exact draw state, usage, invalid captures, seek, and output verified"
 echo "T28 dispatchThreads and T29 compute buffer binding, seek, resource data, and invalid captures verified"
-echo "T00-T29 CLI replay, lifecycle, and unsupported-interface stability verified"
+echo "T30/T31 compute bindings and T32/T33 indirect compute dispatch, seek, resource data, and invalid captures verified"
+echo "T00-T33 CLI replay, lifecycle, and unsupported-interface stability verified"

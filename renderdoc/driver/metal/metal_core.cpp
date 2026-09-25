@@ -491,6 +491,14 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       return m_DummyReplayComputeCommandEncoder->Serialise_setTexture(ser, NULL, 0);
     case MetalChunk::MTLComputeCommandEncoder_setBuffer:
       return m_DummyReplayComputeCommandEncoder->Serialise_setBuffer(ser, NULL, 0, 0);
+    case MetalChunk::MTLComputeCommandEncoder_setSamplerState:
+      return m_DummyReplayComputeCommandEncoder->Serialise_setSamplerState(ser, NULL, 0);
+    case MetalChunk::MTLComputeCommandEncoder_setTextures:
+      return m_DummyReplayComputeCommandEncoder->Serialise_setTextures(ser, {}, NS::Range::Make(0, 0));
+    case MetalChunk::MTLComputeCommandEncoder_setSamplerStates:
+      return m_DummyReplayComputeCommandEncoder->Serialise_setSamplerStates(ser, {}, NS::Range::Make(0, 0));
+    case MetalChunk::MTLComputeCommandEncoder_setBuffers:
+      return m_DummyReplayComputeCommandEncoder->Serialise_setBuffers(ser, {}, {}, NS::Range::Make(0, 0));
     case MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups:
     {
       MTL::Size groups = MTL::Size::Make(0, 0, 0);
@@ -503,6 +511,12 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       MTL::Size grid = MTL::Size::Make(0, 0, 0);
       MTL::Size threads = MTL::Size::Make(0, 0, 0);
       return m_DummyReplayComputeCommandEncoder->Serialise_dispatchThreads(ser, grid, threads);
+    }
+    case MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups_indirect:
+    {
+      MTL::Size threads = MTL::Size::Make(0, 0, 0);
+      return m_DummyReplayComputeCommandEncoder->Serialise_dispatchThreadgroups(
+          ser, (WrappedMTLBuffer *)NULL, 0, threads);
     }
     case MetalChunk::MTLArgumentEncoder_setArgumentBuffer:
       return m_DummyReplayArgumentEncoder->Serialise_setArgumentBuffer(ser, NULL, 0);
@@ -657,6 +671,12 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
       RDResult status = ContextReplayLog(m_State, ~0U, eReplay_Full);
       if(status != ResultCode::Succeeded)
         return status;
+
+      if(GetReplay()->HasPendingComputeIndirectActions())
+      {
+        FinishReplayCommands();
+        GetReplay()->ResolvePendingComputeIndirectActions();
+      }
 
       break;
     }
@@ -819,6 +839,9 @@ void WrappedMTLDevice::FinishReplayCommands()
     if(!m_ReplayCommandBufferCommitted)
       Unwrap(m_ReplayCommandBuffer)->commit();
     Unwrap(m_ReplayCommandBuffer)->waitUntilCompleted();
+    if(NS::Error *error = Unwrap(m_ReplayCommandBuffer)->error())
+      RDCERR("Metal replay command buffer failed: %s",
+             error->localizedDescription()->utf8String());
     m_ReplayCommandBuffer = NULL;
     m_ReplayCommandBufferCommitted = false;
   }

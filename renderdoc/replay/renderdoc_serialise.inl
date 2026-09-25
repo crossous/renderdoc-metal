@@ -1512,6 +1512,7 @@ void DoSerialise(SerialiserType &ser, MetalPipe::State &el)
   SERIALISE_MEMBER(computePipelineResourceId);
   SERIALISE_MEMBER(computeShader);
   SERIALISE_MEMBER(computeTextures);
+  SERIALISE_MEMBER(computeSamplers);
   SERIALISE_MEMBER(computeBuffers);
   SERIALISE_MEMBER(vertexShader);
   SERIALISE_MEMBER(fragmentShader);

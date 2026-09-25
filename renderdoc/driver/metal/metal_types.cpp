@@ -706,6 +706,62 @@ void RenderPassStencilAttachmentDescriptor::CopyTo(MTL::RenderPassStencilAttachm
   objc->setStencilResolveFilter(stencilResolveFilter);
 }
 
+static const char *RenderPassLoadOpName(MTL::LoadAction action)
+{
+  switch(action)
+  {
+    case MTL::LoadActionLoad: return "Load";
+    case MTL::LoadActionClear: return "Clear";
+    case MTL::LoadActionDontCare: return "Don't Care";
+    default: return "Unknown";
+  }
+}
+
+static const char *RenderPassStoreOpName(MTL::StoreAction action)
+{
+  switch(action)
+  {
+    case MTL::StoreActionStore: return "Store";
+    case MTL::StoreActionDontCare: return "Don't Care";
+    case MTL::StoreActionMultisampleResolve: return "Resolve";
+    case MTL::StoreActionStoreAndMultisampleResolve: return "Store+Resolve";
+    case MTL::StoreActionCustomSampleDepthStore: return "Custom Sample Depth Store";
+    default: return "Unknown";
+  }
+}
+
+rdcstr RenderPassOpString(const RenderPassDescriptor &descriptor, bool store)
+{
+  rdcstr result;
+  for(size_t i = 0; i < descriptor.colorAttachments.size(); i++)
+  {
+    const RenderPassColorAttachmentDescriptor &attachment = descriptor.colorAttachments[i];
+    if(!attachment.texture)
+      continue;
+    if(!result.empty())
+      result += ", ";
+    result += StringFormat::Fmt("C%zu=%s", i, store ? RenderPassStoreOpName(attachment.storeAction)
+                                                  : RenderPassLoadOpName(attachment.loadAction));
+  }
+  if(descriptor.depthAttachment.texture)
+  {
+    if(!result.empty())
+      result += ", ";
+    result += "D=";
+    result += store ? RenderPassStoreOpName(descriptor.depthAttachment.storeAction)
+                    : RenderPassLoadOpName(descriptor.depthAttachment.loadAction);
+  }
+  if(descriptor.stencilAttachment.texture)
+  {
+    if(!result.empty())
+      result += ", ";
+    result += "S=";
+    result += store ? RenderPassStoreOpName(descriptor.stencilAttachment.storeAction)
+                    : RenderPassLoadOpName(descriptor.stencilAttachment.loadAction);
+  }
+  return result.empty() ? "-" : result;
+}
+
 RenderPassSampleBufferAttachmentDescriptor::RenderPassSampleBufferAttachmentDescriptor(
     MTL::RenderPassSampleBufferAttachmentDescriptor *objc)
     :    // TODO: when WrappedMTLCounterSampleBuffer exists

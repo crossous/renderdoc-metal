@@ -1,8 +1,9 @@
 # 阶段 32：T31 compute 批量 texture/sampler/buffer 绑定
 
 在 T30 的直接 sampler 基线上，T31 覆盖非零 slot range、空槽清除、批量绑定
-与后续单槽覆盖。与 `PHASE31.md` 组成 `BATCH31-32.md`。状态：计划就绪，
-未开始实现。
+与后续单槽覆盖。与 `PHASE31.md` 组成 `BATCH31-32.md`。状态：自动与 GUI L4
+通过；GUI 导出入口经用户明确免除本轮复验，自动数据已核对。T30 公共事件树
+复验已确认，阶段与批次已关闭。
 
 ## 验证清单
 
@@ -11,11 +12,12 @@
   CLI replay、本场景 lifecycle。
 - L2 必跑：T30/T11/T28/T29、T03/T16/T17、T18/T19、T01。
 - L2 条件：通用 argument buffer/descriptor reflection 改动加 T12；render-pass
-  改动加 T06/T07/T08；初始内容/所有权改动加 T00/T09/T10；公共事件/ICB
+  改动加 T06/T07/T08；blit 前后事件分组改动加 T10；初始内容/所有权改动加 T00/T09/T10；公共事件/ICB
   改动加 T20/T22/T23/T24/T25/T26/T27。其他影响先补编号。
 - L4：批末用户检查 Event/API 中各批量调用的 EID/range、CS Pipeline 的
   texture/sampler/buffer 与空槽、Buffer/Texture/Resource 跳转、逐事件画面、
-  HTML/CSV/raw/DDS 入口及 `No problems detected`。
+  HTML/CSV/raw/DDS 入口及 `No problems detected`。本轮用户明确免除 GUI 导出
+  入口复验；自动 DDS/raw 数据已核对，其他 L4 项通过。
 - L3 默认不跑；按批次触发条件升级时覆盖 T00–T31 全部场景及 CLI/lifecycle。
 
 ## P32.1 fixture/native

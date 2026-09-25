@@ -279,6 +279,11 @@ enum class MetalChunk : uint32_t
   MTLIndirectCommandBuffer_reset,
   MTLComputeCommandEncoder_dispatchThreads,
   MTLComputeCommandEncoder_setBuffer,
+  MTLComputeCommandEncoder_setSamplerState,
+  MTLComputeCommandEncoder_setTextures,
+  MTLComputeCommandEncoder_setSamplerStates,
+  MTLComputeCommandEncoder_setBuffers,
+  MTLComputeCommandEncoder_dispatchThreadgroups_indirect,
   Max
 };
 

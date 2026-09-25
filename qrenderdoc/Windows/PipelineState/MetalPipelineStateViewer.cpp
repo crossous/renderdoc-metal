@@ -56,9 +56,13 @@ static const uint32_t MetalComputeWriteBufferDescriptorOffset = 0xC00;
 static const uint32_t MetalVertexTextureDescriptorOffset = 0xD00;
 static const uint32_t MetalVertexSamplerDescriptorOffset = 0xE00;
 static const uint32_t MetalVertexBufferDescriptorOffset = 0xF00;
+static const uint32_t MetalComputeSamplerDescriptorOffset = 0x1000;
 
 static uint32_t MetalDescriptorSlot(const DescriptorAccess &access)
 {
+  if(access.stage == ShaderStage::Compute && access.type == DescriptorType::Sampler &&
+     access.byteOffset >= MetalComputeSamplerDescriptorOffset)
+    return access.byteOffset - MetalComputeSamplerDescriptorOffset;
   if(access.stage == ShaderStage::Compute && access.type == DescriptorType::Buffer &&
      access.byteOffset >= MetalComputeReadBufferDescriptorOffset)
     return access.byteOffset - MetalComputeReadBufferDescriptorOffset;
@@ -260,6 +264,8 @@ MetalPipelineStateViewer::MetalPipelineStateViewer(ICaptureContext &ctx, QWidget
 
   QVBoxLayout *cs = MakeStagePage(tr("Compute Shader"));
   m_ComputeShader = MakeTree(cs, tr("Compute Shader"), {tr("Function"), tr("Entry Point")});
+  m_ComputeSamplers = MakeTree(
+      cs, tr("Samplers"), {tr("Slot"), tr("Sampler"), tr("Filter"), tr("Address")});
   m_ComputeReadTextures = MakeTree(cs, tr("Read-Only Textures"),
                                    {tr("Slot"), tr("Texture"), tr("Type"), tr("Format")});
   m_ComputeWriteTextures = MakeTree(cs, tr("Read-Write Textures"),
@@ -268,6 +274,8 @@ MetalPipelineStateViewer::MetalPipelineStateViewer(ICaptureContext &ctx, QWidget
                                   {tr("Slot"), tr("Buffer"), tr("Offset"), tr("Size")});
   m_ComputeWriteBuffers = MakeTree(cs, tr("Read-Write Buffers"),
                                    {tr("Slot"), tr("Buffer"), tr("Offset"), tr("Size")});
+  m_ComputeIndirectBuffer = MakeTree(
+      cs, tr("Indirect Dispatch"), {tr("Buffer"), tr("Offset"), tr("Size"), tr("Arguments")});
   cs->addStretch();
 
   m_Stages->setCurrentIndex(0);
@@ -359,7 +367,7 @@ RDTreeWidget *MetalPipelineStateViewer::MakeTree(QVBoxLayout *parentLayout, cons
                        return;
 
                      if(tree == m_VertexBuffers || tree == m_IndexBuffer ||
-                        tree == m_IndirectBuffer ||
+                        tree == m_IndirectBuffer || tree == m_ComputeIndirectBuffer ||
                         tree == m_VertexStorageBuffers || tree == m_FragmentBuffers ||
                         tree == m_FragmentStorageBuffers || tree == m_ComputeReadBuffers ||
                         tree == m_ComputeWriteBuffers)
@@ -379,10 +387,13 @@ RDTreeWidget *MetalPipelineStateViewer::MakeTree(QVBoxLayout *parentLayout, cons
                          const uint32_t stride = item->data(0, MetalBufferSlotRole).toUInt();
                          format = stride == 2 ? lit("ushort index;") : lit("uint index;");
                        }
-                       else if(tree == m_IndirectBuffer)
+                       else if(tree == m_IndirectBuffer || tree == m_ComputeIndirectBuffer)
                        {
                          const ActionDescription *action = m_Ctx.CurAction();
-                         if(action != NULL && (action->flags & ActionFlags::Indexed))
+                         if(tree == m_ComputeIndirectBuffer)
+                           format = lit("uint threadgroupsPerGridX; uint threadgroupsPerGridY; "
+                                        "uint threadgroupsPerGridZ;");
+                         else if(action != NULL && (action->flags & ActionFlags::Indexed))
                            format = lit("uint indexCount; uint instanceCount; uint indexStart; "
                                         "int baseVertex; uint baseInstance;");
                          else
@@ -524,10 +535,12 @@ void MetalPipelineStateViewer::ExportHTML()
         break;
       case 5:
         ExportHTMLTree(xml, tr("Compute Shader"), m_ComputeShader);
+        ExportHTMLTree(xml, tr("Samplers"), m_ComputeSamplers);
         ExportHTMLTree(xml, tr("Read-Only Textures"), m_ComputeReadTextures);
         ExportHTMLTree(xml, tr("Read-Write Textures"), m_ComputeWriteTextures);
         ExportHTMLTree(xml, tr("Read-Only Buffers"), m_ComputeReadBuffers);
         ExportHTMLTree(xml, tr("Read-Write Buffers"), m_ComputeWriteBuffers);
+        ExportHTMLTree(xml, tr("Indirect Dispatch"), m_ComputeIndirectBuffer);
         break;
       default: break;
     }
@@ -591,10 +604,12 @@ void MetalPipelineStateViewer::ClearState()
   m_FragmentTextures->clear();
   m_FragmentSamplers->clear();
   m_ComputeShader->clear();
+  m_ComputeSamplers->clear();
   m_ComputeReadTextures->clear();
   m_ComputeWriteTextures->clear();
   m_ComputeReadBuffers->clear();
   m_ComputeWriteBuffers->clear();
+  m_ComputeIndirectBuffer->clear();
   m_VertexAttributes->clear();
   m_VertexBuffers->clear();
   m_IndexBuffer->clear();
@@ -626,6 +641,28 @@ void MetalPipelineStateViewer::SetState()
   if(state == NULL)
     return;
 
+  const auto addIndirectBuffer = [this, state](RDTreeWidget *tree,
+                                                const QString &argumentType) {
+    const MetalPipe::BufferBinding &buffer = state->indirectBuffer;
+    if(buffer.resourceId != ResourceId())
+    {
+      RDTreeWidgetItem *item = AddResourceRow(
+          tree,
+          {m_Ctx.GetResourceName(buffer.resourceId),
+           Formatter::HumanFormat(buffer.byteOffset, Formatter::OffsetSize),
+           Formatter::HumanFormat(buffer.byteSize, Formatter::OffsetSize), argumentType},
+          buffer.resourceId);
+      item->setData(0, MetalBufferOffsetRole,
+                    QVariant::fromValue((qulonglong)buffer.byteOffset));
+      item->setData(0, MetalBufferSizeRole,
+                    QVariant::fromValue((qulonglong)buffer.byteSize));
+    }
+    else if(m_ShowEmpty->isChecked())
+    {
+      AddEmptyRow(tree, {tr("Empty"), QString(), QString(), QString()});
+    }
+  };
+
   const ResourceId computePipeline = pipe.GetComputePipelineObject();
   if(computePipeline != ResourceId())
   {
@@ -639,7 +676,8 @@ void MetalPipelineStateViewer::SetState()
                      computeShader);
     const ShaderReflection *reflection = pipe.GetShaderReflection(ShaderStage::Compute);
     const bool hasBindingReflection = reflection != NULL &&
-        (!reflection->readOnlyResources.empty() || !reflection->readWriteResources.empty());
+        (!reflection->readOnlyResources.empty() || !reflection->readWriteResources.empty() ||
+         !reflection->samplers.empty());
     m_ShowUnused->setEnabled(hasBindingReflection);
     m_ShowUnused->setToolTip(hasBindingReflection
                                 ? tr("Show resources which are bound but statically unused by the shader.")
@@ -682,14 +720,46 @@ void MetalPipelineStateViewer::SetState()
       addTexture(m_ComputeWriteTextures, binding);
       addBuffer(m_ComputeWriteBuffers, binding);
     }
+    for(const UsedDescriptor &binding :
+        pipe.GetSamplers(ShaderStage::Compute, !m_ShowUnused->isChecked()))
+    {
+      const SamplerDescriptor &sampler = binding.sampler;
+      if(sampler.object == ResourceId())
+        continue;
+      const QString filter = tr("%1 / %2 / %3")
+                                 .arg(ToQStr(sampler.filter.minify))
+                                 .arg(ToQStr(sampler.filter.magnify))
+                                 .arg(ToQStr(sampler.filter.mip));
+      const QString address = tr("%1 / %2 / %3")
+                                  .arg(ToQStr(sampler.addressU))
+                                  .arg(ToQStr(sampler.addressV))
+                                  .arg(ToQStr(sampler.addressW));
+      AddResourceRow(m_ComputeSamplers,
+                     {Formatter::Format(MetalDescriptorSlot(binding.access)),
+                      m_Ctx.GetResourceName(sampler.object), filter, address},
+                     sampler.object);
+    }
     if(m_ShowEmpty->isChecked())
     {
-      for(size_t slot = 0; slot < 2; slot++)
+      const size_t textureSlots = qMax<size_t>(2, state->computeTextures.size());
+      for(size_t slot = 0; slot < textureSlots; slot++)
       {
         if(slot >= state->computeTextures.size() || state->computeTextures[slot] == ResourceId())
-          AddEmptyRow(slot == 0 ? m_ComputeReadTextures : m_ComputeWriteTextures,
+        {
+          bool writable = slot == 1;
+          if(reflection)
+            for(const ShaderResource &resource : reflection->readWriteResources)
+              if(resource.isTexture && resource.fixedBindNumber == slot)
+                writable = true;
+          AddEmptyRow(writable ? m_ComputeWriteTextures : m_ComputeReadTextures,
                       {Formatter::Format((uint32_t)slot), tr("Empty"), QString(), QString()});
+        }
       }
+      const size_t samplerSlots = qMax<size_t>(1, state->computeSamplers.size());
+      for(size_t slot = 0; slot < samplerSlots; slot++)
+        if(slot >= state->computeSamplers.size() || state->computeSamplers[slot] == ResourceId())
+          AddEmptyRow(m_ComputeSamplers,
+                      {Formatter::Format((uint32_t)slot), tr("Empty"), QString(), QString()});
       for(size_t slot = 0; slot < state->computeBuffers.size(); slot++)
         if(state->computeBuffers[slot].resourceId == ResourceId())
         {
@@ -702,6 +772,7 @@ void MetalPipelineStateViewer::SetState()
                       {Formatter::Format((uint32_t)slot), tr("Empty"), QString(), QString()});
         }
     }
+    addIndirectBuffer(m_ComputeIndirectBuffer, tr("Dispatch Threadgroups"));
     m_PipeFlow->setStagesEnabled({false, false, false, false, false, true});
     m_PipeFlow->setSelectedStage(5);
     return;
@@ -996,28 +1067,11 @@ void MetalPipelineStateViewer::SetState()
     AddEmptyRow(m_IndexBuffer, {tr("Empty"), QString(), QString(), QString()});
   }
 
-  const MetalPipe::BufferBinding &indirectBuffer = state->indirectBuffer;
-  if(indirectBuffer.resourceId != ResourceId())
-  {
-    const ActionDescription *action = m_Ctx.CurAction();
-    const QString argumentType = action != NULL && (action->flags & ActionFlags::Indexed)
-                                     ? tr("Draw Indexed Primitives")
-                                     : tr("Draw Primitives");
-    RDTreeWidgetItem *item = AddResourceRow(
-        m_IndirectBuffer,
-        {m_Ctx.GetResourceName(indirectBuffer.resourceId),
-         Formatter::HumanFormat(indirectBuffer.byteOffset, Formatter::OffsetSize),
-         Formatter::HumanFormat(indirectBuffer.byteSize, Formatter::OffsetSize), argumentType},
-        indirectBuffer.resourceId);
-    item->setData(0, MetalBufferOffsetRole,
-                  QVariant::fromValue((qulonglong)indirectBuffer.byteOffset));
-    item->setData(0, MetalBufferSizeRole,
-                  QVariant::fromValue((qulonglong)indirectBuffer.byteSize));
-  }
-  else if(m_ShowEmpty->isChecked())
-  {
-    AddEmptyRow(m_IndirectBuffer, {tr("Empty"), QString(), QString(), QString()});
-  }
+  const ActionDescription *action = m_Ctx.CurAction();
+  addIndirectBuffer(m_IndirectBuffer,
+                    action != NULL && (action->flags & ActionFlags::Indexed)
+                        ? tr("Draw Indexed Primitives")
+                        : tr("Draw Primitives"));
 
   const DepthTestState depth = pipe.GetDepthTestState();
   if(state->depthStencil.resourceId != ResourceId())

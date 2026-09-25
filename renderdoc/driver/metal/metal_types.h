@@ -542,6 +542,8 @@ struct RenderPassDescriptor
   rdcarray<RenderPassSampleBufferAttachmentDescriptor> sampleBufferAttachments;
 };
 
+rdcstr RenderPassOpString(const RenderPassDescriptor &descriptor, bool store);
+
 // MTLComputePassSampleBufferAttachmentDescriptor : based on the interface defined in
 // Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.2.sdk/System/Library/Frameworks/Metal.framework/Headers/MTLComputePass.h
 struct ComputePassSampleBufferAttachmentDescriptor

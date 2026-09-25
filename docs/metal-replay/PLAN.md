@@ -1,5 +1,12 @@
 # Metal Replay 总体计划
 
+## 2026-09-26 最近批次检查点
+
+BATCH31-32 的 T30/T31 与 BATCH33-34 的 T32/T33 均已通过最终联合自动验证
+和用户 GUI L4；两批已关闭。T32/T33 的 Event Browser 实际执行数量摘要
+也已明确确认。证据见 `STATUS.md` 顶部，`QA_PENDING.md` 当前无待验项。
+Metal action 名称的跨 API 审查与后续对齐计划见 `ACTION_NAME_ALIGNMENT.md`。
+
 ## 原则
 
 1. 先打通纵向链路，再增加 API 宽度：UI 启动、样例原生运行、截帧、加载事件、replay 一个三角形。
@@ -11,11 +18,12 @@
 ## Agent 推进节奏（省额度稳定模式）
 
 后续默认以已写明边界的相邻 2–3 条 `PHASEx.md` 切片作为一次工作批次，而不是每完成一个 Txx
-就等待用户再次发送“继续”。当前计划批次固定为 `BATCH31-32.md` 中的 T30/T31，不自动扩成 10 个
+就等待用户再次发送“继续”。最近批为 `BATCH33-34.md` 中的 T32/T33，不自动扩成 10 个
 phase。每条切片按 fixture/native -> capture/structured data -> replay/readback/state -> 自动断言
 推进；前一条自动链路通过并记录批末 UI 待验后继续后一条。两条切片经最终联合验证和同一轮
 用户 qrenderdoc L4 验收后一起关闭。T28/T29 的最终联合自动与用户同轮 L4
-均已通过，`QA_PENDING.md` 当前无待验项；
+均已通过，`BATCH31-32.md` 的 T30/T31 也已通过用户 GUI L4 并关闭；
+`QA_PENDING.md` 当前无待验项。T31 GUI 导出入口本轮由用户免复验；
 从 BATCH29-30 起按 [QA_GUIDE.md](QA_GUIDE.md) 将 GUI 可见交互交给用户验收。
 
 为减少随 T 场景数量增长的重复消耗，每条切片开发时只构建受影响目标，并立即运行当前 fixture
@@ -241,10 +249,12 @@ qrenderdoc 同轮 L4 通过，L3 未触发。`BATCH25-26.md` 又完成 T24 reset
 又完成 T26 pipeline inheritance 与 T27 buffers inheritance：两次 execute 的 pipeline
 17/18 和 Buffer 16/17 offset 16、逐 draw state/usage、红蓝输出、异常拒绝均通过；联合
 11×10 lifecycle 和同轮 qrenderdoc L4 通过，L3 未触发。此后 `BATCH29-30.md`
-完成 T28 compute `dispatchThreads` 与 T29 compute buffer binding；当前计划批次
-`BATCH31-32.md` 已规划 T30 compute sampler 直接绑定与 T31 compute texture/sampler/
-buffer 批量绑定，尚未实施。GPU 生成、compute ICB、heap、blit ICB 管理和多 queue
-仍由后续独立场景推进。
+完成 T28 compute `dispatchThreads` 与 T29 compute buffer binding；其后批次
+`BATCH31-32.md` 的 T30 compute sampler 直接绑定与 T31 compute texture/sampler/
+buffer 批量绑定已通过自动验证与用户 GUI L4，BATCH31-32 已关闭。
+T32/T33 已覆盖 compute 间接 dispatch 的 CPU 参数和 GPU 生成参数；
+后续 action 名称一致性工作见 `ACTION_NAME_ALIGNMENT.md`；
+compute ICB、heap、blit ICB 管理和多 queue 仍由后续独立场景推进。
 
 任务：
 
@@ -313,9 +323,10 @@ MSL；绑定资源可跳转到对应 Buffer/Texture。
 
 任务：
 
-- [ ] M6.1 支持 compute pipeline、dispatch threadgroups/threads 和资源绑定。（T11 已完成
-  `dispatchThreadgroups` + 直接读写 2D texture；T28 `dispatchThreads` 与 T29 直接 compute
-  buffer 绑定的自动验证与用户 L4 均已通过。compute sampler 与更广资源绑定仍未覆盖。）
+- [x] M6.1 支持 compute pipeline、dispatch threadgroups/threads 和资源绑定。（T11 完成
+  `dispatchThreadgroups` 与直接读写 2D texture；T28 `dispatchThreads`、T29 compute
+  buffer、T30 sampler、T31 批量资源绑定的自动验证与用户 L4 均已通过。
+  间接 dispatch 另由 T32/T33 覆盖。）
 - [ ] M6.2 支持常用 blit encoder 操作以及 encoder/command buffer 间资源可见性。（T10 已完成
   同一 command buffer 中 blit→render 的 copy/fill/mipgen 与可见性；跨 command buffer/queue、
   更多 blit overload 和 managed-resource 同步待独立 fixture 验证。）

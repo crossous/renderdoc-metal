@@ -74,9 +74,45 @@
   GetWrapped(self)->setTexture(GetWrapped(texture), index);
 }
 
+- (void)setTextures:(const id<MTLTexture> _Nullable [_Nonnull])textures withRange:(NSRange)range
+{
+  rdcarray<WrappedMTLTexture *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++)
+    wrapped.push_back(GetWrapped(textures[i]));
+  GetWrapped(self)->setTextures(wrapped, NS::Range::Make(range.location, range.length));
+}
+
+- (void)setSamplerState:(id<MTLSamplerState>)sampler atIndex:(NSUInteger)index
+{
+  GetWrapped(self)->setSamplerState(GetWrapped(sampler), index);
+}
+
+- (void)setSamplerStates:(const id<MTLSamplerState> _Nullable [_Nonnull])samplers
+               withRange:(NSRange)range
+{
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++)
+    wrapped.push_back(GetWrapped(samplers[i]));
+  GetWrapped(self)->setSamplerStates(wrapped, NS::Range::Make(range.location, range.length));
+}
+
 - (void)setBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
   GetWrapped(self)->setBuffer(GetWrapped(buffer), offset, index);
+}
+
+- (void)setBuffers:(const id<MTLBuffer> _Nullable [_Nonnull])buffers
+          offsets:(const NSUInteger [_Nonnull])offsets withRange:(NSRange)range
+{
+  rdcarray<WrappedMTLBuffer *> wrapped;
+  rdcarray<NS::UInteger> copiedOffsets;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(buffers[i]));
+    copiedOffsets.push_back(offsets[i]);
+  }
+  GetWrapped(self)->setBuffers(wrapped, copiedOffsets,
+                               NS::Range::Make(range.location, range.length));
 }
 
 - (void)dispatchThreadgroups:(MTLSize)groups threadsPerThreadgroup:(MTLSize)threadsPerGroup
@@ -85,6 +121,15 @@
   MTL::Size cppThreads =
       MTL::Size::Make(threadsPerGroup.width, threadsPerGroup.height, threadsPerGroup.depth);
   GetWrapped(self)->dispatchThreadgroups(cppGroups, cppThreads);
+}
+
+- (void)dispatchThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)indirectBuffer
+                           indirectBufferOffset:(NSUInteger)indirectBufferOffset
+                          threadsPerThreadgroup:(MTLSize)threadsPerGroup
+{
+  MTL::Size cppThreads =
+      MTL::Size::Make(threadsPerGroup.width, threadsPerGroup.height, threadsPerGroup.depth);
+  GetWrapped(self)->dispatchThreadgroups(GetWrapped(indirectBuffer), indirectBufferOffset, cppThreads);
 }
 
 - (void)dispatchThreads:(MTLSize)grid threadsPerThreadgroup:(MTLSize)threadsPerGroup

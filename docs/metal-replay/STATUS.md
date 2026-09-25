@@ -1,6 +1,200 @@
 # Metal Replay 当前状态
 
-最后更新：2026-09-24（Asia/Shanghai）
+最后更新：2026-09-26（Asia/Shanghai）
+
+## 2026-09-26 真实应用截帧与高级功能路线评估
+
+- 用户目标扩展到 macOS 图形应用/游戏、UE/Unity 集成、Nanite，以及光追、
+  mesh shading 和更多 Metal 特性。当前 T00–T33 受控 capture/replay 闭环
+  不能直接推断真实引擎帧兼容；优先建议试 UE 普通场景首帧，再以实际阻塞
+  API 推进 Nanite 最小场景。评估与更省重复人工 L4 的节奏见
+  `REAL_WORLD_CAPTURE_ROADMAP.md`。
+- 本机 M2 Pro/16 GB，原生设备报告 Apple8、Metal3、ray tracing API；Apple
+  功能表允许在此开发基础 mesh shading 与 ray tracing API，Apple9+ 的
+  indirect mesh draw/mesh ICB 及 M3/M4 硬件加速/性能须换目标机验证。
+  当前 RenderDoc wrapper 显式将 ray tracing 能力返回 false，高级 capture
+  路径尚未实现。Epic UE 5.8 Mac 文档列 Nanite/VSM 为 M2+ Beta。
+- 本次仅做只读代码/设备/外部文档检查并记录路线，没有改实现、captures
+  或 GUI；`QA_PENDING.md` 仍无人工待验项，全部未提交改动保留。
+
+## 2026-09-26 T32/T33 GUI L4 通过，BATCH33-34 关闭；action 名称审查
+
+- 用户确认 T32 EID 12 与 T33 EID 18 的新版间接摘要
+  `dispatchThreadgroups(indirect, <2, 2, 1>)` 符合预期。结合此前已验的参数、
+  CS 间接参数栏、资源、画面和状态栏，T32/T33 GUI L4 均通过。
+  PHASE33、PHASE34、BATCH33-34 已关闭；`QA_PENDING.md` 当前无待验项。
+- 审查 Event Browser 的 custom action names：T32/T33 间接 dispatch 与 Vulkan/
+  D3D11/D3D12/GL 展示实际 group 数的惯例一致；部分 Metal 直接 draw/dispatch、
+  单次 indirect draw、ICB 和 blit 摘要较其他后端冗长或格式不统一。
+  具体对照、字段取舍与后续定向验证计划见 `ACTION_NAME_ALIGNMENT.md`。
+- 此轮只做代码审查与文档归档，没有改代码、正式 capture 或 app；沿用下方
+  最终联合验证证据，未重跑测试。全部未提交改动保留。
+
+## 2026-09-26 T32/T33 间接 dispatch 摘要对齐其他 API
+
+- 对照 Vulkan、D3D11、OpenGL 和 D3D12，间接 dispatch 的 Event Browser
+  自定义摘要突出参数 buffer 中实际执行的 threadgroup 数量。Metal 现显示
+  `dispatchThreadgroups(indirect, <2, 2, 1>)`；buffer、offset 和
+  `{4,4,1}` 每组线程数仍由 API Inspector/CS 栏位提供。
+- T33 的参数由 GPU writer 产生：载入阶段在 command buffer 完成后读取参数
+  并更新对应 action 的摘要与 dispatchDimension，避免显示写入前零值。
+  T32/T33 Replay API 断言均确认摘要及三项实际执行数；T01/T10/T11/T13/
+  T21/T28/T29/T30/T31/T32/T33 共 11 份定向 Replay API 与逐份 CLI 通过，
+  含 T00 的 12 份 capture × 10 轮 lifecycle 通过，resident growth
+  360,448 bytes；T32/T33 的 5/6 类异常捕获继续被拒绝。
+- 最新 GUI `f1ebea2ddb86…`、库 `aa21c9a6983d…`；正式捕获不变。
+  用户已确认此前 CS 栏位及其他 GUI 项，仅新版 Event Browser 摘要待最短
+  复验。T32/T33 仍在 `QA_PENDING.md`，两阶段和批次保持开放；全部未提交
+  改动保留。
+
+## 2026-09-26 T32/T33 GUI 部分通过与 compute indirect 栏位修正
+
+- 用户确认 T32 EID 6/12 及后续、T33 EID 7/10/12/18 及后续的参数数值、
+  offset、CS 绑定、纹理、最终画面和状态栏；指出 compute indirect buffer
+  被错误放进 IA。Metal Pipeline State 已把 compute 间接参数移至 CS 的
+  `Indirect Dispatch`，图形 draw 的 IA `Indirect Buffer` 保持原位。
+- Event Browser 依通用设置显示自定义 action 名称；API Inspector 保留完整调用
+  参数。Metal compute 自定义摘要现含 offset 16 和 4×4×1 threads/group。
+  Vulkan 的间接 dispatch 也使用自定义摘要显示解析后的执行参数，而非照抄
+  API 调用。用户仍须在新 GUI 上确认这两处可见行为。
+- 最终 GUI `f1ebea2ddb86…`、库 `9c0b65bea9f5…`；正式 T32/T33 captures
+  SHA 保持 `9aa1432c8d9a…` / `4478197f9994…`。T11/T13/T21/T32/T33
+  Replay API 与逐份 CLI、含 T00 的 6 份 capture × 10 轮 lifecycle 通过，
+  `git diff --check` 通过。新最短复验见 `QA_BATCH33-34.md` 顶部，
+  `QA_PENDING.md` 分别保留 T32/T33 待验；PHASE33/34、BATCH33-34 不关闭。
+
+## 2026-09-26 BATCH33-34 P33.1–P34.4 自动验证完成，T32/T33 L4 待验
+
+- T32 CPU shared Buffer 21 byte offset 16 的 `2,2,1` 间接参数与 T33 GPU writer
+  在同一 command buffer、跨 compute encoder 生成 Buffer 23 的相同参数均完成。
+  T33 帧内 blit 先清零，Replay API 已核对写入前零值、writer EID 10 后
+  `2,2,1`、EID 18 间接 dispatch 后 8×8 纹理与输出 buffer，以及前后 seek。
+  T32 Begin/dispatch EID 6/12；T33 writer/第二 Begin/dispatch EID 10/12/18。
+- 原生 T32/T33、正式 capture/XML、参数/descriptor/usage/readback/action、
+  T32 五类及 T33 六类异常拒绝均通过。最终库上 T01/T10/T11/T12/T13/
+  T16/T17/T18/T19/T21/T28/T29/T30/T31/T32/T33 共 16 份 Replay API 与
+  逐份 CLI replay 通过；含 T00 的 17 份 capture × 10 轮 lifecycle 通过，
+  resident growth 1,015,808 bytes。两份自动 DDS 完全相同且各 384 字节，
+  参数 raw 各 44 字节。脚本语法、Python 编译、`git diff --check` 通过。
+- 最终 app `build-macos-debug/bin/qrenderdoc.app` GUI SHA-256
+  `5b2bc3aa95cf…`，内嵌库与 `build-macos-debug/lib/librenderdoc.dylib`
+  同为 `8c05d8b03281…`；T32/T33 正式 capture SHA-256 分别为
+  `9aa1432c8d9a…`、`4478197f9994…`。`QA_BATCH33-34.md` 给出准确路径和
+  同轮 EID 验收步骤。L3 条件未触发：批内及定向旧场景已圈定间接 dispatch、
+  GPU 参数与 descriptor 风险，且未进入发布/合并门槛。
+- `QA_PENDING.md` 中 T32/T33 均为“自动通过，待用户 GUI L4”。
+  PHASE33、PHASE34、BATCH33-34 保持开放；全部未提交改动保留。
+
+## 2026-09-26 BATCH33-34 P33.1–P33.2 进行中
+
+- 无需新对话或 compact，已从 `PHASE33.md` P33.1 开始。T32
+  `Metal_Compute_Indirect_Dispatch` native 夹具已添加：CPU 在 shared buffer
+  byte offset 16 放置 12 字节 threadgroup 参数 `2,2,1`，以 `4,4,1`
+  threads-per-threadgroup 执行；原生纹理、buffer 写入和哨兵核对通过。
+- compute indirect dispatch 的 bridge、chunk、replay/action/usage 已接通并编译。
+  T32 capture/XML 已生成，XML 保留 buffer、offset 16 和 threadgroup size；
+  CLI replay 一次通过。Replay API 的逐事件/数据断言、异常拒绝及 T33 尚未完成，
+  不将 T32 记为自动通过。当前 `QA_PENDING.md` 已登记 T32 批末 L4。
+- 已成功构建 demo 与最终 app/renderdoccmd。首次构建误用不存在的 `qrenderdoc`
+  target，改为 `build-qrenderdoc`；新增 chunk 后同步 `metal_stringise.cpp`
+  的 Max 静态断言，构建通过。下一步补 T32 Replay API 自动断言，随后进入
+  P34.1。此前所有未提交改动保留。
+
+## 2026-09-26 BATCH31-32 关闭，下一项 P33.1
+
+- 用户已确认 T30 公共事件树最短复验符合预期：EID 4/13 Begin/End 顶层，
+  `$action()` 保留边界并隐藏 EID 8/11 状态调用。T30 原功能 L4 此前已通过；
+  T31 的 EID 7 分组、批量绑定/空槽、筛选、画面及状态栏也已通过。
+  T31 GUI 导出入口由用户明确免除本轮复验，自动 DDS/raw 数据已核对，
+  不记作本轮 GUI 实测。`QA_PENDING.md` 当前无待验项。
+- 最终构建上的联合定向证据沿用 `/tmp/batch31-32-scope-fix-final.log`：
+  T01/T06/T07/T08/T10/T11/T20/T22/T23/T24/T25/T26/T27/T28/T29/T30/T31
+  共 17 份 Replay API 与逐份 CLI replay、含 T00 的 18 份 capture × 10 轮
+  lifecycle 通过。L3 条件未触发。此次只记录用户验收并编写下一批计划，
+  未改代码或 captures，故不重复构建或测试；`git diff --check` 通过。
+- PHASE31、PHASE32 与 BATCH31-32 已关闭，全部未提交改动保留。下一批
+  `BATCH33-34.md`：T32 CPU 参数的 compute indirect dispatch，T33 GPU 生成
+  参数的 compute indirect dispatch；第一项 `PHASE33.md` P33.1 fixture/native。
+
+## 2026-09-26 T31 GUI L4 通过，导出入口本轮免复验
+
+- 用户在 EID 18 的独立 Pipeline State 确认 sampler 0/1/3/4、Read-Only
+  Textures 0/2/4、Read-Only Buffers 0/1/2/3/5/7 为 Empty，覆盖要求的
+  sampler 3、texture 2、buffer 5。`$action()` 隐藏状态调用，清空筛选后恢复；
+  状态栏为 `No problems detected`。结合此前对 EID 7、12–14、18 及后续
+  绑定和画面的明确反馈，T31 GUI L4 记为通过。
+- 用户明确表示本轮无需重复 GUI 导出入口测试。此前自动 DDS/raw 数据已核对；
+  GUI 导出入口记录为用户免复验，不记为本轮实测。无需为此重新构建或回归。
+  当前仅 T30 公共事件树最短复验待确认；PHASE31 与 BATCH31-32 仍不关闭，
+  PHASE32 的 T31 L4 已通过，但随批次保持开放。全部未提交改动保留。
+
+## 2026-09-26 T31 部分 L4 反馈与验收步骤修订
+
+- 用户确认 T31 EID 7 层级、Texture 零值、Buffer 哨兵，EID 12/13/14 的
+  `range` 以 `location, length` 显示正确，EID 18 及后续绑定和画面符合预期。
+  T31 的虚拟 `Copy/Clear Pass #1` 消失是正常结果：通用 `AddFakeMarkers()`
+  只在足够多的连续可归组 action 上生成 marker；修复后 Begin Compute 是边界，
+  前方 blit action 不足以独立成组。Vulkan 使用相同通用规则。
+- 原验收单将 API Inspector 与独立 Pipeline State 混写，已改为在 EID 18
+  经 **Window → Pipeline State → CS → Show Empty Items** 一次检查
+  texture 2、sampler 3、buffer 5 的空槽。代码和正式 captures 未变。
+  `QA_PENDING.md` 保留 T30 事件树最短复验，以及 T31 三空槽、筛选、导出/
+  保存与状态栏等未明确确认项；阶段和批次不关闭。
+
+## 2026-09-26 T31 反馈修复与 Vulkan render pass 行为对齐
+
+- 用户确认 T30 全部通过。T31 用户指出 EID 7 `Begin Metal Compute Pass` 被 GUI
+  自动 `1–7 Copy/Clear Pass #1` 错收，且原验收单把资源初值写成其 Output。
+  根因是 `ReplayController::AddFakeMarkers()` 将 `PassBoundary` 当作普通零输出
+  action 合并；已令所有显式 pass 边界保留在自动分组外。T31 的 EID 7 Begin、
+  EID 23 End 均为顶层，原 EID 保持不变；EID 7 右侧 Output 本来就应为空，
+  Texture 20/21 的零值须在 Texture Viewer 手动选资源查看。
+- 对照 Vulkan：Begin/End render pass 是 `PassBoundary`，`$action()` 保留；
+  Vulkan 名称概括 attachment load/store，并记录 Clear/Discard/Resolve usage。
+  Metal render pass 现在显示各 color/depth/stencil attachment 的 Load/Clear/
+  Don't Care 与 Store/Resolve，记录 begin/end 对应 usage；compute pass 因无
+  attachment 仍只标 Begin/End。pass boundary 不消耗 action 编号，与 Vulkan 一致。
+- 新断言先在旧库重现 T31 假 marker 吞入边界，修复后通过；T07 深度模板与 T08
+  MSAA resolve 的名称/usage 定向断言通过。最终库 SHA-256 `7a494e202d1b…`，
+  GUI 程序 SHA-256 `d80297e329c9…`；T30/T31 正式 capture 未变，SHA-256 仍为
+  `8bfe33501fad…` / `f5ad1c86660b…`。T01/T06/T07/T08/T10/T11/T20/T22/T23/
+  T24/T25/T26/T27/T28/T29/T30/T31 共 17 份 Replay API 与逐份 CLI replay
+  通过；含 T00 的 18 份 capture × 10 次 lifecycle 通过，resident growth
+  1,392,640 bytes。`git diff --check` 通过。新日志
+  `/tmp/batch31-32-scope-fix-final.log`；L3 条件仍未触发。
+- 修订后的 `QA_BATCH31-32.md` 给出 T31 最短复验。T30 原功能 L4 已通过，
+  但公共事件树改变需用户仅复验 Begin/End 层级与 `$action()`；T31 其他 GUI
+  项仍待明确确认。PHASE32/BATCH31-32 不关闭；所有未提交改动保留。
+
+## 2026-09-26 BATCH31-32 P31.1–P32.4 自动验证完成，用户 L4 待验
+
+- T30 compute sampler 直接绑定与 T31 compute texture/sampler/buffer 批量绑定已实现；
+  T31 包含非零 range、null 清除、已声明未使用绑定和后续直接覆盖。
+  正式 capture 为 `captures/metal-smoke/t30_capture.rdc`、`t31_capture.rdc`；
+  SHA-256 分别为 `8bfe33501fad…`、`f5ad1c86660b…`。最终 qrenderdoc
+  `build-macos-debug/bin/qrenderdoc.app` 的程序 SHA-256 `d80297e329c9…`，
+  内嵌与构建库均为 `fa401fb7e602…`。
+- 最终定向证据：`/tmp/batch31-32-targeted.log` 中 T01/T03/T11/T12/T16/T17/
+  T18/T19/T28/T29/T30/T31 的 native、Replay API、逐份 CLI 均通过。
+  T30/T31 的正式 XML 与 Point/Linear 像素、状态快照、descriptor/usage、seek、
+  DDS 和 T31 raw bytes 已核对；异常捕获 2+9 例及 T28/T29 的 10 例均拒绝。
+  13 份 capture × 10 轮 lifecycle 通过，resident growth 1,638,400 bytes，
+  日志 `/tmp/batch31-32-targeted.log`。脚本语法、Python 编译及 `git diff --check`
+  通过。批次脚本已扩展 T30/T31，未跑全量 L3。
+- L3 条件未触发：T12 已覆盖通用 descriptor 改动；无 render pass、初始资源内容、
+  ICB 或公共事件层级改动，也未进入发布/合并门槛。
+- 合并 GUI 验收单 `QA_BATCH31-32.md` 待用户同轮 qrenderdoc 检查。
+  `QA_PENDING.md` 保留 T30/T31；反馈前 PHASE31/PHASE32/BATCH31-32 不关闭。
+  全部工作区改动保留，下一项是接收 L4 后仅对不符项修复或复验。
+
+## 2026-09-25 BATCH31-32 P31.1 开始
+
+- 从 T30 compute sampler fixture/native 开始；基于 T11 的确定性 8×8 输入，
+  增加 compute sampler 直接绑定与可区分的采样输出。`metal_compute_sampler.cpp`
+  已加入 demo target，功能实现和验证进行中。当前工作区的新改动保留。
+- `QA_PENDING.md` 已登记 T30 批末用户 L4；T31 尚未开始。前批 T28/T29
+  已关闭且无遗留人工 QA。下一安全操作是完成 T30 未注入 native 参考验证，
+  随后接通 capture/replay，再继续 T31。
 
 ## 2026-09-24 BATCH29-30 关闭与下一批准备
 
@@ -78,8 +272,9 @@
 
 ## 当前批次
 
-当前计划批次为 `BATCH31-32.md`：T30/T31 尚未实现。上一批 BATCH29-30
-已关闭。以下条目为 BATCH29-30 进行时的历史状态。
+最近关闭批次为 `BATCH31-32.md`；下一批为 `BATCH33-34.md`，第一项 P33.1。
+以本文件顶部 2026-09-26 检查点为准。上一批 BATCH29-30 也已关闭。
+以下条目为 BATCH29-30 进行时的历史状态。
 
 - 2026-09-24 已关闭 `BATCH27-28.md`：T26 ICB `inheritPipelineState` 与 T27
   `inheritBuffers` 的最终联合 L0/L1/L2、逐份 CLI replay、lifecycle 和同轮最新
@@ -182,7 +377,7 @@
   `/tmp/batch25-26-final.log`，运行目录 `/tmp/metal-batch25-26-final.6n0AJS`。T24/T25 与
   T20/T22/T23/T01/T02/T13/T14/T21 的 native、capture/XML、Replay API/output、逐份 CLI
   replay 全部通过；T20/T22/T23/T24/T21/T25 的 6/11/18/8/9/15 类异常拒绝通过。
-  含 T00 的 11 份 capture × 10 轮 lifecycle resident growth 1,212,416 bytes；脚本语法、
+  含 T00 的 11 份 capture × 10 轮 lifecycle resident growth 1,638,400 bytes；脚本语法、
   Python 编译与 `git diff --check` 通过。
 - 最近 L4 证据：最新 qrenderdoc 同一进程依次打开正式
   `captures/metal-smoke/t24_capture.rdc` 与 `t25_capture.rdc`。T24 的 `0+3` range、三个
@@ -698,7 +893,7 @@ Qt 5 会警告它只测试到 macOS SDK 14，当前 SDK 26 属于 Qt 未验证�
 - 2026-09-24 BATCH25-26 关闭检查点：最终脚本 `/tmp/run-metal-batch25-26.sh` 与汇总
   `/tmp/batch25-26-final.log` 通过。T24/T25 及联合 T01/T02/T13/T14/T20/T21/T22/T23
   native/capture/XML/Replay API/逐份 CLI replay、6/11/18/8/9/15 类对应异常拒绝及
-  11×10 lifecycle 全部通过，resident growth 1,212,416 bytes。同一最新 qrenderdoc 进程
+  11×10 lifecycle 全部通过，resident growth 1,638,400 bytes。同一最新 qrenderdoc 进程
   依次验收正式 T24/T25 capture：T24 reset/reencode 的三个展开 draw、旧命令失效、
   IA/Mesh/Buffer/Resource、HTML/CSV、红绿蓝输出；T25 两类 action、direct 无 index、indexed
   UInt16 4/6 与 Vertex/Instance 输入、Mesh/Buffer/Resource、HTML/CSV/DDS、红绿蓝输出；

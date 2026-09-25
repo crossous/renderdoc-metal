@@ -39,10 +39,20 @@ public:
   DECLARE_FUNCTION_SERIALISED(void, setComputePipelineState,
                               WrappedMTLComputePipelineState *pipeline);
   DECLARE_FUNCTION_SERIALISED(void, setTexture, WrappedMTLTexture *texture, NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setTextures, rdcarray<WrappedMTLTexture *> textures,
+                              NS::Range range);
+  DECLARE_FUNCTION_SERIALISED(void, setSamplerState, WrappedMTLSamplerState *sampler,
+                              NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setSamplerStates,
+                              rdcarray<WrappedMTLSamplerState *> samplers, NS::Range range);
   DECLARE_FUNCTION_SERIALISED(void, setBuffer, WrappedMTLBuffer *buffer, NS::UInteger offset,
                               NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setBuffers, rdcarray<WrappedMTLBuffer *> buffers,
+                              rdcarray<NS::UInteger> offsets, NS::Range range);
   DECLARE_FUNCTION_SERIALISED(void, dispatchThreadgroups, MTL::Size &groups,
                               MTL::Size &threadsPerGroup);
+  DECLARE_FUNCTION_SERIALISED(void, dispatchThreadgroups, WrappedMTLBuffer *indirectBuffer,
+                              NS::UInteger indirectBufferOffset, MTL::Size &threadsPerGroup);
   DECLARE_FUNCTION_SERIALISED(void, dispatchThreads, MTL::Size &grid,
                               MTL::Size &threadsPerGroup);
 
@@ -54,5 +64,4 @@ public:
 private:
   WrappedMTLCommandBuffer *m_CommandBuffer = NULL;
   WrappedMTLComputePipelineState *m_Pipeline = NULL;
-  WrappedMTLTexture *m_Textures[2] = {};
 };

@@ -65,33 +65,38 @@ MetalFX、任意第三方应用注入或完整 capture 产品化为目标。为�
 - [BATCH29-30.md](BATCH29-30.md)：已关闭的 T28/T29 compute dispatch 与 buffer binding 联合验收记录。
 - [PHASE29.md](PHASE29.md)：已完成的 T28 compute dispatchThreads 纵向切片。
 - [PHASE30.md](PHASE30.md)：已完成的 T29 compute buffer binding 纵向切片。
-- [BATCH31-32.md](BATCH31-32.md)：当前计划批次 T30/T31 compute sampler 与批量资源绑定；尚未实施。
-- [PHASE31.md](PHASE31.md)：T30 compute sampler 直接绑定计划。
-- [PHASE32.md](PHASE32.md)：T31 compute texture/sampler/buffer 批量绑定计划。
+- [BATCH31-32.md](BATCH31-32.md)：已关闭的 T30/T31 compute sampler 与批量资源绑定联合验收记录。
+- [PHASE31.md](PHASE31.md)：已完成的 T30 compute sampler 直接绑定纵向切片。
+- [PHASE32.md](PHASE32.md)：已完成的 T31 compute texture/sampler/buffer 批量绑定纵向切片。
+- [BATCH33-34.md](BATCH33-34.md)：已关闭的 T32/T33 compute 间接 dispatch 批次。
+- [PHASE33.md](PHASE33.md)：已完成的 T32 CPU 参数 compute 间接 dispatch。
+- [PHASE34.md](PHASE34.md)：已完成的 T33 GPU 生成参数 compute 间接 dispatch。
+- [ACTION_NAME_ALIGNMENT.md](ACTION_NAME_ALIGNMENT.md)：跨 API action 名称审查与后续对齐计划。
+- [REAL_WORLD_CAPTURE_ROADMAP.md](REAL_WORLD_CAPTURE_ROADMAP.md)：UE/Unity、Nanite、光追、mesh shading 与本机/M4 的路线评估。
 - [STATUS.md](STATUS.md)：当前状态、最近验证结果、阻塞项和下一步。
 - [TEST_MATRIX.md](TEST_MATRIX.md)：Metal API/资源/UI 覆盖矩阵与测试样例来源。
 - [HANDOFF.md](HANDOFF.md)：新 agent 的接手规则、省额度验证节奏、compact/新任务边界和可复制提示。
 - [QA_GUIDE.md](QA_GUIDE.md)：从 BATCH29-30 起的命令行 QA 与用户 GUI L4 分工、一次性验收单格式。
 - [QA_PENDING.md](QA_PENDING.md)：跨批次保留每个 T 的人工 L4 待验状态与用户反馈。
 - [QA_BATCH29-30.md](QA_BATCH29-30.md)：最终 T28/T29 正式 captures 的合并 GUI 验收单。
+- [QA_BATCH31-32.md](QA_BATCH31-32.md)：T30/T31 正式 captures 的合并 GUI 验收单。
+- [QA_BATCH33-34.md](QA_BATCH33-34.md)：T32/T33 正式 captures 的合并 GUI 验收单。
 - [HANDOFF_HISTORY.md](HANDOFF_HISTORY.md)：按需追查的历史阶段交接证据。
 - [DECISIONS.md](DECISIONS.md)：关键架构与范围决策。
 
 ## 当前状态
 
-T00-T29 的 Native/Capture/RDC inspect/Replay/UI 纵向切片已关闭。
-最近一批 `BATCH29-30.md` 的 T28 `dispatchThreads`、T29 compute buffer binding
-完成自动验证与同轮用户 L4。用户确认 T28/T29 右侧缩略图、T29 `$action()`
-筛选及先前各项；T28 DDS 与自动参考一致，T22/T25 事件树复验通过。
-Texture Viewer 缩略图空白已通过 Metal Headless output 修复。当前
-`QA_PENDING.md` 无待验项。下一批 `BATCH31-32.md` 计划 T30 compute sampler
-直接绑定与 T31 compute 批量资源绑定；第一项 P31.1，尚未开始实现。
-接手时只读本入口、`STATUS.md` 当前批次与最新检查点、当前 BATCH/两份 PHASE 和
+T00-T33 的 Native/Capture/RDC inspect/Replay/UI 纵向切片已关闭。
+`BATCH33-34.md` 的 T32 CPU 参数与 T33 GPU 生成参数 compute 间接 dispatch
+已完成最终联合自动验证和用户 GUI L4，含 Event Browser 实际执行数量摘要。
+PHASE33、PHASE34 和 BATCH33-34 已关闭。跨 API action 名称审查见
+`ACTION_NAME_ALIGNMENT.md`，部分 Metal 名称待后续显示一致性工作处理。
+接手时只读本入口、`STATUS.md` 当前批次与最新检查点、下一 BATCH/两份 PHASE 和
 `HANDOFF.md`、`QA_GUIDE.md` 验证规则及 `QA_PENDING.md` 待验清单；`PLAN.md` 与历史文档
 按需查阅。正式 captures 与本机构建仍保留在各自的忽略目录。
 从 BATCH29-30 起，agent 完成终端可判定的 QA；最终 GUI 交互由用户按合并的验收单
 一次完成。未收到用户明确反馈的功能会持续列在 `QA_PENDING.md`，以后每次结果都会提示；
-下一功能可以继续开发，未验批次不会被标为关闭。当前无人工待验项。
+下一功能可以继续开发，未验批次不会被标为关闭。当前没有人工待验项。
 
 ## 初始基线结论（2026-09-20）
 

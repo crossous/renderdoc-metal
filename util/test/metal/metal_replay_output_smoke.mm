@@ -42,6 +42,8 @@ rdcstr DoStringise(const uint32_t &value)
 
 REPLAY_PROGRAM_MARKER()
 
+static bool HasUsage(IReplayController *renderer, ResourceId resource, ResourceUsage usage);
+
 static const ActionDescription *FindAction(const rdcarray<ActionDescription> &actions,
                                            ActionFlags flags)
 {
@@ -76,6 +78,22 @@ static void FindActions(const rdcarray<ActionDescription> &actions,
   }
 }
 
+static bool ValidateFakePassMarkers(IReplayController *renderer)
+{
+  renderer->AddFakeMarkers();
+  for(const ActionDescription &action : renderer->GetRootActions())
+  {
+    if(!action.IsFakeMarker())
+      continue;
+    rdcarray<const ActionDescription *> children;
+    FindActions(action.children, children);
+    for(const ActionDescription *child : children)
+      if(child->flags & ActionFlags::PassBoundary)
+        return false;
+  }
+  return true;
+}
+
 static bool ValidateMetalEventSequence(IReplayController *renderer)
 {
   rdcarray<const ActionDescription *> actions;
@@ -94,6 +112,190 @@ static bool ValidateMetalEventSequence(IReplayController *renderer)
   for(uint32_t eid = 1; eid <= last; ++eid)
     if(!events.count(eid))
       return false;
+  return true;
+}
+
+static bool ValidateComputeIndirectDispatchFixture(IReplayController *renderer,
+                                                   const char *savePath)
+{
+  ResourceId arguments;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.length == 44 && (buffer.creationFlags & BufferCategory::Indirect))
+      arguments = buffer.resourceId;
+  if(arguments == ResourceId())
+    return true;
+
+  auto fail = [](const char *message) {
+    fprintf(stderr, "T32 indirect compute validation failed: %s\n", message);
+    return false;
+  };
+  rdcarray<const ActionDescription *> actions;
+  FindActions(renderer->GetRootActions(), actions);
+  const ActionDescription *dispatch = NULL;
+  const ActionDescription *begin = NULL;
+  const ActionDescription *firstBegin = NULL;
+  const ActionDescription *writer = NULL;
+  for(const ActionDescription *action : actions)
+  {
+    if(action->customName == "Begin Metal Compute Pass")
+    {
+      if(!firstBegin) firstBegin = action;
+      begin = action;
+    }
+    if((action->flags & ActionFlags::Dispatch) && (action->flags & ActionFlags::Indirect))
+      dispatch = action;
+    else if(action->flags & ActionFlags::Dispatch)
+      writer = action;
+  }
+  if(begin == NULL || dispatch == NULL || begin->eventId >= dispatch->eventId ||
+     !dispatch->customName.contains("indirect, <2, 2, 1>") ||
+     dispatch->dispatchDimension[0] != 2 || dispatch->dispatchDimension[1] != 2 ||
+     dispatch->dispatchDimension[2] != 1 ||
+     dispatch->dispatchThreadsDimension[0] != 4 ||
+     dispatch->dispatchThreadsDimension[1] != 4 ||
+     dispatch->dispatchThreadsDimension[2] != 1)
+    return fail("compute action sequence or metadata incorrect");
+
+  renderer->SetFrameEvent(dispatch->eventId, true);
+  const PipeState &pipe = renderer->GetPipelineState();
+  const MetalPipe::State *state = pipe.GetMetalPipelineState();
+  if(!state || state->indirectBuffer.resourceId != arguments ||
+     state->indirectBuffer.byteOffset != 16 || state->indirectBuffer.byteSize != 12 ||
+     state->computeTextures.size() < 2 || state->computeTextures[1] == ResourceId() ||
+     state->computeTextures[0] == ResourceId() ||
+     state->computeBuffers.size() < 5 ||
+     state->computeBuffers[2].resourceId == ResourceId() ||
+     state->computeBuffers[4].resourceId == ResourceId() ||
+     state->computeBuffers[2].byteOffset != 32 ||
+     state->computeBuffers[4].byteOffset != 64 ||
+     !HasUsage(renderer, arguments, ResourceUsage::Indirect))
+    return fail("indirect or compute pipeline state incorrect");
+
+  const ResourceId source = state->computeTextures[0];
+  const ResourceId input = state->computeBuffers[2].resourceId;
+  const ResourceId destination = state->computeTextures[1];
+  const ResourceId output = state->computeBuffers[4].resourceId;
+  if(pipe.GetShaderEntryPoint(ShaderStage::Compute) != "filter_main" ||
+     !HasUsage(renderer, source, ResourceUsage::CS_Resource) ||
+     !HasUsage(renderer, destination, ResourceUsage::CS_RWResource) ||
+     !HasUsage(renderer, input, ResourceUsage::CS_Resource) ||
+     !HasUsage(renderer, output, ResourceUsage::CS_RWResource))
+    return fail("compute shader or resource usage incorrect");
+  const auto ro = pipe.GetReadOnlyResources(ShaderStage::Compute, true);
+  const auto rw = pipe.GetReadWriteResources(ShaderStage::Compute, true);
+  bool readTexture = false, readBuffer = false, writeTexture = false, writeBuffer = false;
+  for(const UsedDescriptor &binding : ro)
+  {
+    readTexture |= binding.descriptor.resource == source;
+    readBuffer |= binding.descriptor.resource == input && binding.descriptor.byteOffset == 32;
+  }
+  for(const UsedDescriptor &binding : rw)
+  {
+    writeTexture |= binding.descriptor.resource == destination;
+    writeBuffer |= binding.descriptor.resource == output && binding.descriptor.byteOffset == 64;
+  }
+  if(!readTexture || !readBuffer || !writeTexture || !writeBuffer)
+    return fail("compute descriptors incorrect");
+
+  const bytebuf argumentBytes = renderer->GetBufferData(arguments, 0, 0);
+  static const uint32_t expectedGroups[3] = {2, 2, 1};
+  if(argumentBytes.size() != 44 ||
+     memcmp(argumentBytes.data() + 16, expectedGroups, sizeof(expectedGroups)) != 0)
+    return fail("indirect argument record incorrect");
+  for(size_t i = 0; i < argumentBytes.size(); ++i)
+    if((i < 16 || i >= 28) && argumentBytes[i] != 0x6d)
+      return fail("indirect argument sentinel changed");
+
+  if(writer)
+  {
+    if(!firstBegin || firstBegin->eventId >= writer->eventId ||
+       writer->eventId >= begin->eventId ||
+       !HasUsage(renderer, arguments, ResourceUsage::CS_RWResource))
+      return fail("GPU argument writer action or usage incorrect");
+    renderer->SetFrameEvent(firstBegin->eventId, true);
+    const bytebuf initial = renderer->GetBufferData(arguments, 16, 12);
+    if(initial.size() != 12)
+      return fail("GPU argument initial readback unavailable");
+    for(byte value : initial)
+      if(value != 0)
+        return fail("GPU argument record was not zero before writer");
+    renderer->SetFrameEvent(writer->eventId, true);
+    const MetalPipe::State *writerState = renderer->GetPipelineState().GetMetalPipelineState();
+    if(!writerState || writerState->computeBuffers.empty() ||
+       writerState->computeBuffers[0].resourceId != arguments ||
+       writerState->computeBuffers[0].byteOffset != 16)
+      return fail("GPU argument writer binding incorrect");
+    bool writerDescriptor = false;
+    for(const UsedDescriptor &binding :
+        renderer->GetPipelineState().GetReadWriteResources(ShaderStage::Compute, true))
+      writerDescriptor |= binding.descriptor.resource == arguments &&
+                          binding.descriptor.byteOffset == 16;
+    if(!writerDescriptor)
+      return fail("GPU argument writer descriptor incorrect");
+    const bytebuf produced = renderer->GetBufferData(arguments, 16, 12);
+    if(produced.size() != sizeof(expectedGroups) ||
+       memcmp(produced.data(), expectedGroups, sizeof(expectedGroups)) != 0)
+      return fail("GPU argument writer did not produce 2,2,1");
+    renderer->SetFrameEvent(dispatch->eventId, true);
+  }
+
+  bytebuf pixels = renderer->GetTextureData(destination, {0, 0, 0});
+  bytebuf outputBytes = renderer->GetBufferData(output, 0, 0);
+  if(pixels.size() != 256 || outputBytes.size() != 336)
+    return fail("output sizes incorrect");
+  for(uint32_t y = 0; y < 8; ++y)
+    for(uint32_t x = 0; x < 8; ++x)
+    {
+      const uint32_t i = y * 8 + x;
+      const uint32_t expected = 19 + i * 2;
+      if(pixels[i * 4 + 0] != expected || pixels[i * 4 + 1] != 32 + 24 * x ||
+         pixels[i * 4 + 2] != 24 + 24 * y || pixels[i * 4 + 3] != 255 ||
+         memcmp(outputBytes.data() + 64 + i * 4, &expected, 4) != 0)
+      {
+        return fail("compute output differs from CPU reference");
+      }
+    }
+  for(size_t i = 0; i < outputBytes.size(); ++i)
+    if((i < 64 || i >= 320) && outputBytes[i] != 0xa5)
+      return fail("output buffer sentinel changed");
+
+  renderer->SetFrameEvent(begin->eventId, true);
+  pixels = renderer->GetTextureData(destination, {0, 0, 0});
+  for(byte value : pixels)
+    if(value != 0)
+      return fail("pre-dispatch texture not zero");
+  if(writer)
+  {
+    const bytebuf produced = renderer->GetBufferData(arguments, 16, 12);
+    if(produced.size() != sizeof(expectedGroups) ||
+       memcmp(produced.data(), expectedGroups, sizeof(expectedGroups)) != 0)
+      return fail("GPU arguments not visible to the next compute encoder");
+  }
+  renderer->SetFrameEvent(dispatch->eventId, true);
+  pixels = renderer->GetTextureData(destination, {0, 0, 0});
+  if(pixels.size() != 256 || pixels[0] != 19 || pixels[1] != 32 || pixels[2] != 24)
+    return fail("seek forward did not restore compute output");
+  if(savePath)
+  {
+    TextureSave save;
+    save.resourceId = destination;
+    save.destType = FileType::DDS;
+    save.mip = 0;
+    save.slice.sliceIndex = 0;
+    if(!renderer->SaveTexture(save, savePath).OK())
+      return fail("computed texture DDS export failed");
+    std::ifstream dds(savePath, std::ios::binary | std::ios::ate);
+    if(!dds || dds.tellg() != std::streampos(384))
+      return fail("computed texture DDS size incorrect");
+    const rdcstr rawPath = rdcstr(savePath) + ".bin";
+    std::ofstream raw(rawPath.c_str(), std::ios::binary);
+    raw.write((const char *)argumentBytes.data(), argumentBytes.size());
+    if(!raw)
+      return fail("indirect argument raw export failed");
+  }
+  fprintf(stderr, "%s indirect compute EIDs writer=%u begin=%u dispatch=%u, offset=16 groups=2,2,1\n",
+          writer ? "T33" : "T32", writer ? writer->eventId : 0,
+          begin->eventId, dispatch->eventId);
   return true;
 }
 
@@ -635,9 +837,42 @@ static bool HasUsage(IReplayController *renderer, ResourceId resource, ResourceU
   return false;
 }
 
+static bool HasUsageAt(IReplayController *renderer, ResourceId resource, ResourceUsage usage,
+                       uint32_t eventId)
+{
+  for(const EventUsage &event : renderer->GetUsage(resource))
+    if(event.usage == usage && event.eventId == eventId)
+      return true;
+  return false;
+}
+
+static const ActionDescription *FindNamedAction(const rdcarray<ActionDescription> &actions,
+                                                const char *prefix)
+{
+  for(const ActionDescription &action : actions)
+  {
+    if(action.customName.find(prefix) == 0)
+      return &action;
+    if(const ActionDescription *child = FindNamedAction(action.children, prefix))
+      return child;
+  }
+  return NULL;
+}
+
 static bool ValidateComputeFixture(IReplayController *renderer, ResourceId colorTarget,
                                    const char *savePath)
 {
+  rdcarray<const ActionDescription *> computeActions;
+  FindActions(renderer->GetRootActions(), computeActions);
+  for(const ActionDescription *action : computeActions)
+    if(action->flags & ActionFlags::Dispatch)
+    {
+      renderer->SetFrameEvent(action->eventId, true);
+      const MetalPipe::State *state = renderer->GetPipelineState().GetMetalPipelineState();
+      if(state && !state->computeSamplers.empty())
+        return true;
+      break;
+    }
   for(const BufferDescription &buffer : renderer->GetBuffers())
     if(buffer.length == 304 &&
        HasUsage(renderer, buffer.resourceId, ResourceUsage::CS_Resource))
@@ -767,6 +1002,360 @@ static bool ValidateComputeFixture(IReplayController *renderer, ResourceId color
   return true;
 }
 
+static bool ValidateComputeSamplerFixture(IReplayController *renderer, ResourceId colorTarget,
+                                          const char *savePath)
+{
+  rdcarray<const ActionDescription *> actions;
+  FindActions(renderer->GetRootActions(), actions);
+  rdcarray<const ActionDescription *> dispatches;
+  const ActionDescription *begin = NULL, *draw = NULL;
+  for(const ActionDescription *action : actions)
+  {
+    if(action->customName == "Begin Metal Compute Pass") begin = action;
+    if(action->flags & ActionFlags::Dispatch) dispatches.push_back(action);
+    if(action->flags & ActionFlags::Drawcall) draw = action;
+  }
+  if(dispatches.size() != 2)
+    return true;
+  renderer->SetFrameEvent(dispatches[0]->eventId, true);
+  const MetalPipe::State *state = renderer->GetPipelineState().GetMetalPipelineState();
+  if(!state || state->computeSamplers.size() != 1)
+    return true;
+  auto fail = [](const char *message) { return PipelineFailure(message); };
+  if(!begin || !draw || !(begin->eventId < dispatches[0]->eventId &&
+                         dispatches[0]->eventId < dispatches[1]->eventId &&
+                         dispatches[1]->eventId < draw->eventId))
+    return fail("T30 action sequence incorrect");
+  const SDFile &structured = renderer->GetStructuredFile();
+  uint32_t samplerEIDs[2] = {};
+  for(size_t i = 0; i < 2; i++)
+    for(const APIEvent &event : dispatches[i]->events)
+      if(event.chunkIndex < structured.chunks.size() &&
+         structured.chunks[event.chunkIndex]->name ==
+             "MTLComputeCommandEncoder::setSamplerState")
+        samplerEIDs[i] = event.eventId;
+  if(!(begin->eventId < samplerEIDs[0] && samplerEIDs[0] < dispatches[0]->eventId &&
+       dispatches[0]->eventId < samplerEIDs[1] &&
+       samplerEIDs[1] < dispatches[1]->eventId))
+    return fail("T30 sampler API EIDs incorrect");
+  ResourceId source = state->computeTextures[0];
+  ResourceId point = state->computeTextures[1];
+  ResourceId pointSampler = state->computeSamplers[0];
+  auto samplers = renderer->GetPipelineState().GetSamplers(ShaderStage::Compute, true);
+  if(source == ResourceId() || point == ResourceId() || pointSampler == ResourceId() ||
+     samplers.size() != 1 || samplers[0].sampler.object != pointSampler ||
+     samplers[0].sampler.filter.minify != FilterMode::Point ||
+     samplers[0].sampler.filter.magnify != FilterMode::Point ||
+     samplers[0].sampler.addressU != AddressMode::ClampEdge ||
+     samplers[0].access.byteOffset != 0x1000)
+    return fail("T30 point sampler descriptor incorrect");
+  renderer->SetFrameEvent(samplerEIDs[0], true);
+  state = renderer->GetPipelineState().GetMetalPipelineState();
+  if(!state || state->computeSamplers[0] != pointSampler)
+    return fail("T30 point sampler event state incorrect");
+  renderer->SetFrameEvent(begin->eventId, true);
+  bytebuf pixels = renderer->GetTextureData(point, {0, 0, 0});
+  for(byte value : pixels) if(value != 0) return fail("T30 point sentinel incorrect");
+  renderer->SetFrameEvent(dispatches[0]->eventId, true);
+  pixels = renderer->GetTextureData(point, {0, 0, 0});
+  if(pixels.size() != 256) return fail("T30 point texture size incorrect");
+  for(uint32_t y = 0; y < 8; y++)
+    for(uint32_t x = 0; x < 8; x++)
+    {
+      const byte expected[4] = {byte(16 + 8 * (x + y)), byte(32 + 24 * x),
+                                byte(24 + 24 * y), 255};
+      if(memcmp(pixels.data() + (y * 8 + x) * 4, expected, 4))
+        return fail("T30 point texels incorrect");
+    }
+  renderer->SetFrameEvent(dispatches[1]->eventId, true);
+  state = renderer->GetPipelineState().GetMetalPipelineState();
+  ResourceId linear = state->computeTextures[1];
+  ResourceId linearSampler = state->computeSamplers[0];
+  samplers = renderer->GetPipelineState().GetSamplers(ShaderStage::Compute, true);
+  if(linear == point || linearSampler == pointSampler || samplers.size() != 1 ||
+     samplers[0].sampler.object != linearSampler ||
+     samplers[0].sampler.filter.minify != FilterMode::Linear ||
+     samplers[0].sampler.filter.magnify != FilterMode::Linear ||
+     samplers[0].sampler.addressU != AddressMode::ClampEdge ||
+     samplers[0].access.byteOffset != 0x1000)
+    return fail("T30 linear sampler descriptor incorrect");
+  renderer->SetFrameEvent(samplerEIDs[1], true);
+  state = renderer->GetPipelineState().GetMetalPipelineState();
+  if(!state || state->computeSamplers[0] != linearSampler)
+    return fail("T30 linear sampler event state incorrect");
+  renderer->SetFrameEvent(dispatches[1]->eventId, true);
+  pixels = renderer->GetTextureData(linear, {0, 0, 0});
+  if(pixels.size() != 256) return fail("T30 linear texture size incorrect");
+  for(uint32_t y = 0; y < 8; y++)
+    for(uint32_t x = 0; x < 8; x++)
+    {
+      const uint32_t dx = x < 7 ? 1 : 0, dy = y < 7 ? 1 : 0;
+      const byte expected[4] = {byte(16 + 8 * (x + y) + 2 * (dx + dy)),
+                                byte(32 + 24 * x + 6 * dx),
+                                byte(24 + 24 * y + 6 * dy), 255};
+      if(memcmp(pixels.data() + (y * 8 + x) * 4, expected, 4))
+        return fail("T30 linear texels incorrect");
+    }
+  renderer->SetFrameEvent(begin->eventId, true);
+  pixels = renderer->GetTextureData(linear, {0, 0, 0});
+  for(byte value : pixels) if(value != 0) return fail("T30 seek rewind incorrect");
+  if(const ActionDescription *end =
+         FindNamedAction(renderer->GetRootActions(), "End Metal Compute Pass"))
+    fprintf(stderr, "T30 compute scope begin=%u end=%u\n", begin->eventId, end->eventId);
+  if(!ValidateHeadlessThumbnail(renderer, point, begin->eventId, false) ||
+     !ValidateHeadlessThumbnail(renderer, source, dispatches[0]->eventId, true) ||
+     !ValidateHeadlessThumbnail(renderer, point, dispatches[0]->eventId, true) ||
+     !ValidateHeadlessThumbnail(renderer, linear, dispatches[1]->eventId, true))
+    return fail("T30 Input/Output thumbnails incorrect");
+  if(!HasUsage(renderer, source, ResourceUsage::CS_Resource) ||
+     !HasUsage(renderer, point, ResourceUsage::CS_RWResource) ||
+     !HasUsage(renderer, linear, ResourceUsage::CS_RWResource))
+    return fail("T30 texture usage incorrect");
+  if(!PixelMatches(renderer, colorTarget, draw->eventId, 25, 20,
+                   20.0f / 255, 38.0f / 255, 30.0f / 255) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 375, 280,
+                   128.0f / 255, 200.0f / 255, 192.0f / 255))
+    return fail("T30 final render output incorrect");
+  if(savePath)
+  {
+    renderer->SetFrameEvent(dispatches[1]->eventId, true);
+    TextureSave save;
+    save.resourceId = linear;
+    if(!renderer->SaveTexture(save, savePath).OK())
+      return fail("T30 DDS export failed");
+  }
+  fprintf(stderr, "T30 EIDs begin=%u sampler=%u point=%u sampler=%u linear=%u draw=%u\n",
+          begin->eventId, samplerEIDs[0], dispatches[0]->eventId,
+          samplerEIDs[1], dispatches[1]->eventId, draw->eventId);
+  return true;
+}
+
+static bool ValidateComputeBatchFixture(IReplayController *renderer, ResourceId colorTarget,
+                                        const char *savePath)
+{
+  rdcarray<const ActionDescription *> actions;
+  FindActions(renderer->GetRootActions(), actions);
+  rdcarray<const ActionDescription *> dispatches;
+  const ActionDescription *begin = NULL, *draw = NULL;
+  for(const ActionDescription *action : actions)
+  {
+    if(action->customName == "Begin Metal Compute Pass") begin = action;
+    if(action->flags & ActionFlags::Dispatch) dispatches.push_back(action);
+    if(action->flags & ActionFlags::Drawcall) draw = action;
+  }
+  if(dispatches.size() != 2)
+    return true;
+  renderer->SetFrameEvent(dispatches[0]->eventId, true);
+  const MetalPipe::State *state = renderer->GetPipelineState().GetMetalPipelineState();
+  if(!state || state->computeSamplers.size() < 4)
+    return true;
+  auto fail = [](const char *message) { return PipelineFailure(message); };
+  if(!begin || !draw || !(begin->eventId < dispatches[0]->eventId &&
+                         dispatches[0]->eventId < dispatches[1]->eventId &&
+                         dispatches[1]->eventId < draw->eventId))
+    return fail("T31 action sequence incorrect");
+  if(begin->depthOut != ResourceId())
+    return fail("T31 compute begin unexpectedly has a depth output");
+  for(ResourceId output : begin->outputs)
+    if(output != ResourceId())
+      return fail("T31 compute begin unexpectedly has a color output");
+  if(state->computeTextures.size() < 6 || state->computeTextures[0] != ResourceId() ||
+     state->computeTextures[1] == ResourceId() || state->computeTextures[2] != ResourceId() ||
+     state->computeTextures[3] == ResourceId() || state->computeSamplers[2] == ResourceId() ||
+     state->computeSamplers[3] != ResourceId() || state->computeBuffers.size() < 7 ||
+     state->computeBuffers[4].resourceId == ResourceId() ||
+     state->computeBuffers[5].resourceId != ResourceId() ||
+     state->computeBuffers[6].resourceId == ResourceId() ||
+     state->computeBuffers[4].byteOffset != 32 || state->computeBuffers[6].byteOffset != 64)
+    return fail("T31 batch slots or null clears incorrect");
+  const ResourceId source = state->computeTextures[1];
+  const ResourceId point = state->computeTextures[3];
+  const ResourceId input = state->computeBuffers[4].resourceId;
+  const ResourceId output = state->computeBuffers[6].resourceId;
+  const ResourceId pointSampler = state->computeSamplers[2];
+  auto ro = renderer->GetPipelineState().GetReadOnlyResources(ShaderStage::Compute, true);
+  auto rw = renderer->GetPipelineState().GetReadWriteResources(ShaderStage::Compute, true);
+  auto samplers = renderer->GetPipelineState().GetSamplers(ShaderStage::Compute, true);
+  if(ro.size() != 2 || rw.size() != 2 || samplers.size() != 1 ||
+     samplers[0].sampler.object != pointSampler ||
+     samplers[0].sampler.filter.minify != FilterMode::Point ||
+     samplers[0].sampler.addressU != AddressMode::ClampEdge ||
+     samplers[0].access.byteOffset != 0x1002)
+    return fail("T31 reflected descriptors incorrect");
+  bool readTexture = false, readBuffer = false, writeTexture = false, writeBuffer = false;
+  for(const UsedDescriptor &binding : ro)
+  {
+    if(binding.access.type == DescriptorType::Image &&
+       binding.descriptor.resource == source && binding.access.byteOffset == 0x301)
+      readTexture = true;
+    if(binding.access.type == DescriptorType::Buffer &&
+       binding.descriptor.resource == input && binding.descriptor.byteOffset == 32 &&
+       binding.access.byteOffset == 0xB04)
+      readBuffer = true;
+  }
+  for(const UsedDescriptor &binding : rw)
+  {
+    if(binding.access.type == DescriptorType::ReadWriteImage &&
+       binding.descriptor.resource == point && binding.access.byteOffset == 0x403)
+      writeTexture = true;
+    if(binding.access.type == DescriptorType::ReadWriteBuffer &&
+       binding.descriptor.resource == output && binding.descriptor.byteOffset == 64 &&
+       binding.access.byteOffset == 0xC06)
+      writeBuffer = true;
+  }
+  if(!readTexture || !readBuffer || !writeTexture || !writeBuffer)
+    return fail("T31 descriptor resources, slots or buffer offsets incorrect");
+  const auto allRO = renderer->GetPipelineState().GetReadOnlyResources(ShaderStage::Compute, false);
+  const auto allSamplers = renderer->GetPipelineState().GetSamplers(ShaderStage::Compute, false);
+  bool unusedTexture = false, unusedBuffer = false, unusedSampler = false;
+  for(const UsedDescriptor &binding : allRO)
+  {
+    if(binding.access.staticallyUnused &&
+       binding.access.type == DescriptorType::Image &&
+       binding.descriptor.resource == state->computeTextures[5]) unusedTexture = true;
+    if(binding.access.staticallyUnused &&
+       binding.access.type == DescriptorType::Buffer &&
+       binding.descriptor.resource == state->computeBuffers[8].resourceId) unusedBuffer = true;
+  }
+  for(const UsedDescriptor &binding : allSamplers)
+    if(binding.access.staticallyUnused &&
+       binding.sampler.object == state->computeSamplers[5]) unusedSampler = true;
+  if(!unusedTexture || !unusedBuffer || !unusedSampler)
+    return fail("T31 declared unused bindings not exposed");
+  const SDFile &structured = renderer->GetStructuredFile();
+  const char *names[] = {"MTLComputeCommandEncoder::setTextures",
+                         "MTLComputeCommandEncoder::setSamplerStates",
+                         "MTLComputeCommandEncoder::setBuffers"};
+  uint32_t bindingEIDs[3] = {};
+  for(const APIEvent &event : dispatches[0]->events)
+    if(event.chunkIndex < structured.chunks.size())
+      for(size_t i = 0; i < 3; i++)
+        if(structured.chunks[event.chunkIndex]->name == names[i])
+          bindingEIDs[i] = event.eventId;
+  if(!(begin->eventId < bindingEIDs[0] && bindingEIDs[0] < bindingEIDs[1] &&
+       bindingEIDs[1] < bindingEIDs[2] && bindingEIDs[2] < dispatches[0]->eventId))
+    return fail("T31 batch API EIDs incorrect");
+  renderer->SetFrameEvent(bindingEIDs[0], true);
+  state = renderer->GetPipelineState().GetMetalPipelineState();
+  if(!state || state->computeTextures[2] != ResourceId() ||
+     state->computeTextures[3] != point)
+    return fail("T31 texture batch event state incorrect");
+  renderer->SetFrameEvent(bindingEIDs[1], true);
+  state = renderer->GetPipelineState().GetMetalPipelineState();
+  if(!state || state->computeSamplers[3] != ResourceId() ||
+     state->computeSamplers[2] != pointSampler)
+    return fail("T31 sampler batch event state incorrect");
+  renderer->SetFrameEvent(bindingEIDs[2], true);
+  state = renderer->GetPipelineState().GetMetalPipelineState();
+  if(!state || state->computeBuffers[5].resourceId != ResourceId() ||
+     state->computeBuffers[6].resourceId != output)
+    return fail("T31 buffer batch event state incorrect");
+  renderer->SetFrameEvent(begin->eventId, true);
+  bytebuf pixels = renderer->GetTextureData(point, {0, 0, 0});
+  for(byte value : pixels) if(value != 0) return fail("T31 pre-dispatch texture sentinel incorrect");
+  bytebuf bytes = renderer->GetBufferData(output, 0, 0);
+  if(bytes.size() != 336) return fail("T31 output buffer size incorrect");
+  for(byte value : bytes) if(value != 0xa5) return fail("T31 pre-dispatch buffer sentinel incorrect");
+  for(size_t dispatchIndex = 0; dispatchIndex < 2; dispatchIndex++)
+  {
+    renderer->SetFrameEvent(dispatches[dispatchIndex]->eventId, true);
+    state = renderer->GetPipelineState().GetMetalPipelineState();
+    const ResourceId texture = state->computeTextures[3];
+    if(state->computeBuffers[6].byteOffset != (dispatchIndex ? 80 : 64))
+      return fail("T31 direct buffer override incorrect");
+    samplers = renderer->GetPipelineState().GetSamplers(ShaderStage::Compute, true);
+    if(samplers.size() != 1 ||
+       samplers[0].sampler.filter.minify != (dispatchIndex ? FilterMode::Linear : FilterMode::Point))
+      return fail("T31 direct sampler override incorrect");
+    pixels = renderer->GetTextureData(texture, {0, 0, 0});
+    if(pixels.size() != 256) return fail("T31 texture readback size incorrect");
+    for(uint32_t y = 0; y < 8; y++)
+      for(uint32_t x = 0; x < 8; x++)
+      {
+        const uint32_t dx = dispatchIndex && x < 7 ? 1 : 0;
+        const uint32_t dy = dispatchIndex && y < 7 ? 1 : 0;
+        const byte expected[4] = {byte(19 + 2 * (y * 8 + x)),
+                                  byte(32 + 24 * x + 6 * dx),
+                                  byte(24 + 24 * y + 6 * dy), 255};
+        if(memcmp(pixels.data() + (y * 8 + x) * 4, expected, 4))
+          return fail("T31 texture pixels incorrect");
+      }
+  }
+  bytes = renderer->GetBufferData(output, 0, 0);
+  if(bytes.size() != 336) return fail("T31 output buffer readback incorrect");
+  for(size_t i = 0; i < bytes.size(); i++)
+  {
+    byte expected = 0xa5;
+    if(i >= 64 && i < 80)
+    {
+      uint32_t value = 19 + (uint32_t(i - 64) / 4) * 2;
+      expected = reinterpret_cast<byte *>(&value)[(i - 64) % 4];
+    }
+    else if(i >= 80 && i < 336)
+    {
+      uint32_t value = 19 + (uint32_t(i - 80) / 4) * 2;
+      expected = reinterpret_cast<byte *>(&value)[(i - 80) % 4];
+    }
+    if(bytes[i] != expected) return fail("T31 output raw bytes or untouched sentinel incorrect");
+  }
+  renderer->SetFrameEvent(begin->eventId, true);
+  bytes = renderer->GetBufferData(output, 0, 0);
+  for(byte value : bytes) if(value != 0xa5) return fail("T31 seek rewind buffer incorrect");
+  if(!ValidateHeadlessThumbnail(renderer, point, begin->eventId, false) ||
+     !ValidateHeadlessThumbnail(renderer, source, dispatches[0]->eventId, true) ||
+     !ValidateHeadlessThumbnail(renderer, point, dispatches[0]->eventId, true))
+    return fail("T31 Input/Output thumbnails incorrect");
+  if(!HasUsage(renderer, source, ResourceUsage::CS_Resource) ||
+     !HasUsage(renderer, input, ResourceUsage::CS_Resource) ||
+     !HasUsage(renderer, output, ResourceUsage::CS_RWResource))
+    return fail("T31 usage incorrect");
+  if(!PixelMatches(renderer, colorTarget, draw->eventId, 25, 20,
+                   19.0f / 255, 38.0f / 255, 30.0f / 255) ||
+     !PixelMatches(renderer, colorTarget, draw->eventId, 375, 280,
+                   145.0f / 255, 200.0f / 255, 192.0f / 255))
+    return fail("T31 final render output incorrect");
+  if(savePath)
+  {
+    renderer->SetFrameEvent(dispatches[1]->eventId, true);
+    TextureSave save;
+    save.resourceId = renderer->GetPipelineState().GetMetalPipelineState()->computeTextures[3];
+    if(!renderer->SaveTexture(save, savePath).OK())
+      return fail("T31 DDS save failed");
+    const bytebuf rawBytes = renderer->GetBufferData(output, 0, 0);
+    std::string rawPath = std::string(savePath) + ".bin";
+    std::ofstream raw(rawPath, std::ios::binary);
+    raw.write((const char *)rawBytes.data(), rawBytes.size());
+    if(!raw || rawBytes.size() != 336)
+      return fail("T31 raw buffer save failed");
+  }
+  fprintf(stderr, "T31 EIDs begin=%u batches=%u,%u,%u point=%u linear=%u draw=%u\n",
+          begin->eventId, bindingEIDs[0], bindingEIDs[1], bindingEIDs[2],
+          dispatches[0]->eventId, dispatches[1]->eventId, draw->eventId);
+  const uint32_t beginEID = begin->eventId;
+  renderer->AddFakeMarkers();
+  bool beginAtRoot = false, endAtRoot = false;
+  uint32_t endEID = 0;
+  uint32_t copyBeginEID = 0, copyEndEID = 0;
+  for(const ActionDescription &action : renderer->GetRootActions())
+  {
+    beginAtRoot |= action.eventId == beginEID && action.customName == "Begin Metal Compute Pass";
+    endAtRoot |= action.customName == "End Metal Compute Pass";
+    if(action.customName == "End Metal Compute Pass")
+      endEID = action.eventId;
+    if(action.IsFakeMarker() && action.customName.find("Copy/Clear Pass") == 0 &&
+       !action.children.empty())
+    {
+      copyBeginEID = action.children.front().events.front().eventId;
+      copyEndEID = action.children.back().eventId;
+    }
+  }
+  if(!beginAtRoot || !endAtRoot || copyEndEID >= beginEID)
+    return fail("T31 fake pass marker swallowed a compute pass boundary");
+  fprintf(stderr, "T31 copy group=%u-%u, compute scope begin=%u end=%u at root\n",
+          copyBeginEID, copyEndEID, beginEID, endEID);
+  return true;
+}
+
 static bool ValidateDispatchThreadsFixture(IReplayController *renderer, ResourceId colorTarget,
                                            const char *savePath)
 {
@@ -876,6 +1465,9 @@ static bool ValidateDispatchThreadsFixture(IReplayController *renderer, Resource
 static bool ValidateComputeBufferFixture(IReplayController *renderer, ResourceId colorTarget,
                                          const char *savePath)
 {
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.length == 44 && (buffer.creationFlags & BufferCategory::Indirect))
+      return true;
   ResourceId input, output;
   ResourceId destinationTexture;
   for(const BufferDescription &buffer : renderer->GetBuffers())
@@ -910,6 +1502,13 @@ static bool ValidateComputeBufferFixture(IReplayController *renderer, ResourceId
      dispatch->dispatchDimension[1] != 2 || dispatch->dispatchThreadsDimension[0] != 4 ||
      dispatch->dispatchThreadsDimension[1] != 4)
     return PipelineFailure("T29 action/grid incorrect");
+
+  rdcarray<const ActionDescription *> computeDispatches;
+  for(const ActionDescription *action : actions)
+    if(action->flags & ActionFlags::Dispatch)
+      computeDispatches.push_back(action);
+  if(computeDispatches.size() != 1)
+    return true;
 
   const SDFile &structured = renderer->GetStructuredFile();
   rdcarray<uint32_t> bufferBindingEvents;
@@ -1773,6 +2372,18 @@ static bool ValidateDepthStencilFixture(IReplayController *renderer, ResourceId 
   if(clear == NULL || !(clear->flags & ActionFlags::ClearDepthStencil) ||
      clear->depthOut != draws[0]->depthOut)
     return fail("clear action does not expose the combined depth/stencil target");
+  const ActionDescription *end = FindNamedAction(renderer->GetRootActions(), "End Metal Render Pass");
+  fprintf(stderr, "T07 scope: %s / %s usage=%d,%d\n", clear->customName.c_str(),
+          end ? end->customName.c_str() : "missing",
+          HasUsageAt(renderer, colorTarget, ResourceUsage::Clear, clear->eventId),
+          HasUsageAt(renderer, draws[0]->depthOut, ResourceUsage::Clear, clear->eventId));
+  if(clear->customName.find("C0=Clear, D=Clear, S=Clear") == -1 ||
+     !(clear->flags & (ActionFlags::PassBoundary | ActionFlags::BeginPass)) || !end ||
+     end->customName.find("C0=Store, D=Store, S=Store") == -1 ||
+     !(end->flags & (ActionFlags::PassBoundary | ActionFlags::EndPass)) ||
+     !HasUsageAt(renderer, colorTarget, ResourceUsage::Clear, clear->eventId) ||
+     !HasUsageAt(renderer, draws[0]->depthOut, ResourceUsage::Clear, clear->eventId))
+    return fail("render pass load/store labels, boundary flags or clear usage incorrect");
 
   const float bgR = 0.025f, bgG = 0.035f, bgB = 0.055f;
   if(!PixelMatches(renderer, colorTarget, clear->eventId, 100, 150, bgR, bgG, bgB) ||
@@ -1875,6 +2486,18 @@ static bool ValidateMSAAResolveFixture(IReplayController *renderer, ResourceId c
   const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
   if(clear == NULL || clear->outputs[0] != resolveTarget.resourceId)
     return fail("clear action does not expose the resolve target");
+  const ActionDescription *end = FindNamedAction(renderer->GetRootActions(), "End Metal Render Pass");
+  fprintf(stderr, "T08 scope: %s / %s usage=%d,%d,%d\n", clear->customName.c_str(),
+          end ? end->customName.c_str() : "missing",
+          HasUsageAt(renderer, multisampleTarget.resourceId, ResourceUsage::Clear, clear->eventId),
+          end && HasUsageAt(renderer, multisampleTarget.resourceId, ResourceUsage::ResolveSrc, end->eventId),
+          end && HasUsageAt(renderer, resolveTarget.resourceId, ResourceUsage::ResolveDst, end->eventId));
+  if(clear->customName.find("C0=Clear") == -1 || !end ||
+     end->customName.find("C0=Resolve") == -1 ||
+     !HasUsageAt(renderer, multisampleTarget.resourceId, ResourceUsage::Clear, clear->eventId) ||
+     !HasUsageAt(renderer, multisampleTarget.resourceId, ResourceUsage::ResolveSrc, end->eventId) ||
+     !HasUsageAt(renderer, resolveTarget.resourceId, ResourceUsage::ResolveDst, end->eventId))
+    return fail("MSAA pass load/store labels or resolve usage incorrect");
 
   const float bgR = 0.03f, bgG = 0.04f, bgB = 0.06f;
   if(!PixelMatches(renderer, resolveTarget.resourceId, clear->eventId, 100, 150, bgR, bgG, bgB) ||
@@ -3840,6 +4463,7 @@ int main(int argc, char **argv)
   if(argc == 3 || argc == 4)
   {
     success = ValidateMetalEventSequence(renderer) &&
+              ValidateComputeIndirectDispatchFixture(renderer, argc == 4 ? argv[3] : NULL) &&
               ValidateIndexedFixture(renderer, display.resourceId, swapBuffer) &&
               ValidateDynamicUniformFixture(renderer, display.resourceId) &&
               ValidateInstancedFixture(renderer, display.resourceId) &&
@@ -3851,6 +4475,10 @@ int main(int argc, char **argv)
                                                 argc == 4 ? argv[3] : NULL) &&
               ValidateBlitFixture(renderer, display.resourceId, argc == 4 ? argv[3] : NULL) &&
               ValidateComputeFixture(renderer, display.resourceId, argc == 4 ? argv[3] : NULL) &&
+              ValidateComputeSamplerFixture(renderer, display.resourceId,
+                                            argc == 4 ? argv[3] : NULL) &&
+              ValidateComputeBatchFixture(renderer, display.resourceId,
+                                          argc == 4 ? argv[3] : NULL) &&
               ValidateDispatchThreadsFixture(renderer, display.resourceId,
                                              argc == 4 ? argv[3] : NULL) &&
               ValidateComputeBufferFixture(renderer, display.resourceId,
@@ -3927,6 +4555,9 @@ int main(int argc, char **argv)
                 WriteOutput(renderer, output, clear->eventId, argv[4]);
     }
   }
+
+  if(success)
+    success = ValidateFakePassMarkers(renderer);
 
   output->Shutdown();
   renderer->Shutdown();

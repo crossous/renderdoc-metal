@@ -213,15 +213,14 @@ bool WrappedMTLCommandBuffer::Serialise_renderCommandEncoderWithDescriptor(
     {
       AddEvent();
       ActionDescription action;
-      action.customName = "Begin Metal Render Pass";
+      action.customName = StringFormat::Fmt("Begin Metal Render Pass (%s)",
+                                            RDMTL::RenderPassOpString(descriptor, false).c_str());
       action.flags = ActionFlags::PassBoundary | ActionFlags::BeginPass;
       bool clearsColor = false;
-      for(const RDMTL::RenderPassColorAttachmentDescriptor &attachment :
-          descriptor.colorAttachments)
-        clearsColor |= attachment.loadAction == MTL::LoadActionClear;
+      for(const RDMTL::RenderPassColorAttachmentDescriptor &attachment : descriptor.colorAttachments)
+        clearsColor |= attachment.texture && attachment.loadAction == MTL::LoadActionClear;
       if(clearsColor)
       {
-        action.customName = "Begin Metal Render Pass (Clear)";
         action.flags |= ActionFlags::Clear | ActionFlags::ClearColor;
       }
       const bool clearsDepth = descriptor.depthAttachment.texture &&
@@ -230,11 +229,11 @@ bool WrappedMTLCommandBuffer::Serialise_renderCommandEncoderWithDescriptor(
                                  descriptor.stencilAttachment.loadAction == MTL::LoadActionClear;
       if(clearsDepth || clearsStencil)
       {
-        action.customName = "Begin Metal Render Pass (Clear)";
         action.flags |= ActionFlags::Clear | ActionFlags::ClearDepthStencil;
       }
       m_Device->GetReplay()->SetActionOutputs(action);
       AddAction(action);
+      m_Device->GetReplay()->AddRenderPassLoadUsage(descriptor);
     }
   }
   return true;
