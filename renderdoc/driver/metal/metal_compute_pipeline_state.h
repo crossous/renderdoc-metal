@@ -37,4 +37,17 @@ public:
   {
     TypeEnum = eResComputePipelineState
   };
+
+  WrappedMTLFunctionHandle *functionHandle(WrappedMTLFunction *function);
+  WrappedMTLVisibleFunctionTable *newVisibleFunctionTable(uint32_t count);
+  WrappedMTLIntersectionFunctionTable *newIntersectionFunctionTable(uint32_t count);
+  template <typename SerialiserType>
+  bool Serialise_functionHandle(SerialiserType &ser, WrappedMTLFunctionHandle *handle,
+                                 WrappedMTLFunction *function);
+  template <typename SerialiserType>
+  bool Serialise_newVisibleFunctionTable(SerialiserType &ser,
+                                          WrappedMTLVisibleFunctionTable *table, uint32_t count);
+  template <typename SerialiserType>
+  bool Serialise_newIntersectionFunctionTable(SerialiserType &ser,
+      WrappedMTLIntersectionFunctionTable *table, uint32_t count);
 };

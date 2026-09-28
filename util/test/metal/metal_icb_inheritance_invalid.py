@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 
 def run(*args, success=True):
     result = subprocess.run(args, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT)
-    if (result.returncode == 0) != success:
+                            stderr=subprocess.STDOUT, timeout=30)
+    if result.returncode < 0 or (result.returncode == 0) != success:
         raise RuntimeError(f"unexpected result: {args}\n{result.stdout}")
     return result.stdout
 

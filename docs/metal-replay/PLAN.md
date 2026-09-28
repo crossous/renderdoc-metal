@@ -1,10 +1,239 @@
 # Metal Replay 总体计划
 
-## 2026-09-26 最近批次检查点
+## 当前优先级：黑盒回放、稳定性、真实普通帧
+
+按[BLACKBOX_GATE](BLACKBOX_GATE.md)执行：近期不以穷举光追参数或
+降低防御宏计数为目标。先保留安全捕获/必要状态/正确GPU结果的
+黑盒边界，逐级隔离06:26 IOGPU panic；随后优先处理集中UI QA、M4
+对照和UE 5.6.1普通帧的首个真实阻塞。下方旧阶段计划仅供历史追溯，
+与本节冲突时以本节和STATUS顶部为准。
+
+09-28 [Binary Archive资源链](BINARY_ARCHIVE_GATE.md)已在T301接通文件
+导入、捕获快照、compute/render pipeline依赖及GPU回放。捕获期间修改
+archive的普通compute/render `add*PipelineFunctions` 已在
+[BATCH305–306](BATCH305-306.md)接通；单个 visible 函数添加
+见[BATCH307](BATCH307.md)，单节点 stitched library 添加见
+[BATCH308](BATCH308.md)；tile 函数添加在[BATCH309](BATCH309.md)接通，
+mesh 函数添加在[BATCH310](BATCH310.md)接通；同步 tile/mesh pipeline
+archive 依赖在[BATCH311–312](BATCH311-312.md)接通。异步 archive 绑定、
+复杂 graph 与其他函数形态仍拒绝。
+未来按真实应用需求逐项实现。
+09-28 [BATCH303](BATCH303.md)已接通单函数/单节点 stitched library；
+异步入口已在[BATCH304](BATCH304.md)接通；复杂 graph 仍需按依赖图和
+时序单独推进，不能原生透传。
+
+## 当前批次入口
+
+实时状态只维护在[STATUS.md](STATUS.md)顶部；indexed triangle refit 见
+[BATCH266–271](BATCH266-271.md)，refit 几何 buffer 切换见
+[BATCH261–265](BATCH261-265.md)，refitted box AS 复制与再次
+refit 见[BATCH259–260](BATCH259-260.md)，bounding-box refit 见
+[BATCH256–258](BATCH256-258.md)，格式化 triangle refit 见
+[BATCH251–255](BATCH251-255.md)，indexed triangle 顶点格式与步长见
+[BATCH248–250](BATCH248-250.md)，非 indexed triangle 顶点格式与步长见
+[BATCH244–247](BATCH244-247.md)，禁止重复的 triangle refit 见
+[BATCH240–243](BATCH240-243.md)，triangle 禁止重复交点调用见
+[BATCH237–239](BATCH237-239.md)，box 禁止重复交点调用见
+[BATCH234–236](BATCH234-236.md)，triangle 几何表偏移见
+[BATCH231–233](BATCH231-233.md)，indexed triangle 的组合
+顶点/索引/scratch 偏移见[BATCH227–230](BATCH227-230.md)，UInt32 indexed triangle
+索引偏移与 descriptor 分配见[BATCH226](BATCH226.md)，UInt16 直接分配见
+[BATCH225](BATCH225.md)，opaque box 几何见
+[BATCH223–224](BATCH223-224.md)，box 几何交点函数表偏移见
+[BATCH221–222](BATCH221-222.md)，双盒 AS 射线语义和 compute
+交点函数表见[BATCH218–220](BATCH218-220.md)，URL 动态库安全重定位见
+[BATCH216–217](BATCH216-217.md)，box AS 非默认 stride 见
+[BATCH213–215](BATCH213-215.md)，box AS 偏移见
+[BATCH209–212](BATCH209-212.md)，refit 偏移和独立目标见
+[BATCH204–208](BATCH204-208.md)，refit descriptor 分配见
+[BATCH202–203](BATCH202-203.md)，refit 后压缩 ray 见
+[BATCH200–201](BATCH200-201.md)，TLAS 复制及压缩后 ray
+见[BATCH196–199](BATCH196-199.md)，indexed/多三角形压缩目标
+后续 ray 见[BATCH194–195](BATCH194-195.md)，AS 复制/压缩目标后续 ray 与
+活动encoder身份修复见[BATCH192–193](BATCH192-193.md)，其余来源逐类验证
+门槛见[BATCH189–191](BATCH189-191.md)，TLAS 实例 descriptor 分配见
+[BATCH186–188](BATCH186-188.md)，AS 空绑定清空见
+[BATCH183–185](BATCH183-185.md)，有界多 indexed triangle 分配见
+[BATCH182](BATCH182.md)，有界多非 indexed 三角形分配见
+[BATCH181](BATCH181.md)，有界多 box descriptor 分配见
+[BATCH180](BATCH180.md)，双 box descriptor 分配见
+[BATCH179](BATCH179.md)，单 box 几何 descriptor 分配见
+[BATCH178](BATCH178.md)，顶点/scratch 双偏移组合见
+[BATCH176–177](BATCH176-177.md)，scratch buffer 偏移见
+[BATCH175](BATCH175.md)，非零顶点偏移的 descriptor 分配见
+[BATCH174](BATCH174.md)，静态三角形顶点偏移见
+[BATCH173](BATCH173.md)，UInt32 indexed 双侧对照见
+[BATCH171–172](BATCH171-172.md)，indexed 非 opaque 反向对照见
+[BATCH170](BATCH170.md)，indexed opaque descriptor 分配见
+[BATCH169](BATCH169.md)，UInt32 indexed opaque 见
+[BATCH168](BATCH168.md)，UInt16 indexed opaque 三角形见
+[BATCH167](BATCH167.md)，opaque descriptor 分配见
+[BATCH166](BATCH166.md)，显式opaque三角形AS见
+[BATCH165](BATCH165.md)，带默认descriptor的AS encoder创建见
+[BATCH164](BATCH164.md)，函数表显式residency与encoder
+身份修复见[BATCH163](BATCH163.md)，IFT嵌套visible table参数见
+[BATCH161–162](BATCH161-162.md)，IFT buffer参数见
+[BATCH159–160](BATCH159-160.md)，opaque-triangle表快捷更新见
+[BATCH156–157](BATCH156-157.md)，T36 Validation兼容修复见
+[BATCH158](BATCH158-T36-VALIDATION.md)，render intersection table六种绑定见
+[BATCH148–153](BATCH148-153.md)，vertex/tile阶段TLAS见[BATCH146–147](BATCH146-147.md)，
+fragment阶段TLAS见[BATCH145](BATCH145.md)，
+不同BLAS双实例见[BATCH144](BATCH144.md)，
+同BLAS两实例TLAS见[BATCH143](BATCH143.md)，
+单实例TLAS见[BATCH142](BATCH142.md)，
+GPU可观察refit见[BATCH141](BATCH141.md)，
+AS压缩copy见[BATCH140](BATCH140.md)，
+等容量copy见[BATCH139](BATCH139.md)，
+描述符创建见[BATCH138](BATCH138.md)，
+build几何扩展见[BATCH136–137](BATCH136-137.md)，
+基础链见[BATCH135](BATCH135.md)，
+查询子集见[BATCH134](BATCH134.md)，
+上个完整批次见[BATCH131–132](BATCH131-132.md)，
+待人工项见[QA_PENDING.md](QA_PENDING.md)。本计划不再复制每波测试数量和版本，以免状态漂移。
+
+当前机器的显式blit/draw counter sampling边界均不受支持，不能在此机完成对应
+旧chunk的GPU闭环；IFT buffer及嵌套visible table已接通，下一族优先评估
+其他可验证旧chunk或真实应用中的资源声明剩余子路径，
+或选择其余旧chunk。T61 GPU执行点ICB range的单独实施门槛仍见下文，未被忽略。
+盒型AS offset/stride 已有捕获与GPU尺寸写回；非默认stride的第二盒几何内容
+仍需程序化交点函数配合GPU ray-query验证，不能把1280-byte压缩尺寸当作命中证明。
+另见STATUS顶部2026-09-28的IOGPUFamily kernel panic：资源析构安全修补后只有
+轻量定向回归通过，暂不自动重跑完整GPU压力/畸形批，不能记全量通过。
+
+## BATCH77之后的依赖顺序
+
+当前剩余bridge不再主要是孤立重载。优先评估以下完整资源链，不把单个原生透传
+误计为完成：
+
+1. 函数表与ray tracing：BATCH119–130已完成render fragment、vertex、tile与
+   compute的visible function链接、handle、table设置，以及单槽/数组/argument buffer
+   绑定的GPU执行链；同步和异步tile descriptor均验证。T134已在Apple M2 Pro上
+   原生验证triangle AS build、GPU compacted-size写回（1536/1280），并接通静态
+   triangle/box的两个尺寸查询。T135已包装AS资源并接通单个静态无索引三角形build
+   及GPU压缩尺寸写回；T136–137扩展零偏移UInt16/UInt32 indexed triangle和单个
+   默认stride bounding box build；T138接通单静态三角形descriptor形式AS分配。T141已接
+   单无索引三角形原位refit与compute shader AS单槽绑定，GPU ray-query确认命中→未命中；
+   T142–143已接同一底层AS的一或两个top-level实例并以compute ray-query确认实例
+   变换；T144进一步接两个实例分别引用两个不同BLAS并通过GPU射线区别索引。
+   T145接通fragment阶段AS绑定，GPU ray-query驱动绿色像素与Shared输出。
+   T146–147进一步接通vertex/tile阶段AS绑定，均由GPU ray-query验证。
+   T148–153接通render PSO intersection table创建、intersection handle与setFunction、
+   fragment/vertex/tile单槽和range绑定，非不透明BLAS上自定义交点函数使GPU命中
+   由1变0。T156–157接通fragment表的单槽及range opaque-triangle快捷更新，
+   GPU对照空表未命中0、设置后命中1。表内资源参数、其它opaque签名与curve快捷函数、compute/argument-buffer绑定、
+   更多实例/间接实例及refit形态仍缺口。
+   T139已接等容量AS copy，T140进一步
+   以已完成的GPU尺寸写回为容量依据接通compact copy；其它时序仍显式拒绝，不可据此
+   打开`supportsRaytracing`。原依赖顺序为先包装function handle、visible/intersection function table和
+   acceleration structure，再接设备/PSO创建及vertex/fragment/tile绑定，最后做可执行
+   shader、GPU输出、引用和回退。此机原生设备报告ray tracing支持，但当前包装设备
+   暂时报告不支持；必须在资源链可捕获回放后才改变该查询。
+2. Mesh/object：先证明硬件与最小原生mesh pipeline可用，再建立pipeline、资源绑定、
+   三种draw的完整事件与GPU输出。现有约20个bridge入口不对应可安全单独接通的小块。
+   2026-09-27原生`Metal_Mesh`夹具已在Apple M2 Pro及Metal API Validation下通过：
+   一个mesh pipeline和直接`drawMeshThreadgroups`产生真实三角形，源文件
+   `util/test/demos/metal/metal_mesh.cpp`。**这仅是硬件/原生门槛，不是bridge或chunk已接通**。
+   BATCH78已接同步mesh pipeline创建与直接draw；BATCH79已接四种mesh buffer/bytes
+   绑定并由真实shader验证；BATCH80已接六种mesh texture/sampler绑定。下一步object绑定、
+   更多资源族；BATCH81已接直接`drawMeshThreads`，BATCH82已接异步mesh pipeline，
+   BATCH83已接同步object+mesh pipeline与一个object buffer入口，下一步补齐对象阶段
+   其它资源重载并以payload控制GPU输出。BATCH84已接三种object buffer/bytes
+   重载；BATCH85已接object texture/sampler六重载并由真实shader消费。
+   BATCH86已接object threadgroup memory并由真实scratch验证；BATCH87已接异步
+   object+mesh pipeline。BATCH88–90已在本机验证并接通间接mesh draw，包括GPU
+   写入Private参数的执行时消费与object shader分支；事件树网格尺寸保持未知，
+   不把编码时CPU内容当成GPU执行值。BATCH91–92进一步修复两个direct draw
+   对object threadgroup非1值的过窄校验。BATCH93–94进一步区分object输入网格
+   与每个object组输出的mesh网格上限。BATCH95–97接通rasterization rate map创建、
+   参数copy和单层pass使用，及双层descriptor重建；BATCH98证明双层map绑定
+   array-target、slice0真实绘制并回拷；BATCH99进一步用mesh primitive层索引
+   证明slice1半水平速率下的真实光栅、回拷及API像素；BATCH100把同样非默认
+   mesh grid上限的异步pipeline快照路径一并验证。BATCH101接通stage-boundary
+   counter sample buffer创建、render pass四阶段索引与blit resolve的完整链。
+   BATCH102接通reflection `MTLBufferBinding`创建argument encoder的简单
+   只读texture2d/sampler布局；BATCH118接通一层只读texture/sampler子argument
+   buffer的encoder创建与GPU采样。更深层、数组/可写成员仍单独评估。
+   后续优先完整函数表/光追资源链或heap placement/alias生命周期，见下方独立门槛。
+3. Heap placement/alias、GPU生成ICB range：BATCH131–132已接通不复用的
+   `makeAliasable` buffer/texture调用；重叠资源复用仍按下方时序门槛单独解决，尤其不能从
+   编码时CPU值推断GPU执行点范围。
+4. Counter sampling、sparse/resource-state、parallel render和跨GPU remote资源：
+   先做本机能力/生命周期夹具，无法可靠验证则保持明确缺口。
+
+2026-09-27本机原生探针：Apple M2 Pro只报告`AtStageBoundary=true`，
+`AtDrawBoundary/AtDispatchBoundary/AtTileDispatchBoundary/AtBlitBoundary=false`。
+BATCH101已通过普通render pass attachment取得四个真实阶段时间戳，再通过
+独立提交的blit `resolveCounters`复制到Shared buffer并由API读回；因此
+`resolveCounters`已接通，但不能据此声称Blit encoder自身的
+`sampleCountersInBuffer`可用。后者以及render/compute encoder主动采样仍保持
+明确缺口，需支持相应边界能力的设备或新的可验证路径。
+T103已验证非零sample range与目标buffer offset，不能只依据T101零偏移证明
+泛化正确。
+
+BATCH104–105已接通`newDynamicLibrary:`、动态MSL编译选项和一/两个依赖的
+实际GPU链接执行。回放把installName重映射到私有临时目录并在编译可执行
+library前序列化重建的动态库；源路径不存在也能回放。`newDynamicLibraryWithURL:`
+仍是独立缺口：原生验证把序列化文件移动后URL导入保留原嵌入installName，
+删除原路径会让pipeline出现undefined symbol。不能把原文件路径硬写回放机
+来伪装可移植支持。BATCH106–109进一步接通compute、fragment、vertex
+pipeline descriptor的preloadedLibraries（含render options/reflection路径），
+v7/v8兼容读取旧capture。BATCH110–111又接通异步dynamic source编译与
+异步executable source绑定动态依赖。Binary archive、URL导入及非默认复杂
+compile options仍未支持。BATCH112–115接通异步render/compute descriptor
+的动态库预加载，包括fragment、vertex和options/reflection overload；
+离线只重建结果资源，不重演应用回调。
+
+## 待接通：Heap placement 与 automatic alias 生命周期
+
+BATCH71–72支持 Private/automatic/tracked Heap及未重叠的buffer/texture子资源；
+BATCH116–117进一步接通Private/placement/tracked Heap上的显式offset buffer/texture，
+按设备size/align和堆边界校验，且拒绝所有重叠区间。BATCH131–132已捕获并回放
+`MTLBuffer/Texture::makeAliasable` 的非复用路径；真实重叠复用仍不支持。
+当前资源创建由resource record在frame前重建，帧内`makeAliasable`与后续资源创建的
+原生顺序可能无法保留；[Apple的makeAliasable定义](https://developer.apple.com/documentation/metal/mtlresource/makealiasable%28%29)
+明确旧资源一旦alias后再读取是未定义行为。不能仅凭本批的调用chunk
+推断已支持复用。后续需先做最小堆容量的真实别名夹具，证明第二次分配依赖释放的空间，
+再调整创建/alias chunk时序并验证前后事件seek、资源查看不可访问状态、负例和回退。
+在此之前仅把标记后的无重叠生命周期计作已接通，重叠复用单独保持缺口。
+
+## 待接通：GPU 生成的 ICB indirect 执行范围（不可遗忘）
+
+`MTLRenderCommandEncoder::executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:`
+的桥接已在 BATCH70 加入**原生执行 + 捕获记录 + 离线明确拒绝**，替代原先截帧时的
+`METAL_NOT_HOOKED` 致命中断；**这不算正确回放已接通**。T70 在同一个 command buffer
+先由 compute 写入 range `(0,6)`，CPU 初始哨兵值不是执行范围；Metal Validation
+原生执行与捕获通过，离线 replay 在该 chunk 明确失败。旧 chunk 分支虽不再标为
+`METAL_CHUNK_NOT_HANDLED`，仍是功能缺口。不能因原始标记计数下降而关闭本项。
+
+实施门槛：先确定在同一 GPU 时间线的执行点取得 range 的可行方案（例如安全的分段
+回放/同步读回），再按实际 `location/length` 建立 ICB 子事件和资源引用；验证范围边界、
+GPU 写后读取、跨 command buffer/queue 依赖和前后 seek。至少一份 GPU 生成 range 的
+真实 capture 要在 Metal Validation 下通过 API/CLI 回放，并证明事件数与输出一致。
+当前技术阻塞：编码时 CPU 读到的值可能是哨兵或上一帧值，而执行范围由同一 GPU
+时间线后续写入；现有事件树在读 chunk 时按 CPU 序列化数据构建，不能从这份数据
+恢复实际子命令集合。普通 command buffer 完成后的 CPU 读回也可能看到更晚的写入，
+不能证明执行点值。仍需设计执行点 GPU 快照或可验证的分段回放方案，并保持跨 encoder、
+跨 command buffer/queue 顺序；此工作未完成。若方案不可行，保持明确拒绝，
+不得用编码时 CPU 快照假装支持。
+
+## 2026-09-26 BATCH53历史检查点
+
+最新BATCH53完成ICB单命令reset与GPU reset/copy/optimize，共1 bridge、3旧chunk；
+追加1270 reset、1271初值不可用诊断，Max1272。54 captures/1330类异常/540次lifecycle
+通过，剩余148/87；详情BATCH53/PHASE53。CPU初始化Shared render ICB范围明确，
+GPU生成/帧前未知初值不声称支持；空命令与epoch初值恢复已有自动证据。
+用户现在要求连续终端开发、重置后集中QA；`QA_CONSOLIDATED.md`
+合并21份待验capture，T34–T53和T10 marker均不因后续开发自动关闭。下段为历史检查点。
+
+BATCH35–37 的 T34/T35/T36，以及 BATCH38 的 T36 扩展、T37 blit transfer 和 T10
+marker 增量已完成终端自动验证。当前 38 captures API/CLI/lifecycle、71 类异常拒绝
+通过。按用户要求不运行 qrenderdoc 或 Computer Use；GUI 项保留在 `QA_BATCH35-37.md`
+和 `QA_BATCH38.md`，阶段与批次保持开放。bridge/chunk 未接通计数从 216/165 降为
+186/128。下一轮仍按资源依赖推进，不以删标记代替 fixture 与 replay 验证。
 
 BATCH31-32 的 T30/T31 与 BATCH33-34 的 T32/T33 均已通过最终联合自动验证
 和用户 GUI L4；两批已关闭。T32/T33 的 Event Browser 实际执行数量摘要
-也已明确确认。证据见 `STATUS.md` 顶部，`QA_PENDING.md` 当前无待验项。
+也已明确确认。历史证据见 `STATUS.md`；当前待验项为 T34–T37 与 T10 marker 增量。
 Metal action 名称的跨 API 审查与后续对齐计划见 `ACTION_NAME_ALIGNMENT.md`。
 
 ## 原则
@@ -12,44 +241,103 @@ Metal action 名称的跨 API 审查与后续对齐计划见 `ACTION_NAME_ALIGNM
 1. 先打通纵向链路，再增加 API 宽度：UI 启动、样例原生运行、截帧、加载事件、replay 一个三角形。
 2. Replay 是产品目标，capture 是不可省略的输入前提；先支持受控测试程序，不把任意应用注入列入首版。
 3. 每个功能必须有最小样例、`.rdc` 夹具或自动测试，以及 UI/数据验证方法。
-4. 每条切片完成自动验证时更新 `STATUS.md`；批次关闭前补齐最终证据，并写好下一批的细化任务。
+4. 每个功能族保留最小验证记录；在转接或中断时更新短检查点，在集中回归后汇总批次证据。
 5. 不用空实现伪装支持。未支持能力必须返回明确结果或在 UI 中禁用，而不是崩溃或给出错误数据。
 
-## Agent 推进节奏（省额度稳定模式）
+## 当前推进节奏：功能族连续开发、定向验证、集中回归
 
-后续默认以已写明边界的相邻 2–3 条 `PHASEx.md` 切片作为一次工作批次，而不是每完成一个 Txx
-就等待用户再次发送“继续”。最近批为 `BATCH33-34.md` 中的 T32/T33，不自动扩成 10 个
-phase。每条切片按 fixture/native -> capture/structured data -> replay/readback/state -> 自动断言
-推进；前一条自动链路通过并记录批末 UI 待验后继续后一条。两条切片经最终联合验证和同一轮
-用户 qrenderdoc L4 验收后一起关闭。T28/T29 的最终联合自动与用户同轮 L4
-均已通过，`BATCH31-32.md` 的 T30/T31 也已通过用户 GUI L4 并关闭；
-`QA_PENDING.md` 当前无待验项。T31 GUI 导出入口本轮由用户免复验；
-从 BATCH29-30 起按 [QA_GUIDE.md](QA_GUIDE.md) 将 GUI 可见交互交给用户验收。
+2026-09-26 用户要求调整节奏。本节取代旧文档中“每个小切片配一份 PHASE、完整收尾、
+同步全部索引”的节奏要求；不改变功能正确性和用户 L4 才能关闭阶段的规则。
+现有小批脚本保留作重现证据，不再逐个调用其附带的从 T01 到最新 T 的联合回归。
 
-为减少随 T 场景数量增长的重复消耗，每条切片开发时只构建受影响目标，并立即运行当前 fixture
-必要的 native/capture/replay 自动验证及受影响旧路径的定向断言。批末在最终构建上执行各 T 的
-CLI/lifecycle 与旧 T 清单的并集，重复 T 编号只跑一次；可复用最终代码上未受后续修改影响的
-已通过结果。命令行可判定的 QA 由 agent 完成；最终正式 captures 准备好后，
-agent 给出合并批内检查项的一次性 GUI 验收单，由用户在同一轮最新 qrenderdoc
-中依次打开并反馈。每个 T 的人工验收状态跨批次登记在 [QA_PENDING.md](QA_PENDING.md)；
-用户未回复、漏看或只反馈部分步骤时，未验功能持续“等待用户 L4”，后续功能可继续
-开发，但对应阶段/批次不关闭。每次结果和交接须列出全部仍待人工 QA 的 T。
-完整 `test_metal_capture_macos.sh` 与全部 capture 的 CLI replay/lifecycle 仅在较大里程碑、
-发布/合并前，或发现无法由定向测试覆盖的具体跨场景风险时
-运行，不是每个 Txx 阶段的关闭门槛。公共 replay、资源生命周期或 UI 代码变更先按受影响路径
-选旧 fixture；只有范围无法合理界定时升级全量。修复后重跑受影响项。UI 布局和操作语义继续向
-RenderDoc 其他图形 API 的标准页面收敛。
+### 一个开发波次
 
-每份阶段文档预先列明当前 Txx、必跑旧 T、条件触发旧 T、批末 UI 验收项，并明确全量回归条件
-及完整 T 范围；批次文档另列去重后的联合清单。实现改变影响范围时先更新这两处清单和原因，
-批末只记录实际执行结果；具体格式见 `HANDOFF.md`。功能必要就开发并验证，不能以减少 QA
-为由缩小实现；确实不必要的功能须说明依据并更新范围。
+默认连续推进 **2–3 个已定边界的功能族**，不以完成一个 T 或消除几个标记作为停止点。
+同族共用实现/校验/测试表，重载和批量接口一起覆盖；每族仍须实现到真实 capture/replay
+语义闭环。共享资源模型等较大改动可以独立成族，不为凑数量混入不相关功能。
 
-批次关闭后可以在当前对话继续，也可以根据上下文状态新建任务；两者都从 `STATUS.md` 第一项
-未完成工作接手。接手时读取入口、当前状态、批次与阶段清单及交接检查点；历史阶段文档按需追查。
-批次中途只有在实现状态已经写入 `STATUS.md` 的安全检查点才建议 compact；compact 后仍从
-检查点继续，不重新跑已验证基线。
-精确的交接输出与下一任务提示见 `HANDOFF.md`。
+一个活跃 BATCH 文档内维护多族表格即可：`范围与不支持边界 | T/fixture | 必跑旧 T |
+负例/回退断言 | 结果与日志 | UI增量`。低/中风险族不强制另写 PHASE；需要架构设计时才拆。
+T 编号继续唯一，可在一个 fixture 内组合多接口/多个事件阶段，不要求一个接口一份 capture。
+
+### 三道自动验证关口
+
+| 时机 | 必须做 | 暂不重复做 |
+| --- | --- | --- |
+| 每族开发完成 | 增量编译；本族 native/capture/参数检查/Replay API 精确断言；关键非法输入；前后 seek；明确列出的受影响旧 T | 全历史 replay/负例/lifecycle、全套 hash/Qt app 打包、多份状态长文 |
+| 切换功能族 | 在后续修改后的代码上重跑受影响的本波次前族；9份代表性快速检查；有创建/释放/回退变化时跑定向 lifecycle | 已通过且不受修改影响的 native 录制与旧测试；未受影响的负例组合 |
+| 集中关口 | 最新构建上全量现存 capture API/CLI、已接入负例、Metal验证层与lifecycle；补入本波次新测试；app库同步、正式capture/hash和QA增量整理一次 | 不因到关口就重录所有历史 capture；不运行 Computer Use |
+
+集中关口最迟在 **第3个功能族后、开始第4族前**执行；用户要求集中 QA/交付前也必须执行。
+会话切换本身不强制全量，须留下“定向通过、集中回归待做”的明确状态、未跑命令和下一步。
+通用资源所有权/初值、chunk格式、同步调度/epoch改动：立刻扩大旧路径与生命周期验证；
+若影响无法用明确 T 集合界定，**当前族就触发集中关口**，不能留到后面碰运气。
+发现回归先修复并清除相关验证欠项，再继续扩功能；验证失败不能被“已实现”掩盖。
+
+快速旧capture入口（不重新录制，也不构建/同步Qt app）：
+
+```sh
+bash util/buildscripts/scripts/test_metal_replay_targeted_macos.sh t14 t22 t25
+bash util/buildscripts/scripts/test_metal_replay_targeted_macos.sh --sentinel t54
+```
+
+`--sentinel` 为 T01/T02/T09/T11/T12/T35/T49/T52/T53，覆盖基础draw/indexed、子资源、
+compute、argument buffer、command创建、CPU更新、Event和ICB回退；按族追加相关旧/新T，
+不把9份代表场景当作充分覆盖所有风险。入口会校验文件、去重、增量构建CLI/库、重新编译
+API helper、开Metal验证层并逐份CLI replay，失败/超时立即非零退出；只看摘要，失败读日志。
+这只是 replay 定向工具，**不代替本族 native/capture、负例或生命周期**。
+缺失指定capture时会明确报错，不自动跳过。
+
+现有集中 replay 基线入口为：
+
+```sh
+RENDERDOC_METAL_LAST_TEST=61 bash util/buildscripts/scripts/test_metal_replay_batch35_38_macos.sh
+```
+
+此入口当前覆盖 T01–T61 + T10 marker，并非所有历史脚本/负例或全部重新capture的总和；
+新族要扩展清单和精确计数，不能沿用旧LAST_TEST声称覆盖新增功能。只有捕获/注入/初始化路径风险
+需要时，追加旧样例重新录制/源码兼容测试；发布/合并前再按完整范围补齐T00及其他历史检查。
+旧一键完整录制脚本仍保留，按明确触发原因运行。
+
+### 不可延后的质量底线
+
+- 每个入口有正常语义与边界证据；有写入/别名/同步的必须测数据、资源依赖及回退，不只测能打开。
+- 非法资源身份/类型、溢出/越界、关键状态顺序在native调用前拒绝；崩溃/挂起不是正常拒绝。
+- 同族负例用表驱动共享生成器，不为每个重载复制一整份脚本；独有语义仍单独断言。
+  已有负例不删除，跨族全集集中跑；不靠增加相似负例数量代表覆盖提高。
+- 共用native/capture fixture和API helper；避免每个小功能重复搭建构建/日志/导出脚手架。
+- 状态区分“实现中 / 定向通过、集中待跑 / 集中通过、UI待验 / 用户已验”，不能混写。
+
+### 记录只维护一个来源
+
+开发中主要维护 `STATUS.md` 顶部短检查点和**一份活跃BATCH增量表**。检查点包含基线、
+本波次族数、改动边界、已跑/欠跑测试与日志、首个未完成项；恢复时不重读长历史/重跑基线。
+架构决策写在该BATCH一次，其余只链接。`QA_PENDING.md` 保留每个新T的短状态行；
+`QA_CONSOLIDATED.md` 只追加UI可见差异，共用准备/资源跳转/状态栏步骤，不复制自动数值测试。
+仅集中关口或实质范围变化时更新TEST_MATRIX；README/PLAN/HANDOFF通常只保留稳定入口，
+不再每族同步数量、hash和相同摘要。旧PHASE/BATCH证据保留，不追溯重写。
+
+最新自动基线见STATUS顶部及其BATCH链接；全部未验项目保留在QA_PENDING。
+以后结果简报给新增能力、计数变化、**本次实际验证层级与欠项**、
+QA总单链接；不把暂缓自动回归转嫁给用户。详细点击/EID在集中QA前基于最终capture整理。
+
+### 2026-09-26候选顺序（前三项已由BATCH54–57推进）
+
+当时盘点：148 bridge中render encoder69、device41、其余38；旧未处理chunk87。
+计数只是缺口索引，不等于剩余工作量，已有转发的旧chunk也需区分兼容分支与新功能。
+
+1. **现有路径的重载兼容**：indexed instanced draw、旧blit无options chunk等。
+   优先复用已实现语义和fixture；先确认capture实际产生何种chunk，不能删除旧分支充数。
+2. **Function创建族**：constants/descriptor的同步与异步变体，复用已有library/PSO
+   依赖和异步所有权处理；常量值、失败返回、descriptor快照单独测，不纳入intersection功能。
+3. **Argument encoder族**：顶层buffer/constants/arrays，复用T12并扩展资源引用与CPU
+   修改测试；嵌套encoder是否纳入由依赖审查决定，不先承诺完整支持。
+4. **Texture views/资源别名**：三个view重载与buffer-backed texture按共享存储模型推进，
+   与heap/aliasable分开评估；这是资源基础工作，允许提前触发广泛回归，不当作低风险转发。
+
+Mesh/object、tile、tessellation、ray tracing、SharedEvent/外部资源等各为独立系统族，
+不混进上述快速波次。若已有可从终端稳定捕获的目标应用，以其首个阻塞优先调整顺序；
+尚无该证据时以上述可组合能力推进，不声称补齐计数即可跑通UE，也不擅自修改引擎/签名。
 
 ## 首版完成定义
 

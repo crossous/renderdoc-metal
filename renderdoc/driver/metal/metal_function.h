@@ -34,6 +34,8 @@ public:
 
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLArgumentEncoder *, newArgumentEncoder,
                                           NS::UInteger bufferIndex);
+  WrappedMTLArgumentEncoder *newArgumentEncoderWithReflection(
+      NS::UInteger bufferIndex, MTL::AutoreleasedArgument *reflection);
 
   enum
   {
@@ -42,3 +44,5 @@ public:
 
 private:
 };
+
+bool MetalFunctionIsWrapped(MTL::Function *function);

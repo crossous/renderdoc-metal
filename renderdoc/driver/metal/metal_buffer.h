@@ -28,14 +28,27 @@
 #include "metal_device.h"
 #include "metal_resources.h"
 
+
 class WrappedMTLBuffer : public WrappedMTLObject
 {
 public:
   WrappedMTLBuffer(MTL::Buffer *realMTLBuffer, ResourceId objId, WrappedMTLDevice *wrappedMTLDevice);
 
   void *contents();
+  void makeAliasable();
+  template <typename SerialiserType>
+  bool Serialise_makeAliasable(SerialiserType &ser);
+  DECLARE_FUNCTION_SERIALISED(MTL::PurgeableState, setPurgeableState, MTL::PurgeableState state);
+  DECLARE_FUNCTION_SERIALISED(void, addDebugMarker, NS::String *marker, NS::Range range);
+  DECLARE_FUNCTION_SERIALISED(void, removeAllDebugMarkers);
 
   DECLARE_FUNCTION_SERIALISED(void, didModifyRange, NS::Range &range);
+  WrappedMTLTexture *newTextureWithDescriptor(RDMTL::TextureDescriptor &descriptor,
+                                              NS::UInteger offset, NS::UInteger bytesPerRow);
+  template <typename SerialiserType>
+  bool Serialise_newTextureWithDescriptor(SerialiserType &ser, WrappedMTLTexture *texture,
+                                          RDMTL::TextureDescriptor &descriptor,
+                                          NS::UInteger offset, NS::UInteger bytesPerRow);
   template <typename SerialiserType>
   bool Serialise_InternalModifyCPUContents(SerialiserType &ser, uint64_t start, uint64_t end,
                                            MetalBufferInfo *bufInfo);

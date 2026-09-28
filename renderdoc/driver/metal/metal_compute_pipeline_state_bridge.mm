@@ -23,6 +23,8 @@
  ******************************************************************************/
 
 #include "metal_compute_pipeline_state.h"
+#include "metal_function.h"
+#include "metal_visible_function_table.h"
 #include "metal_types_bridge.h"
 
 @implementation ObjCBridgeMTLComputePipelineState
@@ -77,6 +79,42 @@
 - (NSUInteger)staticThreadgroupMemoryLength
 {
   return self.real.staticThreadgroupMemoryLength;
+}
+
+- (nullable id<MTLFunctionHandle>)functionHandleWithFunction:(id<MTLFunction>)function
+    API_AVAILABLE(macos(11.0), ios(14.0))
+{
+  if(function && ![function isKindOfClass:[ObjCBridgeMTLFunction class]])
+  {
+    RDCERR("Cannot capture unwrapped Metal compute visible function handle");
+    return nil;
+  }
+  return id<MTLFunctionHandle>(GetWrapped(self)->functionHandle(
+      function ? GetWrapped((ObjCBridgeMTLFunction *)function) : NULL));
+}
+
+- (nullable id<MTLVisibleFunctionTable>)newVisibleFunctionTableWithDescriptor:
+    (MTLVisibleFunctionTableDescriptor *)descriptor API_AVAILABLE(macos(11.0), ios(14.0))
+{
+  if(!descriptor || descriptor.functionCount == 0 || descriptor.functionCount > 32)
+  {
+    RDCERR("Unsupported Metal compute visible-function-table size");
+    return nil;
+  }
+  return id<MTLVisibleFunctionTable>(GetWrapped(self)->newVisibleFunctionTable(
+      (uint32_t)descriptor.functionCount));
+}
+
+- (nullable id<MTLIntersectionFunctionTable>)newIntersectionFunctionTableWithDescriptor:
+    (MTLIntersectionFunctionTableDescriptor *)descriptor API_AVAILABLE(macos(11.0), ios(14.0))
+{
+  if(!descriptor || descriptor.functionCount == 0 || descriptor.functionCount > 32)
+  {
+    RDCERR("Unsupported Metal compute intersection-function-table size");
+    return nil;
+  }
+  return id<MTLIntersectionFunctionTable>(GetWrapped(self)->newIntersectionFunctionTable(
+      (uint32_t)descriptor.functionCount));
 }
 
 @end

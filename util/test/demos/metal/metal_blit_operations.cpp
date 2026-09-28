@@ -221,12 +221,15 @@ fragment float4 fs_main(VSOut input [[stage_in]],
 
       MTL::CommandBuffer *commandBuffer = queue->commandBuffer();
       MTL::BlitCommandEncoder *blit = commandBuffer->blitCommandEncoder();
+      blit->pushDebugGroup(MTLSTR("T10 blit debug group"));
+      blit->insertDebugSignpost(MTLSTR("T10 blit operations"));
       blit->copyFromBuffer(sourceBuffer, 8, destinationBuffer, 0, 32);
       blit->fillBuffer(destinationBuffer, NS::Range::Make(16, 16), 0x60);
       blit->copyFromTexture(sourceTexture, 0, 0, MTL::Origin::Make(0, 0, 0),
                             MTL::Size::Make(8, 8, 1), destinationTexture, 0, 0,
                             MTL::Origin::Make(0, 0, 0));
       blit->generateMipmaps(mipTexture);
+      blit->popDebugGroup();
       blit->endEncoding();
 
       MTL::RenderPassDescriptor *pass =

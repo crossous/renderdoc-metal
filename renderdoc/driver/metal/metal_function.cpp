@@ -48,7 +48,15 @@ bool WrappedMTLFunction::Serialise_newArgumentEncoder(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    MTL::ArgumentEncoder *realArgumentEncoder = Unwrap(Function)->newArgumentEncoder(bufferIndex);
+    if(!Function || Function->m_Type != eResFunction || !Function->m_Real || bufferIndex >= 31 ||
+       ArgumentEncoder == ResourceId() || GetResourceManager()->HasResource(ArgumentEncoder))
+    {
+      RDCERR("Invalid Metal argument encoder creation identity or buffer index");
+      return false;
+    }
+    MTL::Argument *reflection = NULL;
+    MTL::ArgumentEncoder *realArgumentEncoder =
+        Unwrap(Function)->newArgumentEncoder(bufferIndex, &reflection);
     if(realArgumentEncoder == NULL)
     {
       RDCERR("Failed to recreate Metal argument encoder for buffer index %llu", bufferIndex);
@@ -57,6 +65,7 @@ bool WrappedMTLFunction::Serialise_newArgumentEncoder(SerialiserType &ser,
     WrappedMTLArgumentEncoder *wrappedArgumentEncoder = NULL;
     GetResourceManager()->WrapResource(ArgumentEncoder, realArgumentEncoder, wrappedArgumentEncoder,
                                        true);
+    wrappedArgumentEncoder->ConfigureLayout(reflection);
     m_Device->AddResource(ArgumentEncoder, ResourceType::StateObject, "Argument Encoder");
     m_Device->DerivedResource(Function, ArgumentEncoder);
   }
@@ -65,13 +74,24 @@ bool WrappedMTLFunction::Serialise_newArgumentEncoder(SerialiserType &ser,
 
 WrappedMTLArgumentEncoder *WrappedMTLFunction::newArgumentEncoder(NS::UInteger bufferIndex)
 {
+  return newArgumentEncoderWithReflection(bufferIndex, NULL);
+}
+
+WrappedMTLArgumentEncoder *WrappedMTLFunction::newArgumentEncoderWithReflection(
+    NS::UInteger bufferIndex, MTL::AutoreleasedArgument *reflection)
+{
   MTL::ArgumentEncoder *realArgumentEncoder = NULL;
-  SERIALISE_TIME_CALL(realArgumentEncoder = Unwrap(this)->newArgumentEncoder(bufferIndex));
+  MTL::Argument *localReflection = NULL;
+  SERIALISE_TIME_CALL(realArgumentEncoder =
+                          Unwrap(this)->newArgumentEncoder(bufferIndex, &localReflection));
+  if(reflection)
+    *reflection = localReflection;
   if(realArgumentEncoder == NULL)
     return NULL;
 
   WrappedMTLArgumentEncoder *wrappedArgumentEncoder = NULL;
   GetResourceManager()->WrapResource(ResourceId(), realArgumentEncoder, wrappedArgumentEncoder);
+  wrappedArgumentEncoder->ConfigureLayout(localReflection);
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();

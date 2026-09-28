@@ -1,6 +1,1543 @@
 # Metal Replay 当前状态
 
-最后更新：2026-09-26（Asia/Shanghai）
+最后更新：2026-09-28（Asia/Shanghai）
+
+## 当前安全检查点：BATCH311–312
+
+公司 Codex API 临时接手请先读[2026-09-28 交接单](COMPANY_CODEX_API_HANDOFF_2026-09-28.md)；
+本机暂停新增功能，等待额度重置后集中人工 QA。
+
+- [BATCH311–312](BATCH311-312.md)：同步 tile/mesh pipeline 的 archive
+  依赖与 archive-miss 选项在版本0xC接通。T311/T312 原生/捕获/API/CLI、
+  本族315例畸形输入、32份跨族定向回归、T35/T305–T312各10次生命周期
+  通过；旧版本截帧兼容。库/app `2f88058307f5…`，GUI待验**274份**；
+  原始防御宏bridge/chunk **59/15**（含防御性拒绝与定义，不是未实现 API 数）。异步 tile/mesh archive 绑定仍拒绝；
+  长时累计压力门禁与GUI未运行，旧panic未归因，本批无新增报告。
+
+## 历史安全检查点：BATCH310
+
+- [BATCH310](BATCH310.md)：Binary Archive mesh 函数添加接通为 chunk1383；
+  T310原生/捕获/API/CLI与34例畸形输入、27份跨族定向回归、T35/T305–T310
+  各10次生命周期通过。库/app `fecbaa45dd8a…`，GUI待验**272份**；
+  原始防御宏bridge/chunk **57/15**。mesh pipeline archive 依赖尚未序列化；
+  长时累计压力门禁与GUI未运行，旧panic未归因。
+
+## 历史安全检查点：BATCH309
+
+- [BATCH309](BATCH309.md)：Binary Archive tile 函数添加接通为 chunk1382；
+  T309原生/捕获/API/CLI与25例畸形输入、22份跨族定向回归、T35/T305–T309
+  各10次生命周期通过。库/app `13f127004ba0…`，GUI待验**271份**；
+  原始防御宏bridge/chunk **58/15**。tile pipeline archive 依赖仍未序列化；
+  mesh archive 变更仍拒绝。长时累计压力门禁与GUI未运行，旧panic未归因。
+
+## 历史安全检查点：BATCH308
+
+- [BATCH308](BATCH308.md)：Binary Archive 单节点 stitched library 添加
+  接通为 chunk1381；T308原生/捕获/API/CLI与44例畸形输入通过，
+  14份跨族定向回归、T35/T305–T308各10次生命周期通过。库/app
+  `7c43ac13093f…`，GUI待验**270份**；原始防御宏bridge/chunk **59/15**。
+  tile/mesh archive 变更与复杂 stitched graph 仍拒绝；长时累计压力门禁
+  与GUI未运行。旧panic未归因，本批无新增报告。
+
+## 历史安全检查点：BATCH307
+
+- [BATCH307](BATCH307.md)：Binary Archive 的单个 visible 函数
+  添加接通为 chunk1380；T307原生/捕获/API/CLI与43例畸形输入通过，
+  13份跨族定向回归、T35/T305/T306/T307各10次生命周期通过。库/app
+  `0a62ea89993e…`，GUI待验**269份**；原始防御宏bridge/chunk **60/15**。
+  tile/mesh/library archive 变更仍拒绝；长时累计压力门禁与GUI未运行。
+  旧panic未归因，本批无新增报告。
+
+## 历史安全检查点：BATCH305–306
+
+- [BATCH305–306](BATCH305-306.md)：空 Binary Archive + compute/render 函数
+  变更两个新 chunk 1378/1379 闭环，同步/异步 pipeline 回放。修复旧版 capture
+  条件字段误读；T301/T302 旧格式兼容。T305/T306 各30例畸形输入，T301/T302
+  各19例旧格式畸形输入，12份跨族定向回归、T35/T305/T306各10次生命周期
+  通过。库/app `1e0165e982e7…`，GUI待验**268份**。原始防御宏匹配
+  bridge/chunk **61/15**；长时累计压力门禁与GUI未运行。旧panic未归因，
+  本批无新增报告。
+
+## 历史安全检查点：BATCH304
+
+- [BATCH304](BATCH304.md)：异步 Stitched Library 新chunk1377闭环，
+  T303/T304各17例畸形输入、12份跨族定向回归、T35+T303+T304各10次
+  生命周期通过。库/app `a4547b2ebb75…`，GUI待验**266份**。
+  原始防御宏匹配bridge/chunk **63/15**；复杂graph仍拒绝，旧panic未归因。
+  长时累计压力回归与GUI未运行。
+
+## 当前安全检查点：BATCH303
+
+- [BATCH303](BATCH303.md)：单函数/单节点 Stitched Library 同步创建、
+  函数表GPU调用及资源链已回放。17例畸形输入、11份跨族定向回归、
+  T35+T303各10次生命周期打开通过。库/app `56bc82ca0211…`，GUI
+  待验**265份**。bridge/chunk原始宏匹配**63/15**；异步 stitched
+  后来在BATCH304接通，复杂graph仍明确拒绝。06:26 panic未归因，
+  长时累计压力回归、UI未运行。
+
+## 当前安全检查点：BATCH302
+
+- [BATCH302](BATCH302.md)：同一 Binary Archive 的异步 compute/render
+  pipeline 创建、依赖、GPU回放通过；19例畸形输入及T35+T302各10次生命
+  周期通过。无新 bridge/chunk 数量变化；GUI待验**264份**。06:26 panic
+  未归因，长时累计压力回归与 GUI 仍未执行。
+
+## 当前安全检查点：BATCH301
+
+- [BATCH301](BATCH301.md)：文件 URL Binary Archive 导入、payload 快照、
+  compute/render pipeline archive 依赖与 archive-miss 选项已端到端接通。
+  原生/捕获/API/CLI、原文件移走回放、19例畸形输入、8份跨族定向回归、
+  T35+T301各10次生命周期通过。最终库/app `b297a988af63…`，GUI待验**263份**。
+  旧chunk防御宏匹配 **17→16**；原 bridge 拒绝入口少1，但新增6个 archive
+  变更方法显式拒绝，故原始 `METAL_NOT_HOOKED` 匹配 **59→64**，不可直接
+  当成功能覆盖率。长时累计压力回归与 GUI 未执行，06:26 panic仍未归因。
+
+## 当前安全检查点：BATCH299–300
+
+- [BATCH299–300](BATCH299-300.md)：三/五实例复用两个不同 BLAS 的
+  TLAS，新增可回放 chunk，保留旧截帧格式。两份原生/捕获/API/CLI、
+  40例畸形输入、21份定向回归、2×10生命周期通过。库/app
+  `ac97012d33b5…`，GUI待验**262份**；bridge/chunk宏匹配**59/17**。
+  06:26 panic尚未归因，长时全量GPU回归及GUI未运行。下一阶段按
+  [黑盒验收与稳定性门槛](BLACKBOX_GATE.md)转向崩溃隔离、M4/UE普通帧
+  阻塞盘点，不再穷举光追描述符参数组合。
+- [09-28稳定性复测](STABILITY_2026-09-28.md)：最终库对295份正常截帧
+  分组API/CLI单次回放全过，全部295份分组各至少10次生命周期打开，
+  另有3453例分组畸形输入按预期拒绝；未见新增panic。尚未跑完整累计
+  脚本、295份×10同一进程或GUI，不归因旧panic。
+- [Binary Archive资源链](BINARY_ARCHIVE_GATE.md)：T301已接通导入文件和两类
+  pipeline；捕获期间修改 archive 的方法仍未支持。
+
+## 历史安全检查点：BATCH298
+
+- [BATCH298](BATCH298.md)：同一 BLAS 的 TLAS 实例上限由4扩到有界的
+  65536；八实例原生/捕获/API/CLI、23例畸形输入、19份定向回归、
+  10次生命周期打开通过。库/app `e67638f19213…`，GUI 待验 **260份**；
+  bridge/chunk 原始宏匹配 **59/17**。仅八实例做 GPU 正例，不宣称
+  65536实例已压测；长时全量 GPU 回归及 GUI 未运行。
+
+## 历史安全检查点：BATCH294–297
+
+- [BATCH294–297](BATCH294-297.md)：三/四个**不同** BLAS 构建 TLAS，
+  补齐有序子资源数组、描述符快照、descriptor 分配与压缩复制路径。
+  四份原生/捕获/API/CLI、72 例畸形输入、22 份去重定向回归、
+  4×10 生命周期通过。库/app `bdc80ef81a6…`，GUI 待验 **259 份**；
+  bridge/chunk 原始宏匹配 **59/17**。超过四个实例仍拒绝；长时全量
+  GPU 回归及 GUI 未运行。系统只查到 06:26 的 `IOGPUResource` panic；
+  快照含 `renderdoccmd`，panicked thread 属于 `kernel_task`/`IOGPUFamily`，
+  测试可能是诱因，但没有足够证据判定根因，本批短测未复现。
+
+## 历史安全检查点：BATCH290–293
+
+- [BATCH290–293](BATCH290-293.md)：同一 BLAS 的 TLAS 从最多两个实例
+  扩到三个/四个，含 descriptor 分配与压缩复制。四份原生/捕获/API/CLI、
+  101 例畸形输入、29 份跨族哨兵、4×10 生命周期通过。库/app
+  `986a0d98b8f8…`，GUI 待验 **255 份**；bridge/chunk 原始宏匹配
+  **59/17**，但已有 bridge 守卫和 `buildInstances` chunk 的合法范围已
+  实质扩大。超过四实例和两个以上不同 BLAS 仍明确拒绝；无新 panic，
+  累计压力回归及 GUI 未执行。
+
+## 历史安全检查点：BATCH284–289
+
+- [BATCH284–289](BATCH284-289.md)：双三角形 indexed AS refit
+  的 UInt16/UInt32、独立目标+压缩、换索引、换顶点及同时换两类资源。
+  六份原生/捕获/API/CLI、300 例畸形输入、32 份跨族哨兵、6×10
+  生命周期通过。库/app `2c2bc09e0e18…`，GUI 待验 **251 份**；
+  bridge/chunk 原始宏匹配 **59/17**。无新 panic；累计压力回归和 GUI
+  未执行。下一族优先选尚未接通的真实 bridge/chunk 资源链，
+  不再仅以 indexed refit 参数组合扩大测试数；现有防御性拒绝不应删宏凑数。
+
+## 历史安全检查点：BATCH281–283
+
+- [BATCH281–283](BATCH281-283.md)：indexed refit 补足 UInt32
+  indexOffset8、Float4 vertexOffset16 和两者加 descriptor 分配的组合。
+  三份原生/捕获/API/CLI、150 例畸形输入、32 份跨族哨兵、3×10
+  生命周期通过。库/app `2c2bc09e0e18…`，GUI 待验 **245 份**；
+  bridge/chunk 原始宏匹配 **59/17**。无新 panic；累计压力回归和 GUI
+  未执行。
+
+## 历史安全检查点：BATCH272–280
+
+- [BATCH272–280](BATCH272-280.md)：indexed triangle AS refit 扩展到
+  Float4、noDuplicate、scratch/index/vertex 偏移、descriptor+vertexOffset、
+  表槽1及 opaque 切换，再覆盖七参数组合。九份原生/捕获/API/CLI、
+  450 例畸形输入、28 份哨兵、9×10 生命周期通过。库/app
+  `2c2bc09e0e18…`，GUI 待验 **242 份**；bridge/chunk 原始宏匹配
+  **59/17**。06:26 panic
+  归因未明，本批短测无新 panic；累计压力回归和 GUI 未执行。
+
+## 历史安全检查点：BATCH266–271
+
+- [BATCH266–271](BATCH266-271.md)：indexed triangle AS refit 首批闭环，
+  含 UInt16/UInt32、换 index buffer、独立目标、压缩复制和 descriptor
+  分配。六份原生/捕获/API/CLI、300 例畸形输入、19 份哨兵、6×10
+  生命周期通过。库/app `cf971d35cd45…`，GUI 待验 **233 份**；
+  bridge/chunk 原始宏匹配 **59/17**。未测的 indexed refit 参数组合
+  仍明确拒绝；06:26 panic 归因未明，累计压力回归和 GUI 未执行。
+
+## 历史安全检查点：BATCH261–265
+
+- [BATCH261–265](BATCH261-265.md)：修复 box/triangle refit 切换几何
+  buffer 被错误拒绝，覆盖默认、格式化、noDuplicate 和独立目标。五份
+  原生/捕获/API/CLI、155 例畸形输入、11 份哨兵、5×10 生命周期通过。
+  库/app `c94ea0b15648…`，GUI 待验 **227 份**；bridge/chunk 原始
+  宏匹配仍为 **57/17**。06:26 panic 与此前全量测试有时间关联但未能归因，
+  本批短测未复现；累计压力回归和 GUI 未执行。
+
+## 历史安全检查点：BATCH259–260
+
+- [BATCH259–260](BATCH259-260.md)：refitted box AS 复制后射线以及复制
+  目标再次 refit，GPU 射线 `1/1/0→0/1/0→0/1/0→1/1/0`。
+  T259/T260 原生、捕获、API/CLI 通过，40/48 个畸形输入拒绝；九份
+  定向哨兵和 T256–260 五份×10 生命周期通过。库/app `cbfb8ec0daff…`，
+  GUI 待验 **222 份**。06:26 IOGPU panic 发生在此前全量测试期间，
+  有时间相关性但未能归因；后续短测试未复现；
+  累计压力回归和 GUI 仍未执行。
+
+## 历史安全检查点：BATCH256–258
+
+- [BATCH256–258](BATCH256-258.md)：bounding-box AS refit 已接通普通原位、
+  组合偏移/表槽/禁止重复调用和独立目标。三份原生/捕获/API/CLI 的 GPU ray
+  `1/1/0→0/1/0`，各 40 个畸形输入拒绝；5 份定向哨兵和 3×10 生命周期
+  通过。库/app `cbfb8ec0daff…`，GUI 待验 **220 份**。bridge 原始调用
+  **57 处**（新增长度为 2 的 box primitiveDataBuffer 显式拒绝）。06:26 IOGPU panic
+  仍无法归因；后续短测试未出现新 panic，累计压力回归与 GUI 未执行。
+
+## 历史安全检查点：BATCH251–255
+
+- [BATCH251–255](BATCH251-255.md)：Float3/Float4 stride16 的 refittable
+  triangle build/refit 已保真，覆盖原位、descriptor 分配加独立目标、
+  禁止重复交点调用与 scratchOffset256，以及 refit 后压缩复制。五份
+  原生/捕获/API/CLI ray `1→0`，各 34 个畸形输入安全拒绝；20 份
+  哨兵和 5×10 生命周期打开通过。库/app `2668361301ba…`，GUI
+  待验 **217 份**；原始宏匹配 **55 bridge 调用（另有定义 1）/
+  17 未处理 chunk（含定义 1）**。仅有此前 06:26 一份 panic，因果
+  未证实；全量压力回归与 GUI 未执行。
+
+## 历史安全检查点：BATCH248–250
+
+- [BATCH248–250](BATCH248-250.md)：indexed Float4/Float3 stride16
+  接通 UInt16/UInt32、三偏移、descriptor 分配、禁止重复交点调用。
+  三份原生/捕获/API/CLI ray `1,0,1`，各 25 个畸形输入拒绝；
+  18 份跨族哨兵和 T244–250 的 7×10 生命周期打开通过。
+  库/app `e9d06ac87d24…`，GUI 待验 **212 份**；原始宏匹配仍为
+  **55 bridge 调用（另有定义 1）/17 未处理 chunk（含定义 1）**。
+  只有此前 06:26 一份内核 panic，根因未证实；全量压力回归与 GUI
+  未执行。
+
+## 历史安全检查点：BATCH244–247
+
+- [BATCH244–247](BATCH244-247.md)：静态非 indexed triangle 的
+  Float3/stride16、Float4/stride16、vertexOffset16/scratchOffset256 及
+  禁止重复交点调用已按新末尾 chunk 保真。四份原生/捕获/API/CLI ray
+  `1,0,1`，各 20 个畸形输入安全拒绝，13 份跨族哨兵和 4×10 生命周期
+  打开通过。库/app `21a036a49317…`，GUI 待验 **209 份**；原始宏匹配
+  **55 bridge 调用（另有定义 1）/17 未处理 chunk（含定义 1）**。
+  只有此前 06:26 一份内核 panic，因果未证实；全量压力回归和 GUI
+  未执行。indexed/refit 的新顶点格式仍未接通。
+
+## 历史安全检查点：BATCH240–243
+
+- [BATCH240–243](BATCH240-243.md)：refittable triangle 的
+  `allowDuplicateIntersectionFunctionInvocation=false` 已保真；原位、
+  descriptor 分配加独立目标、scratchOffset256、refit 后压缩复制四份
+  原生/捕获/API/CLI 均通过，GPU ray `1→0`。各 21 个畸形输入拒绝、
+  最终库 21 份定向哨兵和 4×10 生命周期打开通过。错误 Encoder
+  负例暴露并修复一次进程段错误；生命周期误报也已修正。库/app
+  `61fe88a3591a…`，GUI 待验 **205 份**；**55 bridge 调用（另有定义 1）/
+  17 未处理 chunk 宏匹配（含定义 1）**。未见新内核 panic，完整压力
+  回归与 GUI 未执行。
+
+## 历史安全检查点：BATCH237–239
+
+- [BATCH237–239](BATCH237-239.md)：triangle 几何
+  `allowDuplicateIntersectionFunctionInvocation=false` 已贯通分配、
+  捕获与回放；非 indexed、UInt16 indexed、UInt32 indexed+三偏移/
+  descriptor 三份均通过原生、API、CLI，各 16 个畸形输入拒绝、
+  22 份跨族哨兵和 6×10 生命周期打开。库/app `103f584d33e5…`，
+  GUI 待验 **201 份**；**55 bridge 调用（另有定义 1）/17 未处理
+  chunk 宏匹配（含定义 1）**。06:26 panic 根因未知，未见新 panic；
+  完整压力回归和 GUI 未执行。
+
+## 历史安全检查点：BATCH234–236
+
+- [BATCH234–236](BATCH234-236.md)：bounding-box 几何的
+  `allowDuplicateIntersectionFunctionInvocation=false` 已贯通 descriptor 分配、
+  build 捕获和回放；基本、box/scratch/table 偏移、opaque 三种组合的 GPU
+  命中及交点函数计数均一致。三份各 22 个畸形输入拒绝、15 份旧捕获哨兵、
+  3×10 生命周期打开通过。库/app 内嵌库 `0a4547ec4347…`，GUI 待验
+  **198 份**；原始标记仍为 **55 bridge 调用（另有定义 1）/17 未处理
+  chunk 宏匹配（含定义 1）**。06:26 panic 仍无法归因，未见新 panic；
+  完整压力回归和 GUI 未执行。
+
+## 历史安全检查点：BATCH231–233
+
+- [BATCH231–233](BATCH231-233.md)：非 indexed、indexed 和 UInt32+
+  三偏移/descriptor 分配的 triangle 表偏移1已保真；错槽原生对照
+  render ray `0`，正例原生与回放为 `1`。三份各 17 个畸形输入拒绝、
+  最终库 26 份跨族哨兵、8×10 生命周期打开通过。库/app 内嵌库
+  `08d484d3b59f…`，GUI 待验 **195 份**；**55 bridge 调用（另有定义 1）/
+  17 未处理 chunk 宏匹配（含定义 1）**。06:26 panic 根因未知，
+  完整 GPU 压力回归与 GUI 未执行。
+
+## 历史安全检查点：BATCH227–230
+
+- [BATCH227–230](BATCH227-230.md)：indexed triangle 的顶点/索引/scratch
+  三偏移、UInt16/UInt32、直接/descriptor 分配与单偏移分支已保真；
+  四份原生/捕获/API/CLI 均为 compute ray `1/0/1`、render ray `1`。
+  各 18 个畸形输入拒绝、30 份哨兵、9×10 生命周期打开通过。
+  库/app 内嵌库 `96ad1c3c78a3…`，GUI 待验 **192 份**；
+  **55 bridge 调用（另有定义 1）/17 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 panic 根因未知，完整 GPU 压力回归与 GUI 未执行。
+
+## 历史安全检查点：BATCH226
+
+- [BATCH226](BATCH226.md)：UInt32 indexed triangle 的 indexOffset8 与
+  descriptor 分配组合通过，原生/回放 ray `1/0/1`、render ray `1`；
+  15 个畸形输入安全拒绝、19 份哨兵、7×10 生命周期打开通过。
+  库/app 内嵌库 `99941fffb20b…`，GUI 待验 **188 份**；
+  **55 bridge 调用（另有定义 1）/17 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 panic 根因未知，完整 GPU 压力回归与 GUI 未执行。
+
+## 历史安全检查点：BATCH225
+
+- [BATCH225](BATCH225.md)：indexed triangle 的非零 indexBufferOffset
+  已按独立末尾 chunk 保真；无效索引前缀+offset8 的 GPU ray `1/0/1`、
+  render ray `1` 在原生和回放一致。15 个畸形输入拒绝、24 份跨族哨兵、
+  6×10 生命周期打开通过。库/app 内嵌库 `99941fffb20b…`，GUI 待验
+  **187 份**；**55 bridge 调用（另有定义 1）/17 未处理 chunk 宏匹配
+  （含定义 1）**。06:26 panic 根因仍未知，完整 GPU 压力回归与 GUI 未执行。
+
+## 历史安全检查点：BATCH223–224
+
+- [BATCH223–224](BATCH223-224.md)：opaque box 几何及与 table/box/scratch
+  偏移组合；两份原生/捕获/API/CLI 射线均 `0/0/0`，各 19 个畸形输入安全
+  拒绝；21 份跨族哨兵、8×10 生命周期打开通过。库/app 内嵌库
+  `1e37a4f471f9…`，GUI 待验 **186 份**；**55 bridge 调用（另有定义 1）/
+  17 未处理 chunk 宏匹配（含定义 1）**。06:26 panic 根因仍未确定，
+  完整 GPU 压力回归与 GUI/Computer Use 未执行。
+
+## 历史安全检查点：BATCH221–222
+
+- [BATCH221–222](BATCH221-222.md)：box 几何 intersection table offset1，
+  再与 boxOffset48/scratchOffset256 组合，新增独立 chunk 保持旧捕获编号。
+  两份原生/捕获/API/CLI、20/20 畸形输入、19 份跨族哨兵与 6×10
+  生命周期打开通过；GPU 射线均 `1/1/0`。库/app SHA `44cc7a5efb3f…`，
+  GUI 待验 **184 份**；**55 bridge 调用（另有定义 1）/17 未处理 chunk
+  宏匹配（含定义 1）**。06:26 panic 根因未知，完整 GPU 压力回归暂停；
+  无 GUI/Computer Use。
+
+## 历史安全检查点：BATCH218–220
+
+- [BATCH218–220](BATCH218-220.md)：compute 交点函数表创建与单表/range
+  绑定已接通；stride32 双盒、boxOffset48/scratchOffset256 的 GPU 射线
+  结果 `1/1/0` 由原生与 API 回放双重证实。三份捕获、18/18/20 畸形输入、
+  17 份跨族哨兵与 4×10 生命周期打开通过。新 chunk 追加到枚举末尾，旧
+  T137 捕获兼容已复验。库/app SHA `d26ccf06016a…`，GUI 待验 **182 份**；
+  **55 bridge 调用（另有定义 1）/17 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 panic 根因未知，完整 GPU 压力回归暂停；无 GUI/Computer Use。
+
+## 历史安全检查点：BATCH216–217
+
+- [BATCH216–217](BATCH216-217.md)：URL 动态库及与普通动态库的混合
+  依赖已按捕获内字节重建，原始文件删除后回放仍通过。两份原生/捕获/
+  API/CLI、11/13 个畸形输入、27 份跨族哨兵及 3 份×10 生命周期打开
+  通过；私有临时目录无残留。仅支持可等长迁移 install name 的二进制，
+  不可迁移时明确拒绝。库/app SHA `8d98d33c39c0…`，GUI 待验
+  **179 份**；当前 **55 bridge 调用（另有定义 1）/17 未处理 chunk
+  宏匹配（含定义 1）**。06:26 panic 根因未知，完整 GPU 压力回归
+  暂停；无 qrenderdoc/Computer Use。
+
+## 历史安全检查点：BATCH213–215
+
+- [BATCH213–215](BATCH213-215.md)：box AS 非默认 stride32 的单盒、双盒、
+  双盒加 box/scratch 偏移已接通。三份原生/捕获/API/CLI、28/29/29 个
+  畸形输入、24 份跨族哨兵及 8 份×10 生命周期打开通过；第二盒内部几何
+  的射线命中仍待程序化交点验证。库/app SHA `cffc4b0d117…`，GUI
+  待验 **177 份**；当前 **56 bridge 调用（另有定义 1）/18 未处理 chunk
+  宏匹配（含定义 1）**。06:26 panic 根因未知，完整 GPU 压力回归暂停；
+  无 qrenderdoc/Computer Use。
+
+## 历史安全检查点：BATCH209–212
+
+- [BATCH209–212](BATCH209-212.md)：box buffer offset48、scratch offset256、
+  双偏移与偏移描述符分配已接通。四份原生/捕获/API/CLI、
+  24/24/23/24 个畸形输入、21 份跨族哨兵及 5 份×10 生命周期打开通过。
+  库/app SHA `920be51b84d8…`，GUI 待验 **174 份**；当前
+  **56 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 panic 根因未知，完整 GPU 压力回归暂停；无 qrenderdoc/Computer Use。
+
+## 历史安全检查点：BATCH204–208
+
+- [BATCH204–208](BATCH204-208.md)：refit scratch 偏移、独立目标、
+  独立目标压缩后 ray 及紧凑 refit scratch 已接通。五份原生/捕获/
+  API/CLI、33/33/33/52/34 个畸形输入、47 份跨族哨兵及 18 份×10
+  生命周期打开通过。库/app SHA `56c3811f7405…`，GUI 待验 **170 份**；
+  当前 **56 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 panic 根因未知，完整 GPU 压力回归暂停；无 qrenderdoc/Computer Use。
+
+## 历史安全检查点：BATCH202–203
+
+- [BATCH202–203](BATCH202-203.md)：refit 单/双三角形 descriptor 分配后
+  build→refit→压缩→ray 通过。原生/捕获/API/CLI、45/47 个畸形输入、
+  32 份跨族哨兵及 13 份×10 生命周期打开通过；库/app SHA
+  `a7c43e2e37fa…`，GUI 待验 **165 份**。当前 **56 bridge 调用（另有
+  定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。06:26 panic 根因未知，
+  完整 GPU 压力回归暂停；无 qrenderdoc/Computer Use。
+
+## 历史安全检查点：BATCH200–201
+
+- [BATCH200–201](BATCH200-201.md)：单/双三角形 refit 后压缩复制的
+  AS 目标继续用于 GPU ray。原生/捕获/API/CLI、45/47 个畸形输入、
+  29 份跨族哨兵和 11 份×10 生命周期打开通过；库/app SHA
+  `45b447817a59…`，GUI 待验 **163 份**。当前
+  **56 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 panic 根因未知，完整 GPU 压力回归暂停；无 qrenderdoc/Computer Use。
+
+## 历史安全检查点：BATCH196–199
+
+- [BATCH196–199](BATCH196-199.md)：TLAS 普通复制及单/双实例 TLAS 压缩复制
+  后 ray 通过。原生/捕获/API/CLI、26/29/31/32 个畸形输入、36 份跨族
+  哨兵和 8 份×10 生命周期打开通过；库/app SHA `a08d2768c106…`，
+  GUI 待验 **161 份**。当前 **56 bridge 调用（另有定义 1）/18 未处理
+  chunk 宏匹配（含定义 1）**；06:26 panic 根因未知，完整 GPU 压力回归
+  暂停，无 qrenderdoc/Computer Use，`supportsRaytracing` 仍 false。
+
+## 历史安全检查点：BATCH194–195
+
+- [BATCH194–195](BATCH194-195.md)：indexed 与多三角形的压缩 BLAS
+  目标继续用于 TLAS GPU ray。原生/捕获/API/CLI、32/30 个畸形输入、
+  62 份跨族哨兵及 14 份×10 生命周期打开通过。库/app 内嵌 SHA
+  `2e33d8225d00…`，GUI 待验 **157 份**。
+- box 压缩目标的后续 ray 需程序化交点路径；TLAS/refit 压缩来源
+  未开放。当前 **56 bridge 调用（另有定义 1）/18 未处理 chunk
+  宏匹配（含定义 1）**。06:26 IOGPUFamily panic 根因未知，完整 GPU
+  压力回归暂停；无 qrenderdoc/Computer Use，`supportsRaytracing` 仍 false。
+
+## 历史安全检查点：BATCH192–193
+
+- [BATCH192–193](BATCH192-193.md)：普通复制与跨 CB 压缩复制的 BLAS
+  目标继续用于 TLAS GPU ray；同时修复全部 11 条 AS chunk 回放路径的活动
+  encoder 身份校验。原生/捕获/API/CLI、25/29 个畸形输入、60 份跨族
+  哨兵及 13 份×10 生命周期打开通过。库/app 内嵌 SHA
+  `2e33d8225d00…`，GUI 待验 **155 份**。
+- box/多三角形/indexed 压缩目标尚未逐类 ray 验证；TLAS/refit 压缩
+  来源未开放。当前 **56 bridge 调用（另有定义 1）/18 未处理 chunk
+  宏匹配（含定义 1）**。06:26 IOGPUFamily panic 根因未知，完整 GPU
+  压力回归暂停；无 qrenderdoc/Computer Use，`supportsRaytracing` 仍 false。
+
+## 历史安全检查点：BATCH189–191
+
+- [BATCH189–191](BATCH189-191.md)：box、多非 indexed 三角形、indexed
+  三角形 AS 的压缩复制已能按 GPU 读回容量执行。原生/捕获/API/CLI、
+  32/32/33 个畸形输入、36 份跨族哨兵及 10 份×10 生命周期打开通过。
+  库/app 内嵌 SHA `f8fa07f7fd24…`，GUI 待验 **153 份**。
+- 压缩目标的 build 元数据尚未传播与 ray 绑定验证；TLAS/refit 来源未开放。
+  当前 **56 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 IOGPUFamily panic 根因未知，完整 GPU 压力回归暂停；无
+  qrenderdoc/Computer Use，`supportsRaytracing` 仍 false。
+
+## 历史安全检查点：BATCH186–188
+
+- [BATCH186–188](BATCH186-188.md)：实例 descriptor 直接分配 TLAS，
+  单实例、同BLAS双实例、异BLAS双实例均闭环。原生/捕获/API/CLI、
+  20/22/23 个畸形输入、32 份跨族哨兵及 12 份×10 生命周期打开通过。
+  后续追加 instance descriptor 的 heap size/align 查询，原生/注入通过，
+  当前库 20 份跨族哨兵通过。库/app 内嵌 SHA `b9b786586f9d…`，
+  GUI 待验 **150 份**。
+- 当前 **56 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**；
+  现有 chunk 子集扩大，计数不变。06:26 IOGPUFamily panic 根因未知，
+  完整 GPU 压力回归暂停；无 qrenderdoc/Computer Use，
+  `supportsRaytracing` 仍 false。
+
+## 历史安全检查点：BATCH183–185
+
+- [BATCH183–185](BATCH183-185.md)：计算/片元/顶点/tile 加速结构空绑定
+  清空接通。T183–T185 的原生/捕获/API/CLI、每份 33 个畸形输入、25 份
+  跨族哨兵及 9 份×10 生命周期打开通过。库/app 内嵌 SHA
+  `54ed11b8cce6…`，GUI 待验 **147 份**。
+- 当前 **56 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**；
+  新能力复用已有 chunk，计数不变。06:26 IOGPUFamily panic 根因未知，
+  完整 GPU 压力回归暂停。无 qrenderdoc/Computer Use，
+  `supportsRaytracing` 仍 false。
+
+## 历史安全检查点：BATCH182
+
+- [BATCH182](BATCH182.md)：多 indexed triangle descriptor 分配按索引
+  buffer 容量有界开放，T182 双三角形/六 UInt16 索引的原生/捕获/API/CLI、
+  20 个畸形输入、39 份跨族哨兵及 15 份×10 生命周期打开通过。
+  库/app 内嵌 SHA `1a8c4816af5a…`，GUI 待验 **144 份**。
+- 当前仍 **56 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH181
+
+- [BATCH181](BATCH181.md)：非 indexed 静态三角形 descriptor 分配按 count/
+  buffer 长度有界开放，T181 双三角形的原生/捕获/API/CLI、18 个畸形输入、
+  38 份跨族哨兵及 14 份×10 生命周期打开通过。库/app 内嵌 SHA
+  `44a338d15489…`，GUI 待验 **143 份**。
+- 当前仍 **56 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH180
+
+- [BATCH180](BATCH180.md)：box descriptor 分配改为有界 count/buffer 长度
+  校验，三 box 正向闭环通过。原生/捕获/API/CLI、18 个畸形输入、37 份
+  跨族哨兵及 13 份×10 生命周期打开通过。库/app 内嵌 SHA
+  `ba68ff520274…`，GUI 待验 **142 份**。
+- 当前仍 **56 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH179
+
+- [BATCH179](BATCH179.md)：双 bounding-box descriptor 分配 AS 已接通，
+  `boxCount=2` 的原生/捕获/API/CLI、18 个畸形输入、36 份跨族哨兵及
+  12 份×10 生命周期打开通过。库/app 内嵌 SHA `cb8f903f05ff…`，GUI
+  待验 **141 份**。当前仍 **56 bridge 调用（另有定义 1）/18 未处理 chunk
+  宏匹配（含定义 1）**。
+- 06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH178
+
+- [BATCH178](BATCH178.md)：单 box 几何 descriptor 分配 AS 现可捕获/回放，
+  GPU compacted size1280。原生/捕获/API/CLI、18 个畸形输入、35 份跨族
+  哨兵及 11 份×10 生命周期打开通过。库/app 内嵌 SHA `9e5c56446ded…`，
+  GUI 待验 **140 份**。
+- 当前 **56 bridge 宏调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**；
+  增加的 1 处为 box 描述符显式拒绝检查，并非功能回退。06:26 IOGPUFamily
+  panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/Computer Use，
+  `supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH176–177
+
+- [BATCH176–177](BATCH176-177.md)：同一 AS build 中 vertexOffset16 与
+  scratchOffset256 组合已由 size/descriptor 两种分配验证。原生/捕获/API/CLI、
+  31 个畸形输入、33 份跨族哨兵及 13 份×10 生命周期打开通过。库/app
+  内嵌 SHA 仍 `1bb6f06a68b5…`，GUI 待验 **139 份**。
+- 当前仍 **55 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH175
+
+- [BATCH175](BATCH175.md)：非 indexed 静态三角形 AS 的 scratch buffer
+  offset256 已接通；原生/捕获/API/CLI、13 个畸形输入、31 份跨族哨兵及
+  11 份×10 生命周期打开通过。库/app 内嵌 SHA `1bb6f06a68b5…`，GUI
+  待验 **137 份**。当前仍 **55 bridge 调用（另有定义 1）/18 未处理 chunk
+  宏匹配（含定义 1）**。
+- 06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH174
+
+- [BATCH174](BATCH174.md)：非 indexed 单三角形 vertexOffset16 的 descriptor
+  AS 分配已接通，原生/捕获/API/CLI、5+12 个畸形输入、30 份跨族哨兵及
+  10 份×10 生命周期打开通过。库/app 内嵌 SHA `8a9f713e6364…`，GUI
+  待验 **136 份**。当前仍 **55 bridge 调用（另有定义 1）/18 未处理 chunk
+  宏匹配（含定义 1）**。
+- 06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH173
+
+- [BATCH173](BATCH173.md)：非 indexed 静态三角形 AS 顶点 buffer 的 16 字节
+  偏移现可捕获/回放，前缀干扰数据验证实际 GPU 读取位置。原生/捕获/API/CLI、
+  12 个畸形输入、29 份跨族哨兵及 9 份×10 生命周期打开通过。库/app
+  内嵌 SHA `b5c8dff22b37…`，GUI 待验 **135 份**。
+- 当前仍 **55 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH171–172
+
+- [BATCH171–172](BATCH171-172.md)：UInt32 indexed opaque descriptor 分配与
+  非 opaque 交点拒绝形成双侧对照，GPU 值 1/0、绿色/红色。原生/捕获/API/CLI、
+  29 个畸形输入、28 份跨族哨兵及 9 份×10 生命周期打开通过。驱动库/app
+  内嵌 SHA 仍 `73a801b87e7b…`，GUI 待验 **134 份**。
+- 当前仍 **55 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH170
+
+- [BATCH170](BATCH170.md)：UInt16 indexed 非 opaque 几何经自定义交点函数拒绝，
+  原生/捕获/API/CLI 为 Shared0、中央红色；与 T167/T169 indexed opaque 的
+  Shared1、绿色构成同族对照。12 个畸形输入、26 份跨族哨兵及 7 份×10
+  生命周期打开通过。库/app 内嵌 SHA 仍 `73a801b87e7b…`，GUI 待验 **132 份**。
+- 当前仍 **55 bridge 调用（另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**。
+  06:26 IOGPUFamily panic 根因未知；完整 GPU 压力回归暂停，无 qrenderdoc/
+  Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH169
+
+- [BATCH169](BATCH169.md)：indexed opaque 单三角形 descriptor 分配已接通，
+  与独立 build chunk 组成 GPU 闭环。原生/捕获/API/CLI、5+12 个畸形输入、
+  25 份跨族哨兵及 6 份×10 生命周期打开通过。当前 **55 bridge 调用
+  （另有定义 1）/18 未处理 chunk 宏匹配（含定义 1）**；库/app 内嵌 SHA
+  `73a801b87e7b…`，GUI 待验 **131 份**。
+- 06:26 IOGPUFamily panic 的 panicked task 为 `kernel_task`，报告含
+  renderdoccmd 进程快照，但具体诱因未证实；
+  完整 GPU 压力回归继续暂停。无 qrenderdoc/Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH168
+
+- [BATCH168](BATCH168.md)：UInt32 indexed opaque 三角形补齐 GPU 正向闭环；
+  UInt16/UInt32 现在各有 capture/API/CLI 与 12 个畸形输入测试。24 份跨族哨兵
+  API/CLI、5 份×10 生命周期打开通过。驱动库/app 内嵌 SHA 仍
+  `9a7f700ace5c…`，GUI 待验 **130 份**；计数仍 **55 bridge 调用（另有定义 1）/
+  18 未处理 chunk 宏匹配（含定义 1）**。
+- 06:26 IOGPUFamily panic 根因仍未知；完整 GPU 压力回归继续暂停。
+  无 qrenderdoc/Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH167
+
+- [BATCH167](BATCH167.md)：indexed opaque 三角形 AS build 现可捕获/回放，
+  新增独立 chunk 并保留旧 indexed 默认语义。原生与捕获 GPU 命中、
+  12 个畸形输入、23 份跨族哨兵 API/CLI、4 份×10 生命周期打开通过。
+  当前为 **55 处 bridge 调用（另有宏定义 1）/18 处未处理 chunk 宏匹配
+  （含定义 1）**；库/app 内嵌 SHA 均 `9a7f700ace5c…`，GUI 待验 **129 份**。
+- 06:26 IOGPUFamily panic 未复现，根因仍未知；完整 GPU 压力回归仍暂停。
+  无 qrenderdoc/Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH166
+
+- [BATCH166](BATCH166.md)：显式 opaque 三角形 AS descriptor 分配子集已接通，
+  原生、捕获、API/CLI GPU 命中及 5+11 个畸形输入通过；22 份跨族哨兵及
+  4 份×10 生命周期打开通过。当前为 **55 处 bridge 调用（另有宏定义 1）/
+  18 处未处理 chunk 宏匹配（含定义 1）**；此前记录的 bridge 54 少算 1 处，
+  并非功能回退。库/app 内嵌 SHA 均 `a0d4076aeb32…`，GUI 待验 **128 份**。
+- 06:26 IOGPUFamily panic 根因仍未知，完整 GPU 压力回归仍暂停。
+  无 GUI/Computer Use，`supportsRaytracing` 仍 false。
+
+## 当前安全检查点：BATCH165
+
+- [BATCH165](BATCH165.md)：AS三角形几何显式`opaque=true`现可捕获/回放，
+  新增独立chunk并保留旧默认/nonopaque/refit语义。与T148自定义拒绝函数
+  对照，T165 GPU结果由未命中0转为命中1；原生、注入捕获、API/CLI、11个
+  畸形build输入、20份跨族哨兵及5份×10生命周期打开通过，resident growth
+  1,556,480 bytes。原始计数仍**54 bridge / 18未处理chunk宏匹配**（含定义1），
+  因为本批扩展旧bridge子集、新增chunk，不伪报标记清零。
+  库/app内嵌SHA均`19ae3d8f9332…`，GUI待验**127份**。
+- 06:26 IOGPUFamily panic没有复现，根因仍未知；完整GPU压力回归仍暂停。
+  无GUI/Computer Use，`supportsRaytracing`仍false。
+
+## 当前安全检查点：BATCH164
+
+- [BATCH164](BATCH164.md)：带默认descriptor的AS encoder创建bridge接通，新增
+  独立chunk；两次创建驱动BLAS/TLAS及compute射线`0,1`，原生/捕获/API/CLI
+  通过，10个畸形descriptor/身份输入干净拒绝。19份跨族哨兵API/CLI、4份×10
+  生命周期打开通过，resident growth 1,064,960 bytes。原始bridge **55→54**；
+  原始未处理chunk宏匹配仍**18**（含宏定义1），本入口不是既有旧chunk。
+  该批库/app内嵌SHA均`0ace9b0c4581…`，当时GUI待验**126份**。
+- 06:26 IOGPUFamily panic根因仍未证实，完整GPU压力回归仍暂停；无GUI/Computer Use。
+
+## 当前安全检查点：BATCH163
+
+- [BATCH163](BATCH163.md)：IFT嵌套visible table的显式render `useResource`路径
+  已在原生与回放中验证。负例发现旧residency回放缺encoder身份检查，错误ID会
+  触发进程异常；render四种与compute两种residency入口已补类型/当前encoder
+  校验，T163的8+6个负例干净拒绝。17份跨族哨兵API/CLI、3份×10生命周期
+  打开通过，resident growth 622,592 bytes。标记仍**55 bridge / 18旧chunk**；
+  该批库/app内嵌SHA均`917ed5804329…`，当时GUI待验**125份**。
+- 没有再发生kernel panic，但其原因仍不能由目前证据确定。06:26后的完整GPU
+  压力回归仍未启动；此处是定向安全检查点，不是全量验收。无GUI/Computer Use。
+
+## 当前安全检查点：BATCH161–162
+
+- [BATCH161–162](BATCH161-162.md)：IFT嵌套visible table单槽/range两个bridge已接通，
+  新增两个chunk。原生与捕获回放中，visible函数读取IFT buffer参数的0/1值，
+  GPU结果分别为未命中/命中；T161/T162 API/CLI及零值对照通过，6/10个畸形
+  输入干净拒绝。13份相关capture定向API/CLI、7份×10生命周期打开通过，
+  resident growth 2,605,056 bytes。原始bridge **57→55**，旧chunk **18**；
+  该批库/app内嵌SHA均`1ad5d34e7b80…`，当时GUI待验**124份**。
+- 没有重跑06:26 panic后的完整GPU压力回归，也没有GUI/Computer Use。
+  当时IFT嵌套表的显式`useResource`路径尚未接通，本样本原生无需它；不能把本批
+  视作完整ray tracing或任意资源residency支持。`supportsRaytracing`仍false。
+
+## 当前安全检查点：BATCH159–160
+
+- [BATCH159–160](BATCH159-160.md)：接通intersection function table的buffer单槽/数组
+  两个bridge，新增两个chunk。GPU交点函数读取buffer，值1命中、值0拒绝；原生
+  Metal Validation、注入捕获、T159/T160 API/CLI、零值反向对照均通过。T159/T160
+  分别7/11个畸形绑定干净拒绝，相关11份capture定向API/CLI通过；5份capture×10
+  生命周期打开通过，resident growth 1,064,960 bytes。原始bridge **59→57**，
+  旧chunk **18**；该批库/app内嵌SHA均`d9498312a666…`，当时GUI待验**122份**。
+- 旧T148–T153原生probe的`reject_triangle`缺少`instancing`签名，旧GPU值0不能
+  严格证明交点函数被调用。已修正并重录六份capture，原生/注入捕获/定向API/CLI及
+  T148/T153共42个表负例通过；此前的全量通过数字只适用于旧capture，不可移作新
+  capture全量证据。T159实测带`instancing`函数可写入参数buffer，并用只读0/1
+  对照证明真实调用。新T148–T153的人工项仍是红色/Shared0，但SHA已更新。
+- 06:26 IOGPUFamily panic的根因仍未被证明。之后无第二次panic，但**未运行完整
+  GPU压力回归**；仍只做分组/定向测试，无GUI/Computer Use。`supportsRaytracing`
+  仍false，T61 ICB GPU执行范围问题保留在PLAN。
+
+## 当前安全检查点：BATCH156–157 与 06:26 GPU kernel panic
+
+- [BATCH158 T36兼容回归](BATCH158-T36-VALIDATION.md)：分组验证暴露T36延迟store
+  action被回放提前定值、旧`textureBarrier`在当前设备Validation下被拒绝两处问题。
+  已按实际setter时序修复；仅对pass内尚无GPU工作的旧barrier安全略过，之后
+  明确拒绝。T36 API/CLI、begin→end seek、15个负例与26份跨族哨兵均通过；
+  T35/T36/T43/T148/T156/T157共60次生命周期打开通过，resident growth 901,120 bytes。
+  同一次会话另分组跑过T01–T147及T148–T153/T156–T157的定向API/CLI，
+  但不是全部使用最新库，不可计为新版本全量通过；无第二次kernel panic。
+
+- [BATCH156–157](BATCH156-157.md)：接通fragment intersection table的
+  `setOpaqueTriangleIntersectionFunction`单槽与range两个bridge入口、新增两个独立chunk。
+  原生空表GPU输出0，设置后T156/T157均输出1且中央绿色；Metal Validation、注入捕获、
+  T156/T157/T153定向API/CLI、T156/T157分别16/18个表负例及各29个AS负例通过。
+  原始bridge标记61→59，旧chunk仍18；`supportsRaytracing`仍false。
+- 2026-09-28 06:26:38发生macOS kernel panic，Apple `IOGPUFamily`断言
+  `IOGPUResource::free called for resource still owned by an IOGPUDevice`，panic快照有
+  `renderdoccmd`。与全量回归时间相关，但无法由当前日志确定具体capture或把根因
+  归于T156/T157；重启前日志在/tmp丢失。重启后全量第二次运行到T71时已主动停止，
+  **不能声称本批全量通过**。在隔离前不要自动重启完整GPU压力回归或连续大量
+  malformed replay；先做轻量定向与静态检查。没有GUI/Computer Use。集中UI待验120份。
+- 针对“加载畸形capture提前返回、挂起命令尚未完成即析构资源”的可疑路径，
+  已在初次加载失败时以及设备析构前结束/提交/等待剩余replay命令，并在新表桥接对超大单槽index
+  做转换前拒绝。修补后T148–T153/T156–T157共8份定向API/CLI通过，两个编码中
+  失败的负例在Metal Validation下通过；**这不是panic根因已被证明修复**。
+- 此历史检查点的库/app内嵌库SHA均`e291aae57542…`；T156/T157 capture SHA
+  `96ef002c3c03…`/`61dc07c81b38…`。下一步隔离panic的最小触发器并审核资源
+  生命周期；若属系统驱动限制，记录并保留不运行高风险全量的门槛。
+
+## 当前恢复检查点：BATCH148–153 Render Intersection Function Table
+
+- [BATCH148–153](BATCH148-153.md)：接通render PSO创建intersection table及
+  fragment/vertex/tile的单槽与range绑定共7个旧chunk，另新增表`setFunction`和
+  显式非不透明三角形build两个独立chunk。六份T148–T153的自定义交点函数真实改变
+  GPU ray-query结果：普通compute维持`1,0,1`，render三阶段均为未命中`0`；
+  fragment/vertex中央红色，tile为dispatch写Shared。原生Metal Validation、
+  注入捕获、定向API/CLI、每份29个AS负例及20/22个表负例通过。发现并修复
+  默认非不透明三角形与旧refit路径的分支优先级，修复后另用临时新录T141确认
+  native/capture/API/CLI兼容，未覆盖正式T141 capture。
+- 最终库全量**152 captures、3337 malformed、1520 lifecycle opens**通过，
+  resident growth **12,845,056 bytes**，日志`/tmp/metal-batch153-final.log`。
+  库与app内嵌库SHA均`3fbc11f8a1e5…`，六份capture SHA见BATCH与集中QA表。
+  GUI/Computer Use未运行，待人工累计**118份**；未提交/推送。
+- 原始标记**61 bridge / 18旧chunk**。bridge从60升至61是因为新表wrapper对8个
+  尚不支持的资源参数/opaque/curve变体明确拒绝，且本批消除了7个原有入口标记；
+  不将新增拒绝伪报为功能完成。`supportsRaytracing`仍为false。下一族优先原生验证
+  intersection table资源参数或其余旧chunk；T61 GPU执行点ICB
+  range事件树限制仍在PLAN单独列明，未被本批解决。
+- 后续原生能力探针：Apple M2 Pro在Metal Validation下报告
+  `AtBlitBoundary=0`、`AtDrawBoundary=0`；因此blit/render
+  `sampleCountersInBuffer`两个旧chunk未冒险接通，也没有T154/T155成功capture。
+  已在`Metal_Counter_Stage`留下可重复环境开关，后续需支持该能力的GPU验证；
+  本机下一族改评估其他可执行的intersection table变体或剩余旧chunk。
+
+## 当前恢复检查点：BATCH146–147 Vertex/Tile阶段TLAS消费
+
+- [BATCH146–147](BATCH146-147.md)：接通`setVertexAccelerationStructure`与
+  `setTileAccelerationStructure`两个旧chunk。T146 vertex ray-query命中第二BLAS，
+  Shared结果1、中央绿色；T147 tile kernel ray-query命中，Shared结果1。原生
+  Metal Validation、注入捕获、T144–T147定向API/CLI、T146/T147各29个畸形
+  输入通过；整批回归**146 captures、3037 malformed、1460 lifecycle opens**通过，
+  resident growth **5,718,016 bytes**，日志`/tmp/metal-batch147-full.log`。库/app
+  内嵌库SHA `2140c924a230…`，T146/T147 capture SHA `abeaf2f81566…` /
+  `10073db853eb…`。
+  GUI/Computer Use未运行，待人工累计112份；原始标记60 bridge/25旧chunk，
+  `supportsRaytracing`仍false。下一段优先评估intersection function table的
+  可执行链或更多实例映射，不能仅靠单槽AS绑定宣称光追已完整支持。
+
+## 当前恢复检查点：BATCH145 Fragment阶段TLAS消费
+
+- [BATCH145](BATCH145.md)：在T144的不同BLAS双实例TLAS上，接通旧chunk
+  `setFragmentAccelerationStructure`。fragment shader真实ray-query命中第二BLAS，
+  Shared输出1、中央像素绿色；注入回放API验证TLAS身份、slot0、事件seek
+  `1→7→1`及像素。原生Metal Validation、T142–T145定向API/CLI、29个畸形
+  输入通过。整批回归**144 captures、2979 malformed、1440 lifecycle opens**通过，
+  resident growth **7,913,472 bytes**，日志`/tmp/metal-batch145-full.log`。
+  库/app内嵌库 SHA `a624ff54d9b8…`，capture `78a3802c5057…`；GUI/Computer Use未运行。
+  原始标记60 bridge/27旧chunk；`supportsRaytracing`仍false。下一段优先验证
+  vertex/tile阶段AS消费或更多实例映射，先做原生GPU探针。
+
+## 当前恢复检查点：BATCH144 两个不同BLAS的Top-Level实例
+
+- [BATCH144](BATCH144.md)：T144为两个实例分别构建不同三角形BLAS，实例索引0/1，
+  各平移x=-2/+2；三条GPU射线从x=-2/+2/+3返回`1,0,1`，可区分第二实例误指向
+  第一个BLAS。原生Metal Validation、注入截帧、T142–T144定向API/CLI、24个
+  T144畸形输入均通过；整批回归**143 captures、2950 malformed、1430 lifecycle
+  opens**通过，resident growth **6,225,920 bytes**，日志`/tmp/metal-batch144-full.log`。
+  库/app内嵌库 SHA `42099b733d9f…`，capture `3afa4d1f0c9a…`；未做GUI/Computer Use，
+  集中清单新增至109份。原始标记60 bridge/28旧chunk；`supportsRaytracing`仍false。
+  下一段评估更多实例数量与child映射、交叉函数表等完整GPU可观察链。
+
+## 当前恢复检查点：BATCH142–143 Top-Level AS实例与GPU射线
+
+- [BATCH142](BATCH142.md)、[BATCH143](BATCH143.md)：新增默认布局单实例及同一BLAS的
+  双实例TLAS尺寸查询、真实build与独立chunk。T142平移x=+2，两个GPU ray返回
+  miss/hit=`0,1`；T143双实例平移x=-2/+2，三条ray返回hit/miss/hit=`1,0,1`。
+  注入回放均有API Shared输出与事件seek验证。T135–T143共9份定向API/CLI、
+  T142/T143各21/23个畸形实例输入通过。T142当时完整基线141 captures、2903
+  malformed、1410 lifecycle opens通过；当前最终一体化全量**142 captures、2926
+  malformed、1420 lifecycle opens**通过，resident growth **7,012,352 bytes**，
+  日志`/tmp/metal-batch143-full.log`。库/app内嵌库`c028455d3a89…`，T142/T143
+  capture SHA `54d563c23e9b…` / `0a41991b814b…`；`git diff --check`通过。
+  T70/T133最新原生/捕获及离线预期拒绝复验通过。GUI/Computer Use未运行，累计
+  待人工108份；未提交/推送。原始标记**60 bridge / 28旧chunk**，比T141的
+  59/28多一个实例descriptor显式fallback，不代表功能退回。
+  `supportsRaytracing`仍false；下一步扩展不同child AS、更多实例及间接/motion、
+  intersection table等可执行链，不能把一/两个同BLAS实例当作通用TLAS支持。
+
+## 历史检查点：BATCH141 GPU可观察的底层AS原位Refit
+
+- [BATCH141](BATCH141.md)：单无索引Float3三角形的refittable build、独立command buffer
+  内GPU blit更新顶点、原位refit及compute单槽AS绑定已接通。真实ray-query在Metal Validation
+  下build后命中1、refit后未命中0；注入回放API验证Shared输出首→末为`1,9`→`1,0`，
+  末→首→末seek一致。T135–T141共7份定向API/CLI、28个T141畸形chunk通过。
+  最终一体化全量**140 captures、2882 malformed、1400 lifecycle opens**通过，resident
+  growth **0 bytes**，日志`/tmp/metal-batch141-final.log`。库/app内嵌库
+  `9f1860586102…`，T141 capture `0ca68274fcea…`，`git diff --check`通过。
+  GUI/Computer Use未运行，累计待人工106份；不提交/推送。
+  原始标记**59 bridge / 28旧chunk**：新增refit描述符安全守卫使bridge文本计数从51
+  增至59，不代表已接通的三个入口退回；不能用原始标记数替代可执行功能验证。
+  `supportsRaytracing`仍false；下一步评估instance/top-level、render阶段AS绑定或更广
+  refit形态的完整GPU可观察链，不把当前单三角形子集当作完整光追。
+
+## 历史检查点：BATCH140 GPU尺寸约束的压缩AS Copy
+
+- [BATCH140](BATCH140.md)：独立command buffer的静态三角形build→Shared GPU尺寸
+  写回→1280-byte目标分配→压缩copy→目标尺寸写回，原生/注入Metal Validation、
+  T140与T135–T139定向API/CLI、31个T140畸形捕获（含目标过小及GPU尺寸不一致）
+  均通过；新增错误encoder负例后为32个。最终全量**139 captures、2854 malformed、
+  1390 lifecycle opens**通过，resident growth 5,586,944 bytes，日志
+  `/tmp/metal-batch140-final2.log`；库/app `2458b8caf470…`，UI未运行，
+  累计待人工105份。
+  原始标记51 bridge/28旧chunk，新增显式fallback使文本计数+1。T140需前序
+  单无索引三角形build与GPU尺寸写回来自同一前序command buffer，且GPU尺寸可读；
+  其它时序仍拒绝。T70/T133原生/捕获及离线预期拒绝复验通过；未提交/推送。
+  下一功能族先评估AS refit的真实GPU变化与可观察验证，再选实例AS或shader消费链；
+  不能仅凭压缩尺寸不变就声称refit几何正确。
+
+## 历史检查点：BATCH139 等容量AS Copy
+
+- [BATCH139](BATCH139.md)：两个1536-byte AS经真实GPU build→copy→目标压缩尺寸
+  写回，原生/注入Metal Validation、14份定向API/CLI及T135–T139合计95个畸形AS
+  输入通过。T139目标size并未缩至1280，`copyAndCompact`仍未实现。
+  最终全量**138 captures、2822 malformed、1380 lifecycle opens**通过，resident
+  growth 7,159,808 bytes，日志`/tmp/metal-batch139-full.log`。最新库/app
+  `48c3c41062f2…`；原始标记50 bridge/28旧chunk，新增的显式资源类型fallback
+  导致文本计数+1，不代表功能退步。T70/T133原生/捕获及离线预期拒绝复验通过。
+  GUI未运行，累计待人工104份；未提交/推送。
+
+## 历史检查点：BATCH136–138 AS几何扩展与描述符分配
+
+- [BATCH136–137](BATCH136-137.md)、[BATCH138](BATCH138.md)：单静态三角形的
+  UInt16/UInt32 indexed build、单 bounding-box build，及单无索引三角形 descriptor
+  形式创建 AS，均形成真实 GPU 捕获回放链。T135–T138 原生/注入 Metal Validation、
+  13份受影响捕获定向 API/CLI、73个畸形 AS 输入通过；最终全量为**137 captures、
+  2800 malformed、1370 lifecycle opens**，resident growth 7,389,184 bytes，日志
+  `/tmp/metal-batch138-full.log`。当时库/app `be071fb3fda6…`，GUI未运行，
+  待人工103份；`supportsRaytracing`仍为false。原始标记49 bridge/28旧chunk：
+  新增的描述符校验分支含显式 fallback，原始文本计数不能当作能力回退。
+  T70/T133原生/捕获成功、离线预期拒绝也在最终库上复验通过；未提交/推送。
+
+## 历史检查点：BATCH135 AS build与尺寸写回
+
+- [BATCH135](BATCH135.md)：单个静态无索引三角形 AS 的 `newAccelerationStructureWithSize:`、
+  命令 encoder、build/压缩尺寸写回/end 已形成真实 GPU 捕获回放链。T135 原生/注入
+  size1536、GPU compacted1280；API/CLI、前后 seek、18个畸形输入及10份定向回归通过。
+  其它AS形态仍显式拒绝，`supportsRaytracing`维持false。原始标记 **40 bridge /
+  28旧chunk**：新增 AS encoder 对多种未支持描述符的显式 fallback，使 bridge
+  文本计数上升，不能解读为功能退步或完整支持。当时库/app均为
+  `55f87e6705d0…`，T135 capture `dff173e98bae…`；全量 **134 captures、2745
+  畸形、1340 lifecycle** 通过，resident growth 5,554,176 bytes，日志
+  `/tmp/metal-batch135-final.log`。T70/T133原生/捕获成功、离线预期拒绝再次通过。
+  UI未运行，累计待人工100份（T134无独立UI项）；未提交/推送。
+
+## 历史检查点：BATCH134 AS尺寸查询与BATCH131–132 Heap安全子集
+
+- [BATCH134](BATCH134.md)：在光追完整资源链之前，先接通静态三角形/box 的
+  `accelerationStructureSizesWithDescriptor:` 与
+  `heapAccelerationStructureSizeAndAlignWithDescriptor:` 纯查询。原生/注入三种描述符
+  数值一致、Metal Validation、T134捕获及6份定向API/CLI通过。其它描述符仍保留
+  bridge fallback；原始标记仍为 **35/29**，`supportsRaytracing`仍为false。
+  集中回归与UI未运行；无独立UI功能验收。
+
+- [BATCH131–132](BATCH131-132.md)：buffer/texture `makeAliasable` bridge与旧chunk
+  接通，限 heap 资源标记后不再使用、无后续重叠分配；原生 Metal Validation、
+  捕获、CLI/API、6个畸形目标拒绝及旧 heap 定向通过。原始剩余 **35 bridge /
+  29旧chunk**，T70另计36/30。全量 **132 captures、2727畸形、1320
+  lifecycle** 通过，resident growth 5,521,408 bytes，日志
+  `/tmp/metal-batch132-full.log`。库/app `d4f73865b86c…`；GUI/Computer Use
+  未运行，待人工99份；未提交/推送。T133原生同offset重叠复用和捕获成功，离线
+  明确拒绝，不计成功回放或UI待验；真正alias生命周期与事件seek仍须架构处理。
+
+## 历史检查点：BATCH119–130 Visible Function Table 完整阶段链
+
+- [BATCH119–120](BATCH119-120.md)、[BATCH121–123](BATCH121-123.md)、
+  [BATCH124–125](BATCH124-125.md)、[BATCH126–130](BATCH126-130.md)：
+  render fragment/vertex/tile 和 compute 的直接 visible function 链接、handle、
+  table、单槽/范围绑定，以及 compute argument buffer 内的函数表编码已通过真实
+  GPU输出、Metal Validation、捕获、CLI/API和畸形输入检验。Tile 同步及异步
+  descriptor 均保留链接函数，schema v9 兼容旧捕获。原始剩余 **37 bridge /
+  31旧chunk**，T70另计38/32。全量 **130 captures、2721畸形、1300
+  lifecycle** 通过，resident growth 8,093,696 bytes，日志
+  `/tmp/metal-batch130-full.log`。库/app `cf2a2ccc430e…`；GUI/Computer Use
+  未运行，待人工97份；未提交/推送。Intersection function table、acceleration
+  structure 和重叠 alias 生命周期仍未接通。
+
+## 历史检查点：BATCH118 一层嵌套ArgumentEncoder
+
+- [BATCH118](BATCH118.md)：接通`newArgumentEncoderForBufferAtIndex:` bridge/新chunk，
+  父子encoder反射、只读内层texture/sampler、buffer指针尺寸与对齐、资源关系及GPU
+  四象限采样均经原生Metal Validation、捕获、CLI/API、18个畸形输入验证。原始剩余
+  **45 bridge / 39旧chunk**，T70另计46/40。全量 **118 captures、2625畸形、
+  1180 lifecycle** 通过，resident growth 6,668,288 bytes，日志
+  `/tmp/metal-batch118-full.log`。T118 capture SHA `e3fc631efe28…`，库/app
+  `84df606e5379…`；GUI/Computer Use未运行，待人工85份；未提交/推送。
+  Pipeline State公开结构暂不显示内层成员树，更深嵌套/数组/可写成员仍未支持。
+
+## 历史检查点：BATCH116–117 Placement Heap 非重叠资源
+
+- [BATCH116–117](BATCH116-117.md)：接通placement heap显式offset buffer/texture
+  两个bridge和新chunk，以设备size/align校验偏移、边界及不重叠范围。GPU数据、三阶段
+  texture画面和seek经原生Metal Validation及CLI/API验证；25个新增畸形输入拒绝。
+  原始剩余 **46 bridge / 39旧chunk**，T70另计47/40。全量 **117 captures、
+  2607畸形、1170 lifecycle** 通过，resident growth 5,603,328 bytes，日志
+  `/tmp/metal-batch117-full.log`。T116/T117 capture SHA `9ab0c4160699…`/
+  `3051cc3039d7…`，库/app `8dab14641eb8…`；GUI/Computer Use未运行，
+  待人工84份；未提交/推送。重叠alias/makeAliasable仍明确不支持。
+
+## 历史检查点：BATCH104–115 Dynamic library 链接及异步预加载
+
+- [BATCH106–109](BATCH106-109.md)、[BATCH110–111](BATCH110-111.md)、
+  [BATCH112–115](BATCH112-115.md)：计算/渲染（fragment 与 vertex）pipeline 的
+  同步和异步 dynamic-library 预加载，以及异步 source-library 编译选项，均经原生
+  Metal Validation、捕获、CLI/API 回放和畸形输入拒绝验证。原始剩余
+  **48 bridge / 39旧chunk**，T70另计49/40。全量 **115 captures、2582畸形、
+  1150 lifecycle** 通过，resident growth 7,094,272 bytes，日志
+  `/tmp/metal-batch115-full.log`。库/app `5043305f5061…`；GUI/Computer Use 未运行，
+  待人工82份；未提交/推送。URL 动态库导入仍不支持。
+
+## 历史检查点：BATCH104–105 Dynamic library 链接执行
+
+- [BATCH104–105](BATCH104-105.md)：接通`newDynamicLibrary:` bridge和旧chunk，
+  source-library v6保存dynamic选项与依赖，回放私有installName路径并物化动态库。
+  T104一依赖GPU输出3，T105两依赖GPU输出6；原生、capture、CLI/API、
+  19+14畸形输入及旧捕获均通过。原始剩余 **48 bridge / 39旧chunk**，
+  T70另计49/40。全量**105 captures、2502畸形、1050 lifecycle**通过，
+  resident growth 3,932,160 bytes，日志`/tmp/metal-batch105-full.log`。
+  T104/T105 capture SHA `22147d810218…`/`7520798eaddd…`，库/app
+  `7d2400de2ed2…`。URL导入仍缺口；GUI/Computer Use未运行，待人工72份；
+  未提交/推送。
+
+## 历史检查点：BATCH103 Counter 子范围和偏移
+
+- [BATCH103](BATCH103.md)：8槽counter sample indices2–5、resolve range(2,4)
+  到目标buffer offset16，原生/捕获/CLI/API和22负例通过。原始剩余仍
+  **49 bridge / 40旧chunk**，T70另计50/41。103 captures、2469畸形、
+  1030 lifecycle全量通过，resident growth 622592 bytes；T103 capture
+  `a38e39c760c4…`，库/app `30a8ca932d9f…`。GUI/Computer Use未运行，待人工
+  70份；未提交/推送。全量日志`/tmp/metal-batch103-full.log`。
+
+## 历史检查点：BATCH102 Reflection BufferBinding Argument Encoder
+
+- [BATCH102](BATCH102.md)：接通`newArgumentEncoderWithBufferBinding` bridge/新chunk1316，
+  从reflection重建简单只读texture2d/sampler布局并核对长度/对齐；T102左右两packet
+  原生、capture、CLI/API、13个畸形输入拒绝及旧捕获定向通过。原始剩余
+  **49 bridge / 40旧chunk**，T70另计50/41。102 captures、2447畸形、
+  1020 lifecycle全量通过，resident growth 2375680 bytes；T102 capture
+  `b9df0c466069…`，库/app `30a8ca932d9f…`。GUI/Computer Use未运行，待人工
+  69份；未提交/推送。全量日志`/tmp/metal-batch102-full.log`。
+
+## 历史检查点：BATCH101 阶段边界 Counter Sampling
+
+- [BATCH101](BATCH101.md)：接通counter sample buffer创建与blit resolve两个旧chunk，
+  render pass四阶段索引及资源身份使用v5 schema。原生probe与夹具验证四个非零递增
+  timestamp；捕获/CLI/API/22个畸形输入拒绝和旧v1–v4定向通过。原始剩余
+  **50 bridge / 40旧chunk**，T70另计51/41。101 captures、2434畸形、
+  1010 lifecycle全量通过，resident growth 3538944 bytes；T101 capture
+  `394b6a8f960b…`，库/app `77b615b94015…`。GUI/Computer Use未运行，待人工
+  68份；未提交/推送。全量日志`/tmp/metal-batch101-full.log`。
+
+## 历史检查点：BATCH100 异步Mesh + 双层Rate Map
+
+- [BATCH100](BATCH100.md)：异步mesh pipeline调用时快照保存非默认mesh grid
+  上限2，双层Rate Map第二层真实光栅和回拷已在原生/捕获/CLI/API验证；10个
+  异步mesh加26个rate-map畸形输入拒绝。原始剩余仍**51 bridge / 41旧chunk**，
+  T70另计52/42。100 captures、2412畸形、1000 lifecycle全量通过，resident
+  growth 1949696 bytes；T100 capture `6997b8195353…`，库/app
+  `d349808b9692…`。GUI/Computer Use未运行，待人工67份；未提交/推送。
+  日志`/tmp/metal-batch100-full.log`。
+
+## 历史检查点：BATCH99 双层Rate Map第二层真实光栅
+
+- [BATCH99](BATCH99.md)：mesh primitive的`render_target_array_index`将两个
+  threadgroup分别绘制到slice0/1，后者半水平速率物理宽208；原生、捕获、CLI/API
+  slice1像素与回拷验证通过。mesh-only pipeline非默认网格上限2纳入v4 schema，
+  v1/v2/v3兼容定向通过；19个mesh+26个rate-map畸形输入拒绝。原始剩余仍
+  **51 bridge / 41旧chunk**，T70另计52/42。99 captures、2376畸形、990
+  lifecycle全量通过，resident growth 3014656 bytes；T99 capture
+  `161abbbbaeb2…`，库/app `d349808b9692…`。GUI/Computer Use未运行，当时待人工
+  66份；未提交/推送。日志`/tmp/metal-batch99-full.log`。
+
+## 历史检查点：BATCH98 双层Rate Map绑定数组渲染目标
+
+- [BATCH98](BATCH98.md)：真实双层map绑定2-slice array render target，mesh绘制
+  slice0并blit到drawable；原生Metal Validation、捕获、CLI/API与26个畸形输入
+  拒绝通过。新增回放守卫要求map层数与render pass有效array length一致。
+  原始剩余仍为**51 bridge / 41旧chunk**，T70另计52/42；slice1的真实光栅
+  输出尚未验证。库/app `d5ddec74b502…`，T98 capture `1e6e084fd2fe…`。
+  GUI/Computer Use未运行，当时待人工65份；未提交/推送。全量回归见
+  `/tmp/metal-batch98-full.log`。
+
+## 历史检查点：BATCH95–97 Rasterization rate map
+
+- [BATCH95–97](BATCH95-97.md)：接通map创建旧chunk1030和`copyParameterDataToBuffer`
+  bridge/新chunk1315，pass map引用；T96真实半水平速率在本机使物理宽度400→208，
+  T97支持双层descriptor及参数数据，capture schema v3仍可读取v1/v2。原始剩余
+  **51 bridge / 41旧chunk**；T70另计52/42。T95/T96/T97定向验证和各17/17/22
+  个畸形输入拒绝通过；全量97 captures、2303畸形、970 lifecycle通过，resident
+  growth 1589248 bytes，日志`/tmp/metal-batch97-full.log`。库/app
+  `d93f1c816b54…`。GUI/Computer Use未运行，当时待人工64份；未提交/推送。
+  双层array目标渲染尚未验证。
+
+## 历史检查点：BATCH93–94 Object 输入网格
+
+- [BATCH93–94](BATCH93-94.md)：修复object shader输入网格错误受mesh输出网格
+  上限约束；T93两个object threadgroup、T94线程网格64×1×1原生及回放
+  验证通过，联合16个畸形输入拒绝。原始剩余 **52 bridge / 42旧chunk**，
+  T70另计53/43。捕获SHA `0b4476799c01…`/`28f1ccb2592a…`，库/app
+  `3612c349a613…`；94 captures、2247畸形、940 lifecycle全量通过
+  （growth 1327104 bytes，`/tmp/metal-batch94-full.log`）。GUI/Computer Use
+  未运行，61份待人工；未提交/推送。
+
+## 历史检查点：BATCH91–92 多线程 Object stage
+
+- [BATCH91–92](BATCH91-92.md)：修复 direct mesh 两种 draw 对 object threadgroup
+  必须为单线程的错误限制；T91/T92 各用 4 线程 object shader，经真实 payload
+  绘制三角形，联合定向及16个畸形输入拒绝通过。原始剩余 **52 bridge / 42旧chunk**，
+  T70另计53/43。捕获SHA `3ea72dbf14f6…`/`e18b6eb53bb5…`，库/app
+  `dd543ab096a7…`；92 captures、2231畸形、920 lifecycle全量通过
+  （growth 1884160 bytes，`/tmp/metal-batch92-full.log`）。GUI/Computer Use
+  未运行，59份待人工；未提交/推送。
+
+## 历史检查点：BATCH88–90 Mesh 间接绘制
+
+- [BATCH88–90](BATCH88-90.md)：接通 mesh 间接 draw（chunk1314），Shared
+  偏移16、GPU写 Private 参数、Object/Mesh 三种真实绘制路径；各11个畸形输入
+  拒绝。原始剩余 **52 bridge / 42旧chunk**，T70另计53/43。捕获SHA
+  T88 `81a4e8f91479…`、T89 `67f3eb8a6005…`、T90 `8ca736e3c39f…`；
+  库/app `d74b63d4a264…`。定向及90 captures、2215畸形、900 lifecycle
+  全量通过（growth 2424832 bytes），日志`/tmp/metal-batch90-full.log`。
+  GUI/Computer Use未运行，57份待人工；
+  未提交/推送。
+
+## 历史检查点：BATCH87 异步 Object/Mesh pipeline
+
+- [BATCH87](BATCH87.md)：异步object+mesh pipeline的独立调用时descriptor快照、
+  回调包装与离线重建接通；8个畸形输入拒绝。原始剩余**53 bridge / 42旧chunk**，
+  T70另计54/43。捕获`f6b5c2a71ac9…`、库/app`1e9b10c9196a…`；定向通过，
+  全量日志`/tmp/metal-batch87-full.log`。GUI/Computer Use未运行，54份待人工；
+  未提交/推送。全量87 captures、2182畸形、870 lifecycle通过，增长
+  2015232 bytes。
+
+## 历史检查点：BATCH86 Object threadgroup memory
+
+- [BATCH86](BATCH86.md)：动态object threadgroup memory绑定接通，真实object
+  shader以scratch驱动payload，16/32/48-byte三阶段与5个畸形输入验证通过。
+  原始剩余**53 bridge / 42旧chunk**，T70另计54/43。捕获`6b70534fc597…`、
+  库/app`fbc12b54dfb3…`；86 captures、2174畸形、860 lifecycle全量通过，
+  growth 1933312 bytes，日志`/tmp/metal-batch86-full.log`。
+  GUI/Computer Use未运行，53份待人工；未提交/推送。
+
+## 历史检查点：BATCH85 Object texture/sampler 绑定
+
+- [BATCH85](BATCH85.md)：六种object texture/sampler绑定接通，真实采样经payload
+  改变三次mesh三角形位置，28个畸形输入拒绝。原始剩余**54 bridge / 42旧chunk**，
+  T70另计55/43。捕获`e3bf1eee74e6…`、库/app`6091de8a8265…`；85 captures、
+  2169畸形、850 lifecycle全量通过，growth 3096576 bytes，日志
+  `/tmp/metal-batch85-full.log`。GUI/Computer Use未运行，52份待人工；
+  未提交/推送。
+
+## 历史检查点：BATCH84 Object buffer/bytes 绑定
+
+- [BATCH84](BATCH84.md)：三个对象阶段buffer/bytes重载接通，真实payload让
+  三次MeshDispatch三角形落在x≈80/220/360；13个畸形输入拒绝。原始剩余
+  **60 bridge / 42旧chunk**，T70另计61/43。捕获`d29d5e86c1a9…`、
+  库/app`aef27dba4f8d…`；84 captures、2141畸形、840 lifecycle全量通过，
+  growth 1671168 bytes，日志`/tmp/metal-batch84-full.log`。
+  GUI/Computer Use未运行，51份待人工；未提交/推送。
+
+## 历史检查点：BATCH83 Object/Mesh pipeline 与对象buffer
+
+- [BATCH83](BATCH83.md)：真实object shader的buffer→payload→mesh三角形链，
+  同步object+mesh pipeline及object buffer绑定接通，16个畸形输入拒绝。
+  原始剩余**63 bridge / 42旧chunk**，T70另计64/43。捕获`e7e52fa73e7d…`、
+  库/app`77fd1d77b4cf…`；83 captures、2128畸形、830 lifecycle全量通过，
+  growth 2179072 bytes，日志`/tmp/metal-batch83-full.log`。
+  GUI/Computer Use未运行，50份待人工；未提交/推送。
+
+## 历史检查点：BATCH82 异步 Mesh pipeline
+
+- [BATCH82](BATCH82.md)：异步mesh pipeline的descriptor调用时快照与回调包装，
+  原descriptor改动后仍捕获BGRA8/mesh函数/options；8个畸形输入拒绝。原始剩余
+  **64 bridge / 42旧chunk**，T70另计65/43。捕获`5c89deaf9996…`、库/app
+  `8d09e99f81c5…`；82 captures、2112畸形、820 lifecycle全量通过，
+  growth 1982464 bytes，日志`/tmp/metal-batch82-full.log`。
+  GUI/Computer Use未运行，49份待人工；未提交/推送。
+
+## 历史检查点：BATCH81 Mesh thread-grid draw
+
+- [BATCH81](BATCH81.md)：直接`drawMeshThreads`真实捕获/回放与MeshDispatch；
+  32线程网格的绿色三角形、8个畸形输入拒绝。原始剩余**65 bridge / 42旧chunk**，
+  T70另计66/43。捕获`e6126828325b…`、库/app`2eea4b68f328…`；定向通过，
+  全量日志`/tmp/metal-batch81-full.log`，81 captures、2104畸形、810 lifecycle
+  通过，growth 1212416 bytes。GUI/Computer Use未运行，48份待人工。
+  未提交/推送。
+
+## 历史检查点：BATCH80 Mesh texture/sampler 绑定
+
+- [BATCH80](BATCH80.md)：六种mesh texture/sampler绑定、真实mesh shader采样
+  使三次draw各右移约70像素，28个畸形输入拒绝。原始剩余**66 bridge / 42旧chunk**，
+  T70另计67/43。捕获`28d188275e44…`、库/app`54f1bbde30f5…`；定向通过，
+  全量日志`/tmp/metal-batch80-full.log`，80 captures、2096畸形、800 lifecycle
+  通过，growth 1638400 bytes。GUI/Computer Use未运行，47份待人工。
+  未提交/推送。
+
+## 历史检查点：BATCH79 Mesh buffer/bytes 绑定
+
+- [BATCH79](BATCH79.md)：四个mesh绑定bridge及新chunk，真实shader使用buffer
+  offsets0/16/32与inline radius，三阶段左/中/右像素及seek已自动验证；16个
+  畸形输入拒绝。原始剩余**72 bridge / 42旧chunk**，T70另计73/43。
+  捕获`28f4ba76c665…`、库/app`4fc7b5c759ba…`；定向通过，全量日志
+  `/tmp/metal-batch79-full.log`，79 captures、2068畸形、790 lifecycle全量通过，
+  resident growth 1490944 bytes。GUI/Computer Use未运行，46份待集中人工。
+  未提交/推送。
+
+## 历史检查点：BATCH78 最小 Mesh pipeline 与直接 draw
+
+- [BATCH78](BATCH78.md)：同步mesh pipeline、直接`drawMeshThreadgroups`真实
+  capture/replay，MeshDispatch事件及三角形中心/背景像素验证；17个畸形输入安全拒绝。
+  当前原始标记**76 bridge / 42旧chunk**；T70功能缺口另计77/43。
+  T78 capture `160f902aef23…`，库/app `dfe3ec542c36…`；78 captures、2052畸形、
+  780 lifecycle全量通过，growth 0 bytes，日志`/tmp/metal-batch78-full-final.log`。
+  GUI/Computer Use未运行，
+  T34–T69、T71–T78与T10 marker共**45份**待集中人工；T70不供UI打开。
+  未提交/推送。
+
+## 历史检查点：BATCH77 异步Tile pipeline
+
+- [BATCH77](BATCH77.md)：异步Tile pipeline创建的调用时descriptor快照、
+  原生回调包装与离线重建；8个畸形输入拒绝。T77 capture `0470cd9f7ecf…`，
+  库/app `173fadcf7c8a…`。当前原始标记**78 bridge / 42旧chunk**；T70
+  功能缺口另计为79/43。**77 captures API/CLI、2035畸形输入、770 lifecycle**
+  全量通过，growth 2342912 bytes；日志`/tmp/metal-batch77-full-final.log`。
+  GUI/Computer Use未运行，T34–T69、T71–T77与T10 marker共**44份**待集中人工；
+  T70不供UI打开。未提交/推送。
+
+## 历史检查点：BATCH75–76 Tile资源与动态内存
+
+- [BATCH75](BATCH75.md)：六种Tile texture/sampler绑定真实capture/replay，
+  采样纹理`2/255`驱动GPU计数；22个畸形输入拒绝。T75 capture
+  `647f1bb524cb…`。T74夹具和捕获未变。
+- [BATCH76](BATCH76.md)：Tile threadgroup memory长度、非零offset与零长度清除；
+  tile shader实际使用动态内存，8个畸形输入拒绝。T76 capture
+  `1ca3f463afa1…`。当前原始标记**79 bridge / 42旧chunk**；T70功能缺口
+  另计则为80/43。
+- T76全量通过：**76 captures API/CLI、2027畸形输入、760 lifecycle**，
+  growth 1687552 bytes，日志`/tmp/metal-batch76-full.log`；T75全量亦通过
+  （75/2019/750），库/app `8af6f90b645b…`。
+  GUI/Computer Use未运行，T34–T69、T71–T76与T10 marker共**43份**待集中人工；
+  T70不供UI打开。未提交/推送。
+
+## 历史检查点：BATCH74 Tile pipeline与tile dispatch
+
+- [BATCH74](BATCH74.md)：6 bridge / 6旧chunk真实capture/replay，剩余原始标记
+  **86 bridge / 49旧chunk**；T70功能缺口另计则为87/50。三个tile dispatch真实
+  GPU写buffer并驱动后续draw，事件网格和回退已自动核对。
+- **74份capture API/CLI、1997畸形输入、740次lifecycle**全量通过，growth
+  2064384 bytes；日志`/tmp/metal-batch74-full-final.log`，库/app`e74885bf9e09…`。
+  GUI/Computer Use未运行，T34–T69、T71–T74与T10 marker共**41份**待集中人工；
+  T70不供UI打开。未提交/推送。下一族优先Tile texture/sampler六重载，继续复用
+  T74 pipeline并以真实texture采样验证，不做空绑定假测试。Heap alias/placement
+  继续按[PLAN.md](PLAN.md)中的时序门槛处理。
+
+## 当前恢复检查点：BATCH73 Render heap residency
+
+- [BATCH73](BATCH73.md)：`useHeap/useHeaps`四种Render重载真实capture/replay，
+  **92 bridge / 55旧chunk**原始标记；T70实际未接通范围另计则为93/56。
+  **73份成功capture API/CLI、1969畸形输入、730次lifecycle**全量通过，
+  growth 1015808 bytes；日志`/tmp/metal-batch73-full.log`，库/app `57efba093c53…`。
+- GUI/Computer Use未运行，T34–T69、T71–T73与T10 marker共**40份**待集中人工；
+  T70不供UI打开。未提交/推送。下一族优先继续评估Heap placement/alias生命周期或
+  其他有真实应用阻塞的接口，不把原生透传当作回放支持。
+
+## 当前恢复检查点：BATCH71–72 自动 Private Heap 的 Buffer/Texture
+
+- [BATCH71–72](BATCH71-72.md)：`MTLDevice::newHeapWithDescriptor`及 Heap 子 buffer/texture
+  形成真实 capture/replay 闭环；仅自动分配、Private、tracked hazard 的受控范围。
+  **72份成功捕获 API/CLI、1947畸形输入、720 lifecycle** 全量通过，growth
+  1556480 bytes；日志 `/tmp/metal-batch72-full.log`，库/app `c36b553dcd14…`，
+  Max1286。原始标记 **96 bridge / 59旧chunk**；新增 Heap 包装显式暴露两个
+  offset/placement 未接通入口，所以 bridge 原始数不等于本批净新增能力。
+- T70 GPU indirect ICB range仍明确拒绝且单独复验通过；不计入成功回放。
+  GUI/Computer Use未运行，**T34–T69、T71/T72与T10 marker共39份**待集中人工；
+  T70不供UI打开。未提交/推送。下一族考虑 Render `useHeap(s)` 四重载。
+
+## 当前恢复检查点：BATCH70 GPU 间接 ICB 范围安全边界
+
+- [BATCH70](BATCH70.md)：原始标记 **95 bridge / 60旧chunk**；其中间接 ICB 范围
+  是原生执行、可截帧、离线明确拒绝的**未解决功能**，所以按真正接通功能的口径仍为
+  **96/61**。T70 GPU 写入范围的 Metal Validation 原生/捕获、结构检查、预期
+  replay 拒绝通过；T53/T67 旧 capture 定向 API/CLI 通过。正确事件树仍需执行点
+  范围方案，见 [PLAN.md](PLAN.md)。
+- T01–T69 + T10 marker 联合终端回归通过：**70份 capture API/CLI、1917畸形输入、
+  700次 lifecycle**，growth 1802240 bytes；日志 `/tmp/metal-batch70-full.log`，
+  库/app `6ba534c557b2…`。T70 是单独的预期失败负例，不计入成功回放。
+- GUI/Computer Use 未运行；T70 不可离线加载，不加入人工 QA；既有37份待验不变。
+  未提交/推送。
+
+## 当前恢复检查点：BATCH69 Intersection Function与SharedEvent handle
+
+- [BATCH69](BATCH69.md)：接通3 bridge / 2旧chunk，剩余 **96 bridge / 61旧chunk**；
+  T55同步/异步intersection function链接compute pipeline，T69同进程SharedEvent handle
+  导入与跨queue时间线。**70 captures API/CLI、1917畸形输入、700 lifecycle**全量通过，
+  growth 770048 bytes；日志`/tmp/metal-batch69-full.log`，库/app `22c244afc13a…`。
+- GUI/Computer Use未运行；**T34–T69 + T10 marker共37份**待集中人工；未提交/推送。
+- ICB GPU indirect执行范围仍优先于扩大ICB范围，见[PLAN.md](PLAN.md)。
+
+## 当前恢复检查点：BATCH67–68 patch draw重载与同进程shared handle
+
+- [BATCH67–68](BATCH67-68.md)：接通5 bridge / 5旧chunk，剩余 **99 bridge / 63旧chunk**，
+  Max1284不变。T67三种patch draw及T68同进程shared-texture handle实录和定向回放通过。
+  **69 captures API/CLI、1903畸形输入、690 lifecycle**通过，resident growth 786432 bytes；
+  日志`/tmp/metal-batch68-host-final.log`，库/app `f8b8b15d458…`。
+- GUI/Computer Use未运行；**T34–T68 + T10 marker共36份**待集中人工；未提交/推送。
+- 下一开发波次优先：ICB GPU indirect执行范围。必须以GPU执行点范围构建事件树；
+  未通过GPU生成range真实夹具前继续拒绝，见[PLAN.md](PLAN.md)。
+
+## 历史检查点：BATCH66 直接 patch tessellation
+
+- [BATCH66](BATCH66.md)：factor buffer、scale、直接 `drawPatches` 三个 bridge 与三个旧 chunk
+  已接通；剩余 **104 bridge / 68旧chunk**，Max1284不变。**67 captures API/CLI、
+  1883畸形输入、670 lifecycle**通过，resident growth 1376256 bytes；日志
+  `/tmp/metal-batch66-host-final.log`，库/app `d098a04a1a7b…`。
+- GUI/Computer Use未运行；**T34–T66 + T10 marker共34份**待集中人工；未提交/推送。
+  GPU生成的ICB indirect执行范围仍未解决，不从编码时CPU值推断事件树。
+
+## 历史检查点：BATCH65 SharedEvent初值与GPU同步集中自动通过
+
+- [BATCH65](BATCH65.md)：SharedEvent创建及旧chunk1033接通，首次GPU使用前CPU初值可回放，
+  T63动态stride补5个布局负例；剩余 **107 bridge / 71旧chunk**，Max1284。
+- **66 captures API/CLI、1872畸形输入、660 lifecycle**通过，growth2162688 bytes；
+  日志 `/tmp/metal-batch65-host-final.log`，库/app `d69fa7da1f8…`。
+- GUI/Computer Use未运行，**T34–T65 + T10 marker共33份**待集中人工；未提交/推送。
+  SharedEvent仅同进程GPU时间线与首次GPU使用前CPU初值；后续CPU赋值与handle导出
+  会被明确标记为不可离线回放。
+  以下为历史检查点。
+
+## 历史检查点：BATCH63–64 集中自动通过
+
+- [BATCH63–64](BATCH63-64.md)：动态顶点stride四重载、单视图amplification和descriptor-backed
+  Private shared texture接通；净减 **6 bridge / 2旧chunk**，剩余 **108/72**，Max1282。
+- **65 captures API/CLI、1855畸形输入、650 lifecycle**在最终代码上通过，resident
+  growth2392064 bytes；日志 `/tmp/metal-batch64-final.log`，库/app `8772ed87e268…`。
+- GUI/Computer Use未运行，**T34–T64 + T10 marker共32份**待集中人工；未提交/推送。
+  单视图和Private descriptor是明确边界，不代表multiview或shared handle已支持。
+  以下为历史检查点。
+
+## 历史检查点：BATCH62 集中自动通过
+
+- [BATCH62](BATCH62.md)：14 个 bridge 与 2 个旧 chunk 接通，剩余 **114/74**，
+  Max1278。设备纯查询/宿主调度无需 replay chunk；buffer/texture purgeable 只保证
+  KeepCurrent、NonVolatile 离线回放，Volatile/Empty 明确不支持。
+- **63 captures API/CLI、1784 异常、630 lifecycle** 在最终代码上通过，growth606208bytes；
+  日志 `/tmp/metal-batch62-final-replay.log`。库/app `e11191df7a77…`，GUI executable 未变。
+- GUI/Computer Use未运行，**T34–T62 + T10 marker 共30份**仍待集中人工；未提交/推送。
+  下方为历史检查点。
+
+## 当前恢复检查点：BATCH61 no-copy Buffer集中自动通过
+
+- [BATCH61](BATCH61.md)：真实no-copy创建及旧chunk1006接通，当前剩余**128 bridge /
+  76旧chunk**，Max1278；只承诺Shared默认options。应用指针和deallocator保留在原生抓取，
+  离线回放复制字节。抓取保留资源可能延后deallocator，详情见批次边界。
+- 完整一键**62 captures API/CLI、1772异常、620 lifecycle**通过，growth1327104bytes；
+  日志`/tmp/metal-batch61-final.log`，库/app `0f7f42e63b34…`，GUI executable未变。
+- GUI/Computer Use未运行，**T34–T61 + T10 marker共29份**仍待集中人工；未提交/推送。
+  更高级剩余族应围绕真实捕获阻塞挑选；无需为了清零标记透传无法回放的对象。
+  以下为历史检查点。
+
+## 当前恢复检查点：BATCH60 Device ArgumentEncoder集中自动通过
+
+- [BATCH60](BATCH60.md)：Device descriptor创建的独立ArgumentEncoder接通1 bridge /1旧chunk，
+  仅只读2D纹理和sampler；总剩余**129/77**，Max1278。真实shader消费两个packet，
+  身份/布局29异常和回退通过，其他布局明确拒绝。
+- 一键完整门禁**61 captures API/CLI、1759异常、610 lifecycle**通过，growth1130496bytes，
+  日志`/tmp/metal-batch60-final.log`；库/app `ad4e54209464…`，GUI executable未变。
+- GUI/Computer Use未运行，**T34–T60 + T10 marker共28份**仍待人工；未提交/推送。
+  下一波应按真实捕获阻塞或剩余高级功能族选题，不将无测试的标记移除当作接通。
+  以下是历史检查点。
+
+## 当前恢复检查点：BATCH58–59 共享存储纹理族集中自动通过
+
+- [BATCH58](BATCH58.md)：三种纹理view与buffer-backed纹理接通**6 bridge、4旧chunk**，
+  剩余**130/78**，Max1278未变。父资源初值、提交间CPU更新及回退语义已补齐；支持范围见批次记录。
+- 原生/capture、逐事件API/CLI、91个新增畸形变体及旧T定向通过。共享资源改动后立即
+  集中回归：**60份capture API/CLI、1730畸形样本、600 lifecycle**，growth524288bytes；
+  日志`/tmp/metal-batch58-59-final.log`。库/app SHA `474533dbd0be…`，GUI executable未变。
+- GUI/Computer Use未运行，**T34–T59 + T10 marker共27份**仍待集中人工；未提交/推送，
+  用户UE路线保留。下一个候选是Device独立ArgumentEncoder的descriptor创建族，需先确认
+  其布局、成员验证和真实shader消费，不为减少标记而直接透传。以下均为历史检查点。
+
+## 当前恢复检查点：BATCH57 Argument数据族集中自动通过
+
+- [BATCH57](BATCH57.md)为本波唯一详细记录：buffer成员/批量、constants、arrayElement，
+  多packet与GPU地址重定位、CPU提交更新/seek；**140→136 bridge，旧chunk仍82**，Max1278。
+- 共享Shared初值恢复影响较广，本族立即集中回归：**58 captures API/CLI、1639异常、
+  580 lifecycle**通过，30份API验证层，growth2555904bytes。另三份旧源码新录兼容、
+  T35新录与更严格的首dispatch初值回退通过；无本批计划内自动回归欠项。
+- 新增161异常、GPU地址清零后的合法重定位正例；真实帧内资源重绑native正常、离线拒绝。
+  仅顶层Shared目的buffer/只读成员/FS packet；不承诺nested、GPU生成、VS/CS或任意重绑。
+- 日志 `/tmp/metal-batch57-final.log`；库/app `8e84e249d684…`；GUI `fe8bcf852b68…`，
+  只补buffer成员槽位映射并编译，未运行。UI待验 **T34–T57+T10 marker，共25份**，
+  总单保留全部旧项并补T57/T35差异；未使用Computer Use、未提交，用户UE路线保留。
+- 下一编号T58，候选texture views/共享存储别名，先审查初值及双向写入语义。
+  以下均为历史检查点。
+
+## 上一检查点：BATCH54–56 三族集中自动通过
+
+- [BATCH54-56](BATCH54-56.md)为本波唯一详细记录：重载兼容1bridge/3旧chunk，Function
+  创建4bridge/2旧chunk，Argument texture/sampler数组及reflection创建3bridge。
+  **148→140 bridge，87→82旧chunk**；仅追加async1272/1273，Max1274。
+- 三fixture各native/capture6帧；集中**57 captures API/CLI、1478异常、570 lifecycle**通过，
+  29份API Metal验证层，growth1671168bytes；另3份旧源码新录兼容通过。无自动回归欠项。
+  日志 `/tmp/metal-wave54-56-final.log`；库/app `71cf518d1e5b…`，GUI executable未改。
+- C已明确收窄；下波优先单独处理argument buffer成员/constants/arrayElement及GPU地址
+  重定位、CPU初值/提交更新/回退，不可仅移除bridge标记。下一编号T57。
+- UI待验 **T34–T56 + T10 marker共24份**，最小差异并入QA_CONSOLIDATED，全部保持开放。
+  未启动GUI/Computer Use、未提交；旧修改及用户UE路线保留。以下均为历史检查点。
+
+## 上一检查点：推进节奏调整
+
+- 执行规则集中于PLAN“当前推进节奏”；连续2–3族、定向检查、集中关口，最多3族验证间隔。
+  以后此处只保留短检查点，不继续复制完整批次内容到多份文档。
+- 本次仅改推进规则与新增 `test_metal_replay_targeted_macos.sh`，无Metal功能/格式变更。
+  快速入口9份代表capture的API Metal验证层与CLI通过，重复T53已去重；参数/缺失capture
+  错误非零退出、bash语法及diff检查通过。日志 `build-macos-debug/metal-targeted.IAT5mF/`。
+- 最近集中基线仍是BATCH53：148 bridge / 87旧chunk，54 captures/1330异常/540 lifecycle。
+  本波次新增功能族0，未产生新的驱动回归欠项；本次没有重跑1330异常/540 lifecycle。
+- 下一步：在一份活跃BATCH表中确定首批重载兼容/Function创建/Argument encoder的边界与
+  必跑旧T，再连续实现；编号从T54起。真实依赖或失败可调整顺序，不强凑bridge数量。
+- GUI待验仍为T34–T53+T10 marker共21份，见QA_PENDING/QA_CONSOLIDATED；未启动GUI，
+  未使用Computer Use、未提交。下方BATCH53及更早条目保留为历史证据。
+
+## 2026-09-26 BATCH53 自动完成：ICB GPU 操作与可靠回退
+
+- 单命令 reset 接通 1 bridge；GPU ICB reset/copy/optimize 接通旧 chunk1224–1226。
+  剩余 **bridge 148 / 旧 chunk 87**。追加1270 reset、1271 初值不可用诊断，Max1272。
+  后三项 bridge 原本已转发，不重复计算减少量。详见 BATCH53 / PHASE53。
+- CPU 初始化的 Shared render ICB 支持跨 ICB/同 ICB 非重叠 copy、GPU reset/optimize、
+  空命令与单命令 reset/re-encode；每个 replay epoch 恢复初值，保留 copied PSO/buffers/
+  indexed 状态。捕获前 GPU 内容不可重建时明确拒绝，不声称通用 GPU-generated ICB 支持。
+- T53 native/capture 各12帧、四阶段像素、9 draw / 5 empty、资源状态和往返均通过。
+  新增194异常+3合法变体，纳入旧70 ICB异常+2空命令正例；旧缺失pipeline崩溃已修复。
+  **54 captures API/CLI、1330 类异常、540 次 lifecycle**通过，growth **2,228,224 bytes**；
+  26份 API Metal验证层。另帧前GPU写入负例native/capture各3帧正常，离线明确拒绝。
+- 最终日志 `/tmp/metal-batch53-final.log`；一键 `test_metal_capture_batch53_macos.sh`，
+  仅 replay 设 LAST_TEST=53。库/app `a5dcf57234590…`，T53 `6ad98408529a…`；GUI未改。
+- 无GUI/Computer Use、无提交，保留旧修改和用户UE路线。**T34–T53 + T10 marker 共21份**
+  待集中人工，最小差异已并入 QA_CONSOLIDATED；PHASE35–53 仍开放。下一编号 T54/PHASE54。
+  以下为历史检查点，不代表当前剩余计数。
+
+## 2026-09-26 BATCH51–52 自动完成：bridge 已降到 149
+
+- 新增 9 bridge：T51 六个异步 library/render/compute 创建入口；T52 newEvent、signal、
+  wait。剩余 bridge **158→149**，旧 chunk 未处理分支 **93→90**；新增可回放 async
+  chunk1264–1269，Max1270。详见 BATCH51-52、PHASE51、PHASE52。
+- T51 保留原生 callback/error/reflection、复制 descriptor、登记父依赖、处理借用结果
+  所有权；五个 PSO 均实际执行。Source async 离线仅支持 options=nil，不运行应用 block。
+  扩展 PSO/Event 独立 native 引用，补 source 资源校验及 Device 类型初始化。
+- T52 原生编码 signal/wait，按 replay epoch 重建 Event 防止回退残留；验证两队列三
+  提交的 GPU 数据链。仅支持已捕获先 signal 后 wait，外部/SharedEvent/future-signal
+  wait 拒绝；不是任意并行调度重构。未支持路径不以空实现冒充成功。
+- 最终 **53 captures API/CLI、1066 类异常、530 次 lifecycle** 通过，resident growth
+  **1,736,704 bytes**；18 份 API Metal 验证层。新增 226 类异常（104+122）和四个合法
+  变体；旧正式 captures 未重录，另三份 source 新录兼容 API/CLI 通过。
+- 库/app副本 `8dbbe2d60146…`；T51/T52 `e0fc940f6ce0…` / `e0116d679d5f…`；GUI
+  executable 未改。日志 `/tmp/metal-batch51-52-final.log`，一键入口
+  `test_metal_capture_batch51_52_macos.sh`，仅 replay 设 LAST_TEST=52。
+- 无 GUI/Computer Use、无提交，用户 UE 路线和原有 dirty 修改保留。**T34–T52 + T10
+  marker 共 20 份**待人工，QA_CONSOLIDATED 已合并最小 UI 差异；PHASE35–52 仍开放。
+  下一编号 T53/PHASE53。以下是历史检查点，不代表当前剩余计数。
+
+## 2026-09-26 BATCH50 自动完成：两种纹理CPU读取与子资源同步
+
+- T50接通2 bridge / 3旧chunk1072/1073/1205，剩余 **158/93**，Max1264不变。
+  CPU getBytes保留原生透传，新增帧内元数据/资源引用；离线不写应用CPU指针。
+  synchronizeTexture真实编码并检查Managed/当前encoder/子资源；Shared同步明确拒绝。
+- 四次CPU读回覆盖局部2D/mip/array slice、3D两层、host行/图像padding和哨兵；native及
+  capture各12帧48次读取通过。API核对独立读/同步纹理保留、2D子资源、CPU派生68-byte
+  参数/回退/usage、RGBA43/79/113/255。3D viewer未扩展，边界见PHASE50。
+- **51 captures API/CLI、840类异常、510次lifecycle**通过，growth **999,424bytes**；
+  16份API Metal验证层。新增176异常+2合法变体。最终一键/日志/完整hash见BATCH50，
+  只重放LAST_TEST=50；旧正式capture不重录。
+- 库/app `a648ce05f576…`，T50 `f56406953e8d…`。无GUI/Computer Use、无提交。
+  全部待人工 **T34–T50 + T10 marker，18份capture**，阶段和批次保持开放。
+
+## 2026-09-26 BATCH49 自动完成：两回调入口与CPU提交/回退修复
+
+- T49 scheduled/completed handlers：2 bridge、旧chunk1049/1054，剩余 **160/96**；
+  Max1264不变。Native回调保持包装身份/生命周期，离线只呈现注册记录，不执行应用block。
+- 修复commit后取CPU快照的竞态、submission更新在部分replay中太晚应用，以及CPU更新
+  buffer回退残留；payload改为安全读取并校验范围/身份/实际长度。边界见PHASE49。
+- 两command buffer、八回调、两个dispatch/三个fill/一个draw，callback前后12-byte参数、
+  412-byte output及padding、反射/绑定、RGBA41/67/101/255和事件回退通过。
+- **50 captures API/CLI、664类异常、500次lifecycle**通过，growth **3,178,496bytes**；
+  15份Replay API Metal验证层。最终一键含三份源码新录兼容检查，全部使用同一库。
+  入口`test_metal_capture_batch49_macos.sh`，日志和版本见BATCH49；仅重放LAST_TEST=49。
+- 库/app `1cd92c21c774…`，T49 `82771996ea03…`。无GUI/Computer Use、无提交。
+  全部待人工 **T34–T49 + T10 marker，17份capture**；阶段保持开放，集中总单保留全部旧项。
+
+## 2026-09-26 BATCH48 自动完成：4个bridge、4个旧chunk与shader生命周期修复
+
+- T48 file/URL/data/bundle binary library，旧chunk1015–1018接通；Max1264不变。
+  剩余 **162 bridge / 98 chunk**。默认库读取、失败返回值以及library/function提前释放
+  的heap corruption一并修复；其他类型wrapper所有权尚未重构，详见PHASE48。
+- 五个库均实际执行，首帧前释放全部源对象；移走原metallib/app/bundle仍能回放。
+  五份10765-byte嵌入payload逐字节核对、676-byte输出/padding、反射/依赖/回退/像素通过。
+- **49 captures API/CLI、577类异常、490次lifecycle**通过，growth **1,228,800bytes**；
+  14份Replay API Metal验证层。另三份源码路径新录兼容capture各API与3-loopCLI通过。
+  主batch和补充检查分段完成且已整合脚本，日志/范围见BATCH48；只重放LAST_TEST=48。
+- 库/app `6df633b629eb…`，T48 `f71eaf76384b…`。未运行GUI/Computer Use，未提交。
+  全部待人工 **T34–T48 + T10 marker，16份capture**，阶段和批次不关闭。
+  二进制库无MSL源文件属预期；动态库/跨OS-GPU/真实UE支持不在本批承诺。
+
+## 2026-09-26 BATCH47 自动完成：再接通3个bridge、3个旧chunk
+
+- 同步render options/reflection、compute function options/reflection、compute descriptor。
+  旧chunk1022/1024/1025接通，Max1264不变；剩余 **166 bridge / 102 chunk**。
+- T47六个pipeline，原生reflection及结构体成员、descriptor线程数/整倍数/mutability，
+  三次dispatchThreadgroups加一次dispatchThreads、两个draw；532-byte数据、20-byte padding、
+  pipeline身份/绑定/反射/usage和事件回退、最终RGBA17/41/73/255自动核对。
+- 最终一键batch通过：**48 captures API/CLI、513类异常、480次lifecycle**，resident growth
+  **491,520bytes**；13份Replay API Metal验证层。T47新增84负例及options1/2合法变体。
+  `test_metal_capture_batch47_macos.sh` / `/tmp/metal-batch47-final.log`；只重放设LAST_TEST=47。
+- 库/app `16c921313c2f…`，T47 `a28eef0f401b…`；完整hash/范围见BATCH47、PHASE47。
+  未运行GUI/Computer Use，未提交。全部待人工 **T34–T47 + T10 marker，15份capture**。
+  高级descriptor/异步pipeline不在支持范围，不宣称真实UE兼容；阶段继续开放。
+
+## 2026-09-26 BATCH45–46 自动完成：再接通7个bridge、9个旧chunk
+
+- T44新增Fence包装/创建和Blit/Compute/Render update/wait；T45/T46新增两种定时present、
+  buffer添加/清空debug marker。合计11入口，Compute追加chunk1262/1263；剩余 **169/105**。
+- Fence执行真实GPU同步，检查类型/active encoder/先行update与replay epoch，拒绝无效
+  等待；marker保留frame引用并清理被后台reset覆盖的注释。timed present保留参数及输出
+  action，离线replay不等待原机器时钟。不宣称跨队列/外部fence或高级stage已支持。
+- 完整 `test_metal_capture_batch45_46_macos.sh` 通过：三模式native验证层/capture/XML/
+  3-loopCLI、精确GPU数据/usage/seek，最终 **47份API/CLI、429类异常、470次lifecycle**；
+  resident growth **1,638,400bytes**。12份replay API验证层；T00空帧另做CLI/40次定向生命周期。
+- 库/app副本 `33c4399361f7…`；T44/T45/T46为 `caa028676f68…` / `9e71f6b21883…` /
+  `7b1fbea45e1f…`。详情 `BATCH45-46.md`、PHASE45/46；仅重放入口设LAST_TEST=46。
+- 全部待人工 **T34–T46 + T10 marker，14份capture**，总单QA_CONSOLIDATED保留全部旧项。
+  GUI/Computer Use未执行，阶段/批次保持开放；没有提交或覆盖既有UE路线。
+
+## 2026-09-26 BATCH43–44 自动完成，集中 GUI QA 扩展至十一份
+
+- T42新增七个compute resource/barrier/marker入口；T43新增五个render分阶段声明/barrier
+  入口，保留声明-only资源与初始内容。新chunk1255–1261追加。剩余bridge/chunk **176/114**。
+- 修复失败render pipeline创建包装空对象；补齐vertex RW buffer的descriptor、storage
+  分类和usage，以及VS Storage Buffers表入口。UI源码已构建，未做GUI验证。
+- native验证层/capture/XML/3-loopCLI与逐事件buffer/pixel/descriptor通过；最终联合
+  **44 captures API/CLI、342类异常、440次lifecycle**通过，resident growth **2,899,968 bytes**。
+  共享脚本加入T12/T19/T42/T43验证层，目前9份replay验证层覆盖。修正旧harness样例识别
+  和缩略图假设，不减去旧fixture断言；证据见 `BATCH43-44.md`。
+- 正式库/app副本 `736925e6e195…`，app executable `3cc9c3b63507…`；
+  T42/T43 captures `25c6e7349f22…` / `7139504e2357…`。新一键入口
+  `test_metal_capture_batch43_44_macos.sh`，仅重放设LAST_TEST=43。PHASE43/44列边界。
+- **T34–T43 + T10 marker十一份**仍待人工，统一总单 `QA_CONSOLIDATED.md`。
+  全部未验阶段保持开放；无Computer Use、无GUI、无提交；原有UE路线和编辑保留。
+
+## 2026-09-26 BATCH41–42 自动完成，继续累积集中 GUI QA
+
+- T40接通compute inline bytes、buffer offset、动态threadgroup memory三个此前隐式转发
+  的入口；新chunk1252–1254追加。五次reduction验证CPU数据拷贝、真实/inline切换、两个
+  encoder状态重置、offset/size事件快照、结果与padding。dispatch校验使用reflection及
+  真实pipeline/device限制，含static+dynamic memory总量；旧compute布局限制仍保留。
+- T41接通blit descriptor创建和四种CPU/GPU优化提示，补frame引用、修复CPU slice/mip
+  写错chunk ID。额外13×7纹理只由hint引用，捕获/回退内容正确。带counter sample buffer
+  的descriptor明确拒绝。剩余bridge/chunk **181/119**；计数不包含无旧标记的compute入口。
+- 新两项Metal API Validation native、capture/XML、Replay API、3-loop CLI通过。
+  最终整批脚本通过 **42 captures API/CLI、239类异常、42×10 lifecycle**，resident growth
+  **2,736,128 bytes**（最终显示布局修复后，门限64MiB）；脚本/源码格式检查通过。
+  T40/T41 hashes `73a3398cec48…` / `35745dc5f7ab…`。
+- 补跑replay验证层发现并修复共有display参数60/64-byte布局差异，显式padding+编译断言；
+  T01/T02/T09/T40/T41验证层均通过，新增到共享脚本。当前库/app更新为`b30a0e4cb6ee…`，
+  上述最终联合回归已在新库上再次通过；802,816bytes属padding修复前整批结果。
+- 一键入口 `test_metal_capture_batch41_42_macos.sh`；仅重放设LAST_TEST=41，详见
+  `BATCH41-42.md`、PHASE41/42。集中QA扩展为 **T34–T41 + T10 marker九份capture**，
+  见 `QA_CONSOLIDATED.md`。全部GUI未执行，阶段/批次保持开放；没有Computer Use、没有
+  启动qrenderdoc、没有提交。原有UE路线及所有未提交编辑保留。
+
+## 2026-09-26 BATCH39–40 自动完成，已合并后续 GUI QA
+
+- T38 接通 VS/FS/CS single/batch sampler LOD 六个入口；有效 descriptor 按事件保存，
+  普通 rebind 恢复静态范围，nil/batch 空槽和各 stage 不串状态。新增两个 compute 尾部
+  chunk，不重编号旧 ID。剩余 bridge/chunk **182/124**（本会话基线216/165）。
+- T39 接通 private GPU buffer staging readback，验证非对齐字节区间、末尾截断、非法
+  资源/范围与事件回退。修复 direct compute 原先只接受纹理滤镜布局的问题，新增
+  texture→buffer/buffer-only 分支和 reflection 绑定/大小/对齐检查；旧路径约束仍保留。
+- 新两项 native/capture/XML/API/3-loop CLI 通过。最终联合入口覆盖 T01–T39 + T10_debug
+  **40 captures API/CLI、175类异常检查、40×10 lifecycle**；lifecycle 新增同进程重复
+  Private/Shared 非对齐读回，最终 resident growth **557,056 bytes**（门限64MiB）。
+  库与 app 内嵌库同为 `35150e09a506…`。批次说明 `BATCH39-40.md`，新样例 T38/T39 SHA 为
+  `92d869806241…` / `0d552603e709…`。
+- `QA_CONSOLIDATED.md` 已把 T34–T39 + T10 marker 七份待验 capture 合并为同一 app
+  验收顺序；公共操作只做一次。用户将在重置后集中 QA，现在不催促、不做 Computer Use。
+  当前库版本见该总单；旧单 hash 属于历史检查点。PHASE35–40、相关三批均保持开放。
+  全部修改未提交，原有 UE 路线与其他编辑保留。
+
+## 2026-09-26 BATCH38 自动完成，累计待人工 T34–T37/T10 marker
+
+- 在 BATCH35–37 之后继续扩展：八项 visibility/store/barrier render 入口、四项 blit
+  双向/whole/range copy 实际 replay、三项 blit debug chunk；剩余 bridge/chunk 为
+  **186/128**（会话基线 216/165）。同时修复 visibility buffer 漏捕获导致的 native
+  replay 崩溃和 Unknown store 在提前结束 pass 时的风险；新增 D32S8 raw readback/picking。
+- T36/T37/T10_debug 原生、capture/XML、Replay API、逐份 3-loop CLI 通过；最终库上
+  T01–T37 + T10_debug 共 38 captures API/CLI 回归通过，38 × 10 lifecycle 通过，
+  最终脚本 resident growth 2,064,384 bytes（门限 64 MiB）。
+  T34/T35 14、T36 14、T37 43，共 71 类异常输入被干净拒绝；详见 `BATCH38.md`。
+  统一复跑入口 `test_metal_replay_batch35_38_macos.sh`；不重新录制历史 captures。
+- 最终库与 app 内嵌库 SHA `47e0635e8736…`；T36 `436b3262fef5…`、T37
+  `f87cbbc8ca00…`、T10_debug `2d4a8d609bae…`；T34/T35 不变。旧 T10 capture 保留。
+- 没有启动 qrenderdoc 或使用 Computer Use，没有提交或发布；原有 UE 路线等修改保留。
+  PHASE35–38、BATCH35–37/BATCH38 均保持开放。后续读 `QA_BATCH35-37.md` 与
+  `QA_BATCH38.md`，一次指导用户验证。下方 BATCH35–37 是后续扩展前的历史检查点，
+  当前版本/计数以上述条目为准。
+
+## 2026-09-26 BATCH35-37 自动完成，T34/T35/T36 GUI L4 延后
+
+- T34 接通 render vertex/fragment inline bytes、buffer arrays 与 vertex offset；
+  T35 接通 limited queue、descriptor/unretained command buffer 和两种 compute
+  encoder 创建及 `waitUntilScheduled`；T36 接通 viewport/scissor arrays、depth
+  clip/bias、triangle fill、blend constant，以及 command buffer/render encoder 的
+  debug group/signpost。bridge/chunk 未接通计数从 216/165 降为 194/143。
+- 两个终端 batch 均通过：三项 native、capture/XML、Replay API、逐份 3-loop CLI，
+  T34/T35 共 14 类和 T36 共 5 类异常捕获拒绝；最终 T34/T35/T36 × 10 轮
+  lifecycle 最后一轮 resident growth 606,208 bytes。共享 render 路径的 T01/T02/T04/
+  T07/T17 Replay API 与 CLI 通过；T00、这些旧场景及 T34/T36 的 8 captures × 10
+  lifecycle 通过，growth 245,760 bytes。qrenderdoc app/renderdoccmd 仅从终端构建，
+  未启动 GUI；`git diff --check` 通过。
+- 最终 replay 库及 app 内嵌库 SHA-256 `ba380a0317b6…`；T34/T35/T36 captures
+  分别为 `e6ee77deb50a…`、`7fbed8c95df6…`、`37d6c5cb1306…`。批次说明见
+  `BATCH35-37.md`，自动测试入口与后续 GUI 步骤见 `QA_BATCH35-37.md`。
+- 按用户要求本轮不使用 Computer Use。`QA_PENDING.md` 已登记 T34/T35/T36；
+  PHASE35–37 与 BATCH35-37 保持开放。此前 UE 5.6.1 路线记录及其他未提交改动保留。
+
+## 2026-09-26 已定位 UE 5.6.1 官方 Mac 构建
+
+- 用户提供 `/Volumes/CauseUseMac/UE_5.6`。只读检查确认官方 promoted
+  UE 5.6.1、arm64 `UnrealEditor` 存在，足够用作普通帧和后续 Nanite
+  最小场景试截的固定目标。尚未启动 UE 或试截帧。
+- 安装内 `RenderDocPlugin.uplugin` 的 `PlatformAllowList` 只有 Win64/Linux；
+  Mac 首轮应从终端启动外部注入路径，不预期现有插件按钮可用。
+  Epic UE 5.6 Mac 要求列 M2+ Nanite/VSM Beta。细节见
+  `REAL_WORLD_CAPTURE_ROADMAP.md`。当前 `QA_PENDING.md` 无人工待验项。
 
 ## 2026-09-26 真实应用截帧与高级功能路线评估
 
@@ -272,8 +1809,9 @@
 
 ## 当前批次
 
-最近关闭批次为 `BATCH31-32.md`；下一批为 `BATCH33-34.md`，第一项 P33.1。
-以本文件顶部 2026-09-26 检查点为准。上一批 BATCH29-30 也已关闭。
+最近关闭批次为 `BATCH33-34.md`；当前 `BATCH35-37.md` 的自动验证已完成，
+T34/T35/T36 GUI L4 待后续 chat，因此批次保持开放。以本文件顶部 2026-09-26
+检查点为准。BATCH29-32 也已关闭。
 以下条目为 BATCH29-30 进行时的历史状态。
 
 - 2026-09-24 已关闭 `BATCH27-28.md`：T26 ICB `inheritPipelineState` 与 T27

@@ -23,6 +23,8 @@
  ******************************************************************************/
 
 #include "metal_command_buffer.h"
+#include "metal_acceleration_structure_command_encoder.h"
+#include "metal_event.h"
 #include "metal_types_bridge.h"
 
 // Bridge for MTLCommandBuffer
@@ -132,8 +134,18 @@
 
 - (void)addScheduledHandler:(MTLCommandBufferHandler)block
 {
-  METAL_NOT_HOOKED();
-  return [self.real addScheduledHandler:block];
+  if(!block)
+  {
+    [self.real addScheduledHandler:block];
+    return;
+  }
+  // Let Metal retain/copy and invoke the application block on its normal callback thread.
+  // Capturing self retains the proxy until the native callback is released, and prevents
+  // the real command buffer from escaping back into the application's wrapped object graph.
+  GetWrapped(self)->CaptureHandlerRegistration(false);
+  [self.real addScheduledHandler:^(id<MTLCommandBuffer> realCommandBuffer) {
+    block(self);
+  }];
 }
 
 - (void)presentDrawable:(id<MTLDrawable>)drawable
@@ -143,28 +155,32 @@
 
 - (void)presentDrawable:(id<MTLDrawable>)drawable atTime:(CFTimeInterval)presentationTime
 {
-  METAL_NOT_HOOKED();
-  return [self.real presentDrawable:drawable atTime:presentationTime];
+  GetWrapped(self)->presentDrawable((MTL::Drawable *)drawable, presentationTime, false);
 }
 
 - (void)presentDrawable:(id<MTLDrawable>)drawable
     afterMinimumDuration:(CFTimeInterval)duration
     API_AVAILABLE(macos(10.15.4), ios(10.3), macCatalyst(13.4))
 {
-  METAL_NOT_HOOKED();
-  return [self.real presentDrawable:drawable afterMinimumDuration:duration];
+  GetWrapped(self)->presentDrawable((MTL::Drawable *)drawable, duration, true);
 }
 
 - (void)waitUntilScheduled
 {
-  METAL_NOT_HOOKED();
-  return [self.real waitUntilScheduled];
+  GetWrapped(self)->waitUntilScheduled();
 }
 
 - (void)addCompletedHandler:(MTLCommandBufferHandler)block
 {
-  METAL_NOT_HOOKED();
-  return [self.real addCompletedHandler:block];
+  if(!block)
+  {
+    [self.real addCompletedHandler:block];
+    return;
+  }
+  GetWrapped(self)->CaptureHandlerRegistration(true);
+  [self.real addCompletedHandler:^(id<MTLCommandBuffer> realCommandBuffer) {
+    block(self);
+  }];
 }
 
 - (void)waitUntilCompleted
@@ -198,15 +214,15 @@
 - (nullable id<MTLComputeCommandEncoder>)computeCommandEncoderWithDescriptor:
     (MTLComputePassDescriptor *)computePassDescriptor API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real computeCommandEncoderWithDescriptor:computePassDescriptor];
+  return id<MTLComputeCommandEncoder>(GetWrapped(self)->computeCommandEncoderWithDescriptor(
+      (MTL::ComputePassDescriptor *)computePassDescriptor));
 }
 
 - (nullable id<MTLBlitCommandEncoder>)blitCommandEncoderWithDescriptor:
     (MTLBlitPassDescriptor *)blitPassDescriptor API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real blitCommandEncoderWithDescriptor:blitPassDescriptor];
+  return id<MTLBlitCommandEncoder>(GetWrapped(self)->blitCommandEncoderWithDescriptor(
+      (MTL::BlitPassDescriptor *)blitPassDescriptor));
 }
 
 - (nullable id<MTLComputeCommandEncoder>)computeCommandEncoder
@@ -217,22 +233,34 @@
 - (nullable id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:
     (MTLDispatchType)dispatchType API_AVAILABLE(macos(10.14), ios(12.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real computeCommandEncoderWithDispatchType:dispatchType];
+  return id<MTLComputeCommandEncoder>(
+      GetWrapped(self)->computeCommandEncoder((MTL::DispatchType)dispatchType));
 }
 
 - (void)encodeWaitForEvent:(id<MTLEvent>)event
                      value:(uint64_t)value API_AVAILABLE(macos(10.14), ios(12.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real encodeWaitForEvent:event value:value];
+  if([(id)event isKindOfClass:[ObjCBridgeMTLEvent class]])
+    GetWrapped(self)->encodeEvent(GetWrapped(event), value, false);
+  else
+  {
+    // Shared/external events are not wrapped yet. Preserve native behavior, but ensure their
+    // unsupported dependency fails closed on replay instead of treating a native object as a proxy.
+    [self.real encodeWaitForEvent:event value:value];
+    GetWrapped(self)->CaptureEvent(NULL, value, false);
+  }
 }
 
 - (void)encodeSignalEvent:(id<MTLEvent>)event
                     value:(uint64_t)value API_AVAILABLE(macos(10.14), ios(12.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real encodeSignalEvent:event value:value];
+  if([(id)event isKindOfClass:[ObjCBridgeMTLEvent class]])
+    GetWrapped(self)->encodeEvent(GetWrapped(event), value, true);
+  else
+  {
+    [self.real encodeSignalEvent:event value:value];
+    GetWrapped(self)->CaptureEvent(NULL, value, true);
+  }
 }
 
 - (nullable id<MTLParallelRenderCommandEncoder>)parallelRenderCommandEncoderWithDescriptor:
@@ -260,29 +288,28 @@
 - (nullable id<MTLAccelerationStructureCommandEncoder>)
     accelerationStructureCommandEncoder API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real accelerationStructureCommandEncoder];
+  return id<MTLAccelerationStructureCommandEncoder>(
+      GetWrapped(self)->accelerationStructureCommandEncoder());
 }
 
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_13_0
 - (id<MTLAccelerationStructureCommandEncoder>)accelerationStructureCommandEncoderWithDescriptor:
     (MTLAccelerationStructurePassDescriptor *)descriptor API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real accelerationStructureCommandEncoderWithDescriptor:descriptor];
+  return id<MTLAccelerationStructureCommandEncoder>(
+      GetWrapped(self)->accelerationStructureCommandEncoderWithDescriptor(
+          (MTL::AccelerationStructurePassDescriptor *)descriptor));
 }
 #endif
 
 - (void)pushDebugGroup:(NSString *)string API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real pushDebugGroup:string];
+  GetWrapped(self)->pushDebugGroup((NS::String *)string);
 }
 
 - (void)popDebugGroup API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real popDebugGroup];
+  GetWrapped(self)->popDebugGroup();
 }
 
 @end

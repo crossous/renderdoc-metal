@@ -34,6 +34,28 @@ WrappedMTLCommandQueue::WrappedMTLCommandQueue(MTL::CommandQueue *realMTLCommand
     AllocateObjCBridge(this);
 }
 
+bool WrappedMTLCommandQueue::ReplayCommandBuffer(ResourceId id, MTL::CommandBuffer *real)
+{
+  if(!real)
+    return false;
+
+  WrappedMTLCommandBuffer *wrapped =
+      (WrappedMTLCommandBuffer *)GetResourceManager()->GetResource(id, true);
+  if(wrapped)
+    GetResourceManager()->ReplaceRealResource(wrapped, real);
+  else
+    GetResourceManager()->WrapResource(id, real, wrapped);
+  wrapped->SetCommandQueue(this);
+  if(!m_Device->SetReplayCommandBuffer(wrapped))
+    return false;
+  if(IsLoading(m_State))
+  {
+    m_Device->AddResource(id, ResourceType::CommandBuffer, "Command Buffer");
+    m_Device->DerivedResource(GetResID(this), id);
+  }
+  return true;
+}
+
 template <typename SerialiserType>
 bool WrappedMTLCommandQueue::Serialise_commandBuffer(SerialiserType &ser,
                                                      WrappedMTLCommandBuffer *buffer)
@@ -57,7 +79,8 @@ bool WrappedMTLCommandQueue::Serialise_commandBuffer(SerialiserType &ser,
       GetResourceManager()->WrapResource(CommandBuffer, realMTLCommandBuffer,
                                          wrappedMTLCommandBuffer);
     wrappedMTLCommandBuffer->SetCommandQueue(CommandQueue);
-    m_Device->SetReplayCommandBuffer(wrappedMTLCommandBuffer);
+    if(!m_Device->SetReplayCommandBuffer(wrappedMTLCommandBuffer))
+      return false;
     if(IsLoading(m_State))
     {
       m_Device->AddResource(CommandBuffer, ResourceType::CommandBuffer, "Command Buffer");
@@ -99,5 +122,109 @@ WrappedMTLCommandBuffer *WrappedMTLCommandQueue::commandBuffer()
   return wrappedMTLCommandBuffer;
 }
 
+template <typename SerialiserType>
+bool WrappedMTLCommandQueue::Serialise_commandBufferWithDescriptor(
+    SerialiserType &ser, WrappedMTLCommandBuffer *buffer, bool retainedReferences,
+    uint64_t errorOptions)
+{
+  SERIALISE_ELEMENT_LOCAL(CommandQueue, this);
+  SERIALISE_ELEMENT_LOCAL(CommandBuffer, GetResID(buffer)).TypedAs("MTLCommandBuffer"_lit);
+  SERIALISE_ELEMENT(retainedReferences).Important();
+  SERIALISE_ELEMENT(errorOptions).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    if(errorOptions > (uint64_t)MTL::CommandBufferErrorOptionEncoderExecutionStatus)
+    {
+      RDCERR("Invalid Metal command-buffer error options 0x%llx", errorOptions);
+      return false;
+    }
+    MTL::CommandBufferDescriptor *descriptor = MTL::CommandBufferDescriptor::alloc()->init();
+    descriptor->setRetainedReferences(retainedReferences);
+    descriptor->setErrorOptions((MTL::CommandBufferErrorOption)errorOptions);
+    MTL::CommandBuffer *real = Unwrap(CommandQueue)->commandBuffer(descriptor);
+    descriptor->release();
+    return ReplayCommandBuffer(CommandBuffer, real);
+  }
+  return true;
+}
+
+WrappedMTLCommandBuffer *WrappedMTLCommandQueue::commandBufferWithDescriptor(
+    MTL::CommandBufferDescriptor *descriptor)
+{
+  if(!descriptor)
+    return NULL;
+  const bool retainedReferences = descriptor->retainedReferences();
+  const uint64_t errorOptions = (uint64_t)descriptor->errorOptions();
+  MTL::CommandBuffer *real = NULL;
+  SERIALISE_TIME_CALL(real = Unwrap(this)->commandBuffer(descriptor));
+  if(!real)
+    return NULL;
+
+  WrappedMTLCommandBuffer *wrapped = NULL;
+  ResourceId id = GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
+  wrapped->SetCommandQueue(this);
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLCommandQueue_commandBufferWithDescriptor);
+    Serialise_commandBufferWithDescriptor(ser, wrapped, retainedReferences, errorOptions);
+    MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
+    record->AddChunk(scope.Get());
+    record->cmdInfo = new MetalCmdBufferRecordingInfo(this);
+  }
+  else
+  {
+    GetResourceManager()->AddResource(id, wrapped);
+  }
+  return wrapped;
+}
+
+template <typename SerialiserType>
+bool WrappedMTLCommandQueue::Serialise_commandBufferWithUnretainedReferences(
+    SerialiserType &ser, WrappedMTLCommandBuffer *buffer)
+{
+  SERIALISE_ELEMENT_LOCAL(CommandQueue, this);
+  SERIALISE_ELEMENT_LOCAL(CommandBuffer, GetResID(buffer)).TypedAs("MTLCommandBuffer"_lit);
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+    return ReplayCommandBuffer(CommandBuffer,
+                               Unwrap(CommandQueue)->commandBufferWithUnretainedReferences());
+  return true;
+}
+
+WrappedMTLCommandBuffer *WrappedMTLCommandQueue::commandBufferWithUnretainedReferences()
+{
+  MTL::CommandBuffer *real = NULL;
+  SERIALISE_TIME_CALL(real = Unwrap(this)->commandBufferWithUnretainedReferences());
+  if(!real)
+    return NULL;
+
+  WrappedMTLCommandBuffer *wrapped = NULL;
+  ResourceId id = GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
+  wrapped->SetCommandQueue(this);
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLCommandQueue_commandBufferWithUnretainedReferences);
+    Serialise_commandBufferWithUnretainedReferences(ser, wrapped);
+    MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
+    record->AddChunk(scope.Get());
+    record->cmdInfo = new MetalCmdBufferRecordingInfo(this);
+  }
+  else
+  {
+    GetResourceManager()->AddResource(id, wrapped);
+  }
+  return wrapped;
+}
+
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandQueue, WrappedMTLCommandBuffer *,
                                             commandBuffer);
+INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandQueue, WrappedMTLCommandBuffer *,
+                                            commandBufferWithDescriptor, bool retainedReferences,
+                                            uint64_t errorOptions);
+INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandQueue, WrappedMTLCommandBuffer *,
+                                            commandBufferWithUnretainedReferences);

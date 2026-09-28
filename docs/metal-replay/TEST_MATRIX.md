@@ -66,6 +66,36 @@
 | T31 | compute 批量资源绑定 | 非零 range、空槽/覆盖、texture/sampler/buffer 批量入口 | P2 | 自动与 GUI L4 通过；EID 7 分组、空槽、筛选、状态栏已验，GUI 导出入口由用户本轮免复验且自动 DDS/raw 已核对；阶段已关闭 |
 | T32 | CPU 参数 compute indirect dispatch | 非零 offset、间接 threadgroup 数量与资源 usage | P2 | Native/Capture/XML/Replay API、5 类异常拒绝、联合 CLI/lifecycle 与 GUI L4 通过；新版实际执行数量摘要已验，阶段已关闭 |
 | T33 | GPU 生成参数 compute indirect dispatch | compute 写入参数、跨 encoder 可见性与间接 dispatch | P2 | Native/Capture/XML/Replay API、6 类异常拒绝、写入前后/dispatch 后 seek、联合 CLI/lifecycle 与 GUI L4 通过；新版实际执行数量摘要已验，阶段已关闭 |
+| T34 | render inline bytes 与 buffer batch binding | vertex/fragment bytes、buffer arrays、vertex offset update | P1 | Native/Capture/XML/Replay API、像素/state/usage、10 类异常拒绝、CLI/lifecycle 自动通过；GUI L4 待验 |
+| T35 | command 创建变体 | limited queue、descriptor/unretained command buffer、compute dispatch type、waitUntilScheduled | P1 | Native/Capture/XML/Replay API、两 dispatch/output、同步 chunk、4 类异常拒绝、CLI/lifecycle 自动通过；GUI L4 待验 |
+| T36 | render 动态状态与 debug markers | viewport/scissor arrays、depth clip/bias、fill、blend、visibility、store/options、barrier、markers、D32S8 API | P1 | Native/Capture/XML/Replay API、像素/counter/全图 depth-stencil、14 类异常拒绝、CLI/lifecycle 自动通过；GUI L4 待验 |
+| T37 | pitched blit transfers | buffer↔texture、whole texture、slice/mip range copy、blit markers | P1 | Native/Capture/XML/Replay API、4096-byte padding/subresource/seek、43 类异常拒绝、CLI/lifecycle 自动通过；GUI L4 待验 |
+| T38 | sampler LOD clamps | VS/FS/CS single/batch LOD、nil、覆盖、plain恢复、事件descriptor | P1 | Native/Capture/XML/API/CLI/lifecycle和异常输入通过；GUI L4 待验 |
+| T39 | Private buffer readback | 同步staging、非对齐/截断、buffer-output compute、资源类型校验 | P1 | Native/Capture/XML/API/CLI、联合72类新异常、private staging生命周期通过；GUI L4 待验 |
+| T40 | Compute inline/offset/threadgroup | 三种新入口、inline拷贝、真实buffer重绑/offset、两块共享内存与新encoder重置 | P1 | Validation-layer Native/Capture/XML/API/CLI、41类异常、42×10联合lifecycle通过；GUI L4 待验 |
+| T41 | Blit descriptor/optimization | 创建入口、CPU/GPU whole与slice/mip hints、只由hint引用的texture | P1 | Validation-layer Native/Capture/XML/API/CLI、23类异常、旧copy断言与42×10联合lifecycle通过；GUI L4 待验 |
+| T42 | Compute资源声明/barrier/marker | single/batch资源、scope/resource依赖、三dispatch、声明-only资源保留 | P1 | Validation-layer Native+Replay/Capture/XML/API/CLI、35类异常、精确buffer/descriptor/usage/seek、44×10联合lifecycle通过；GUI L4 待验 |
+| T43 | Render分阶段声明/barrier | 两次VS buffer写入→FS读取、stage参数、RW descriptor/usage、失败pipeline语义 | P1 | Validation-layer Native+Replay/Capture/XML/API/CLI、68类异常、buffer/padding/pixel/seek、44×10联合lifecycle通过；VS Storage Buffers新条目及GUI L4待验 |
+| T44 | Fence跨encoder同步 | 创建/包装、Blit/CS/Render update/wait、Untracked buffers依赖、fence复用 | P1 | Native+Replay验证层/Capture/XML/API/CLI、56类异常、精确GPU数据/usage/逐API seek、47×10联合lifecycle通过；GUI L4待验 |
+| T45 | atTime present + buffer marker | Present资源登记、time metadata、marker添加/清空/范围、独立注释资源 | P1 | Native+Replay验证层/Capture/XML/API/CLI、21类异常、后台注释压缩与marker-only内容、47×10联合lifecycle通过；GUI L4待验 |
+| T46 | minimum-duration present | Present变体、duration metadata，复用fence及marker路径 | P1 | Native+Replay验证层/Capture/XML/API/CLI、10类异常、精确buffer/pixel/seek、47×10联合lifecycle通过；GUI L4待验 |
+| T47 | 同步pipeline创建变体 | render/compute options+reflection、compute descriptor、线程组限制、shader父依赖 | P1 | Native+Replay验证层/Capture/XML/API/CLI、84类异常+2合法options变体、六pipeline/532-byte数据/pixel/seek、48×10联合lifecycle通过；GUI L4待验 |
+| T48 | 预编译library | file/URL/data/bundle/default、源对象提前释放、嵌入二进制脱离原路径回放 | P1 | Native+Replay验证层/Capture/XML/五payload比对/API/CLI、64类异常、5库7shader/676-byte数据/pixel/seek、49×10联合lifecycle与3份源码新录兼容通过；GUI L4待验 |
+| T49 | Command buffer回调 | scheduled/completed、包装身份/闭包生命周期、CPU快照提交时机、shared更新部分replay/回退 | P1 | Native+Replay验证层/Capture/XML/API/CLI、87类异常、八回调/两dispatch/412-byte结果与padding/pixel/seek、50×10联合lifecycle与3份源码新录兼容通过；GUI L4待验 |
+| T50 | Texture CPU读取与同步 | 两getBytes、Managed synchronizeTexture、mip/slice/行与图像间距、独立资源保留、CPU派生GPU输入 | P1 | Native+Replay验证层/Capture/XML/API/CLI、176类异常+2合法metadata变体、四CPU读/三同步/68-byte参数回退、51×10联合lifecycle通过；3D仅native/capture读回、不含viewer，GUI L4待验 |
+| T51 | 异步Library/PSO创建 | 六completion入口、原生错误/反射、descriptor快照、包装身份/生命周期、五pipeline实际执行 | P1 | Native+Replay验证层/Capture/XML/API/CLI、104类异常+2合法options变体、七回调/三dispatch/两draw/428-byte数据与回退、53×10联合lifecycle及3份源码新录兼容通过；source options限nil，GUI L4待验 |
+| T52 | Event同步 | newEvent、signal/wait、双队列三提交、先signal后wait、epoch重建与seek | P1 | Native+Replay验证层/Capture/XML/API/CLI、122类异常+2合法wait变体、两Event/六同步/444-byte结果与padding/逐事件回退、53×10联合lifecycle通过；外部/SharedEvent/future-signal wait未支持，GUI L4待验 |
+| T53 | ICB GPU操作与单命令reset | Shared render ICB reset/copy/optimize、空命令、混合indexed状态复制、epoch初值恢复与未知初值拒绝 | P1 | Native+Replay验证层/Capture/XML/API/CLI、194新异常+3合法变体、旧70 ICB异常+2空命令正例、四阶段/9 draw/5 empty/7 GPU操作/资源及回退、54×10联合lifecycle通过；真实帧前GPU写入变体原生正确离线拒绝；GPU生成/Private/compute ICB未支持，GUI L4待验 |
+| T54 | indexed短重载与legacy blit | 无base的instanced draw、旧无options双向copy布局 | P1 | Native/Capture/API/CLI、36异常+2合法变体、action/offset/index/pixels/seek、57×10联合lifecycle通过；GUI L4待验 |
+| T55 | Function常量/descriptor同步异步 | 四创建入口、index/range/name、copy/reset、快照与callback所有权 | P1 | Native/Capture/API/CLI、74异常+1合法变体、四PSO/548-byte结果/像素/回退、57×10联合lifecycle通过；scalar常量/options0/无archives，GUI L4待验 |
+| T56 | Argument texture/sampler数组 | batch range、nil/部分覆盖、带reflection创建、顶层资源数组反射 | P1 | Native/Capture/API/CLI、38异常、两个独立texture/sampler/descriptor/usage/像素/回退、57×10联合lifecycle通过；帧前Shared单packet，buffer/constants/多packet未扩展，GUI L4待验 |
+| T57 | Argument buffer成员/constants/多packet | 单个/批量只读pointer、arrayElement、两提交CPU更新、地址重定位与Shared初值/seek | P1 | Native/Capture/API/CLI、161异常、地址清零正例、真实帧内重绑拒绝、四阶段像素/descriptor/成员数据/哨兵/回退、58×10联合lifecycle通过；FS顶层Shared目的buffer，GUI L4待验，详见BATCH57 |
+| T58 | 三种纹理view | 同格式2D/2DArray Shared父纹理、mip/slice subset、swizzle、GPU双向别名与seek | P1 | Native/Capture/API/CLI、56异常、9draw逐事件像素与父纹理子资源数据、60×10联合lifecycle通过；GUI L4待验，详见BATCH58 |
+| T59 | buffer-backed纹理 | Shared父buffer与2D子texture、offset/row pitch/alignment、CPU更新/GPU写入与seek | P1 | Native/Capture/API/CLI、35异常、3draw逐事件像素、父buffer153字节含padding核对、60×10联合lifecycle通过；GUI L4待验，详见BATCH58 |
+| T60 | Device独立ArgumentEncoder | descriptor创建、只读2D纹理/sampler成员、两个packet与绘制 | P1 | 原生/capture/API/CLI、29异常、2draw逐事件成员/像素/资源/回退、61×10联合lifecycle通过；GUI L4待验，详见BATCH60 |
+| T61 | no-copy Buffer | 页对齐Shared默认options、原生指针/deallocator、三提交CPU写入 | P1 | 原生/capture/API/CLI、13异常、3draw逐事件4096-byte数据/像素/回退、62×10联合lifecycle通过；抓取回调可延迟，GUI L4待验，详见BATCH61 |
+
+T10 新 marker 另存 `t10_debug_capture.rdc`，仅新入口 GUI 待最短复验，不撤销原 T10 已验状态。
 
 ## 外部样例候选
 

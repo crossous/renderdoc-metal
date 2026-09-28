@@ -46,14 +46,23 @@ Metal 命令、资源格式、同步和 GPU 驱动方式必须以该帧为准，
 首个真实应用试截帧**不要求源码版 UE**：可以先用 Epic Launcher 官方
 macOS 构建与一个最小项目，从终端启动编辑器或项目进程，验证本项目的
 Metal 动态库能否进入进程、拦截设备创建并生成可检查的 `.rdc`。
+本机现有目标为 `/Volumes/CauseUseMac/UE_5.6`：`Engine/Build/Build.version`
+确认 UE **5.6.1**、官方 promoted build；`Engine/Binaries/Mac/UnrealEditor`
+包含 arm64，适合作为首轮固定版本。Epic 的 UE 5.6 Mac 要求将 M2+ 的
+Nanite/VSM 列为 Beta；先用该版本验证普通帧，再尝试 Nanite 最小场景。
 当前受控样例使用 `DYLD_INSERT_LIBRARIES`；官方 UE app 的签名、hardened
 runtime、library validation、子进程启动方式或 Metal 接口差异可能阻挡
 此路径，须以实测为准。先检查日志与签名/进程状态，不把启动失败当成
 UE 必须使用源码版的证明。
+2026-09-28只读复核：该`UnrealEditor.app`主可执行文件是ad-hoc签名，
+`codesign` flags仅`adhoc`，没有显示hardened runtime；尚未启动进程或
+验证动态库注入，因此注入可行性仍未通过实测。
 
 Epic 的 RenderDoc 插件文档称插件随引擎提供，但其已列的 RenderDoc 平台
-和 API 不包括 macOS/Metal。因此不能假设 Launcher 版 UE 的现有插件按钮
-可直接控制本项目的 Metal 截帧。若目标是编辑器内按钮、自动 attach、
+和 API 不包括 macOS/Metal；本机 UE 5.6.1 的
+`Engine/Plugins/Developer/RenderDocPlugin/RenderDocPlugin.uplugin` 更明确地将
+模块 `PlatformAllowList` 限定为 `Win64`、`Linux`。因此官方 Mac 构建中的
+现有插件按钮不是首轮入口。若目标是编辑器内按钮、自动 attach、
 RenderDoc API 集成或 shader/渲染 pass 名称映射，可先评估项目级插件与
 预编译引擎是否足够；需要修改 UE 自身 Mac RHI、引擎插件源码或构建/签名
 选项时，再使用 UE 源码版。源码版方便开发，但不会自动补齐 RenderDoc
@@ -108,6 +117,7 @@ replay 核心已建立；“可靠截取一个 UE 普通帧”仍是一个独立
 
 - 本仓库 `README.md`、`TEST_MATRIX.md`、`PLAN.md` 与 Metal driver 当前代码。
 - Epic：<https://dev.epicgames.com/documentation/en-us/unreal-engine/macos-development-requirements-for-unreal-engine>（页面标为 UE 5.8）。
+- Epic UE 5.6 Mac 要求：<https://dev.epicgames.com/documentation/en-us/unreal-engine/macos-development-requirements-for-unreal-engine?application_version=5.6>。
 - Epic RenderDoc 插件文档：<https://dev.epicgames.com/documentation/en-us/unreal-engine/using-renderdoc-with-unreal-engine>（平台/API 清单未列 macOS/Metal）。
 - Apple Metal feature tables：<https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf>（2026-05-21）。
 - Apple M3 GPU 公告：<https://www.apple.com/newsroom/2023/10/apple-unveils-m3-m3-pro-and-m3-max-the-most-advanced-chips-for-a-personal-computer/>。

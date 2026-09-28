@@ -236,6 +236,23 @@ set(METAL_SRC
         metal/metal_test.cpp
         metal/metal_test.h
         metal/metal_blit_operations.cpp
+        metal/metal_blit_transfer.cpp
+        metal/metal_sampler_lod.cpp
+        metal/metal_private_buffer.cpp
+        metal/metal_ray_refit.cpp
+        metal/metal_ray_box.cpp
+        metal/metal_ray_instance.cpp
+        metal/metal_compute_inline.cpp
+        metal/metal_resource_barriers.cpp
+        metal/metal_fence_present.cpp
+        metal/metal_pipeline_variants.cpp
+        metal/metal_binary_library.cpp
+        metal/metal_command_handlers.cpp
+        metal/metal_texture_readback.cpp
+        metal/metal_async_creation.cpp
+        metal/metal_event_sync.cpp
+        metal/metal_icb_operations.cpp
+        metal/metal_function_variants.cpp
         metal/metal_compute_texture_filter.cpp
         metal/metal_compute_dispatch_threads.cpp
         metal/metal_compute_buffer_binding.cpp
@@ -243,7 +260,30 @@ set(METAL_SRC
         metal/metal_compute_batch_binding.cpp
         metal/metal_compute_indirect_dispatch.cpp
         metal/metal_compute_gpu_indirect_dispatch.cpp
-        metal/metal_argument_buffer.cpp
+        metal/metal_render_inline_batch_binding.cpp
+        metal/metal_command_creation_variants.cpp
+        metal/metal_render_dynamic_state.cpp
+    metal/metal_argument_buffer.cpp
+    metal/metal_argument_data.cpp
+    metal/metal_texture_views.cpp
+    metal/metal_buffer_texture.cpp
+    metal/metal_device_argument_encoder.cpp
+    metal/metal_buffer_no_copy.cpp
+    metal/metal_purgeable_state.cpp
+    metal/metal_vertex_dynamic_stride.cpp
+    metal/metal_shared_texture.cpp
+    metal/metal_shared_event.cpp
+    metal/metal_tessellation.cpp
+    metal/metal_tessellation_variants.cpp
+    metal/metal_shared_texture_handle.cpp
+    metal/metal_tile.cpp
+    metal/metal_mesh.cpp
+    metal/metal_counter_stage.cpp
+    metal/metal_binary_archive.cpp
+    metal/metal_stitched_library.cpp
+    metal/metal_dynamic_library.cpp
+    metal/metal_mesh_bindings.cpp
+    metal/metal_object.cpp
         metal/metal_indirect_draw.cpp
         metal/metal_indirect_command_buffer.cpp
         metal/metal_icb_reset_reencode.cpp
@@ -269,6 +309,10 @@ set(METAL_SRC
         metal/metal_simple_triangle.cpp
         metal/metal_texture_subresources.cpp
         metal/metal_textured_quad.cpp)
+
+if(APPLE)
+    set_source_files_properties(metal/metal_buffer_no_copy.cpp PROPERTIES COMPILE_OPTIONS "-fblocks")
+endif()
 
 project(demos)
 

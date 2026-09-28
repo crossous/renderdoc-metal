@@ -102,13 +102,12 @@
 
 - (MTLPurgeableState)setPurgeableState:(MTLPurgeableState)state
 {
-  METAL_NOT_HOOKED();
-  return [self.real setPurgeableState:state];
+  return (MTLPurgeableState)GetWrapped(self)->setPurgeableState((MTL::PurgeableState)state);
 }
 
 - (id<MTLHeap>)heap API_AVAILABLE(macos(10.13), ios(10.0))
 {
-  return self.real.heap;
+  return MetalWrappedHeap(self.real.heap);
 }
 
 - (NSUInteger)heapOffset API_AVAILABLE(macos(10.15), ios(13.0))
@@ -123,8 +122,7 @@
 
 - (void)makeAliasable API_AVAILABLE(macos(10.13), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real makeAliasable];
+  GetWrapped(self)->makeAliasable();
 }
 
 - (BOOL)isAliasable API_AVAILABLE(macos(10.13), ios(10.0))
@@ -165,21 +163,19 @@
                                         bytesPerRow:(NSUInteger)bytesPerRow
     API_AVAILABLE(macos(10.13), ios(8.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newTextureWithDescriptor:descriptor offset:offset bytesPerRow:bytesPerRow];
+  RDMTL::TextureDescriptor captured((MTL::TextureDescriptor *)descriptor);
+  return id<MTLTexture>(GetWrapped(self)->newTextureWithDescriptor(captured, offset, bytesPerRow));
 }
 
 - (void)addDebugMarker:(NSString *)marker
                  range:(NSRange)range API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real addDebugMarker:marker range:range];
+  GetWrapped(self)->addDebugMarker((NS::String *)marker, (NS::Range &)range);
 }
 
 - (void)removeAllDebugMarkers API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real removeAllDebugMarkers];
+  GetWrapped(self)->removeAllDebugMarkers();
 }
 
 - (id<MTLBuffer>)remoteStorageBuffer API_AVAILABLE(macos(10.15))API_UNAVAILABLE(ios)

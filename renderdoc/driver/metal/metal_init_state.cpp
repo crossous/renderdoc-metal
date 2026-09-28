@@ -146,9 +146,11 @@ bool WrappedMTLDevice::Serialise_InitialState(SerialiserType &ser, ResourceId id
       ser.Serialise("Contents"_lit, contents);
     }
 
+    SERIALISE_CHECK_READ_ERRORS();
+
     if(IsReplayingAndReading())
     {
-      // TODO: implement RD MTL replay
+      return RecordReplayBufferInitialContents(id, contents);
     }
     return true;
   }

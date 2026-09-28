@@ -37,6 +37,16 @@
 #include "metal_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
+#include "metal_fence.h"
+#include "metal_event.h"
+#include "metal_heap.h"
+#include "metal_counter_sample_buffer.h"
+#include "metal_dynamic_library.h"
+#include "metal_binary_archive.h"
+#include "metal_visible_function_table.h"
+#include "metal_acceleration_structure.h"
+#include "metal_acceleration_structure_command_encoder.h"
+#include "metal_rate_map.h"
 #include "metal_indirect_command_buffer.h"
 #include "metal_resources.h"
 #include "metal_texture.h"
@@ -351,8 +361,8 @@ void DoSerialise(SerialiserType &ser, RDMTL::RenderPipelineDescriptor &el)
   SERIALISE_MEMBER(vertexBuffers);
   SERIALISE_MEMBER(fragmentBuffers);
   SERIALISE_MEMBER(supportIndirectCommandBuffers);
-  // TODO: when WrappedMTLBinaryArchive exists
-  // SERIALISE_MEMBER(binaryArchives);
+  if(ser.VersionAtLeast(0xA))
+    SERIALISE_MEMBER(binaryArchives);
   // TODO: when WrappedMTLDynamicLibrary exists
   // SERIALISE_MEMBER(vertexPreloadedLibraries);
   // SERIALISE_MEMBER(fragmentPreloadedLibraries);
@@ -362,6 +372,11 @@ void DoSerialise(SerialiserType &ser, RDMTL::RenderPipelineDescriptor &el)
   SERIALISE_MEMBER(supportAddingFragmentBinaryFunctions);
   SERIALISE_MEMBER(maxVertexCallStackDepth);
   SERIALISE_MEMBER(maxFragmentCallStackDepth);
+  if(ser.VersionAtLeast(0x8))
+  {
+    SERIALISE_MEMBER(vertexPreloadedLibraries);
+    SERIALISE_MEMBER(fragmentPreloadedLibraries);
+  }
 }
 
 template <typename SerialiserType>
@@ -406,8 +421,11 @@ void DoSerialise(SerialiserType &ser, RDMTL::RenderPassStencilAttachmentDescript
 template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, RDMTL::RenderPassSampleBufferAttachmentDescriptor &el)
 {
-  // TODO: when WrappedMTLCounterSampleBuffer exists
-  // SERIALISE_MEMBER(sampleBuffer);
+  if(ser.VersionAtLeast(0x5))
+  {
+    SERIALISE_MEMBER(sampleBuffer);
+    SERIALISE_MEMBER(sampleBufferId);
+  }
   SERIALISE_MEMBER(startOfVertexSampleIndex);
   SERIALISE_MEMBER(endOfVertexSampleIndex);
   SERIALISE_MEMBER(startOfFragmentSampleIndex);
@@ -430,8 +448,11 @@ void DoSerialise(SerialiserType &ser, RDMTL::RenderPassDescriptor &el)
   SERIALISE_MEMBER(renderTargetWidth);
   SERIALISE_MEMBER(renderTargetHeight);
   SERIALISE_MEMBER(samplePositions);
-  // TODO: when WrappedRasterizationRateMap exists
-  // SERIALISE_MEMBER(rasterizationRateMap);
+  if(ser.VersionAtLeast(0x2))
+  {
+    SERIALISE_MEMBER(rasterizationRateMap);
+    SERIALISE_MEMBER(rasterizationRateMapId);
+  }
   SERIALISE_MEMBER(sampleBufferAttachments);
 };
 
@@ -455,14 +476,14 @@ void DoSerialise(SerialiserType &ser, RDMTL::ComputePipelineDescriptor &el)
   SERIALISE_MEMBER(stageInputDescriptor);
   SERIALISE_MEMBER(buffers);
   SERIALISE_MEMBER(supportIndirectCommandBuffers);
-  // TODO: when WrappedMTLDynamicLibrary exists
-  // SERIALISE_MEMBER(preloadedLibraries);
   // Deprecated
   // SERIALISE_MEMBER(insertLibraries);
   SERIALISE_MEMBER(linkedFunctions);
   SERIALISE_MEMBER(supportAddingBinaryFunctions);
-  // TODO: when WrappedMTLBinaryArchive exists
-  // SERIALISE_MEMBER(binaryArchives);
+  if(ser.VersionAtLeast(0xA))
+    SERIALISE_MEMBER(binaryArchives);
+  if(ser.VersionAtLeast(0x7))
+    SERIALISE_MEMBER(preloadedLibraries);
 }
 
 template <typename SerialiserType>

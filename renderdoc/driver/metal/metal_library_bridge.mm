@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 #include "metal_library.h"
+#include "metal_function.h"
 #include "metal_types_bridge.h"
 
 // Bridge for MTLLibrary
@@ -90,8 +91,14 @@
                                           error:(__autoreleasing NSError **)error
     API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newFunctionWithName:name constantValues:constantValues error:error];
+  MTLFunctionConstantValues *values = [constantValues copy];
+  const MetalFunctionSnapshot snapshot = CaptureMetalFunctionSnapshot((NS::String *)name,
+      (MTL::FunctionConstantValues *)values, NULL);
+  id<MTLFunction> real = [self.real newFunctionWithName:name constantValues:values error:error];
+  id<MTLFunction> wrapped = id<MTLFunction>(GetWrapped(self)->CaptureFunction((MTL::Function *)real,
+      snapshot, MetalChunk::MTLLibrary_newFunctionWithName_constantValues, false));
+  [values release];
+  return wrapped;
 }
 
 - (void)newFunctionWithName:(NSString *)name
@@ -100,10 +107,19 @@
                                       NSError *__nullable error))completionHandler
     API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newFunctionWithName:name
-                         constantValues:constantValues
-                      completionHandler:completionHandler];
+  NSString *functionName = [name copy];
+  MTLFunctionConstantValues *values = [constantValues copy];
+  const MetalFunctionSnapshot snapshot = CaptureMetalFunctionSnapshot((NS::String *)functionName,
+      (MTL::FunctionConstantValues *)values, NULL);
+  [self.real newFunctionWithName:functionName constantValues:values
+      completionHandler:^(id<MTLFunction> function, NSError *error) {
+        id<MTLFunction> wrapped = id<MTLFunction>(GetWrapped(self)->CaptureFunction(
+            (MTL::Function *)function, snapshot,
+            MetalChunk::MTLLibrary_newFunctionWithName_constantValues_async, true));
+        if(completionHandler) completionHandler(wrapped, error);
+        [wrapped release];
+      }];
+  [values release]; [functionName release];
 }
 
 - (void)newFunctionWithDescriptor:(nonnull MTLFunctionDescriptor *)descriptor
@@ -111,16 +127,36 @@
                                             NSError *__nullable error))completionHandler
     API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newFunctionWithDescriptor:descriptor completionHandler:completionHandler];
+  MTLFunctionDescriptor *desc = [descriptor copy];
+  MTLFunctionConstantValues *values = [descriptor.constantValues copy];
+  desc.constantValues = values;
+  const MetalFunctionSnapshot snapshot = CaptureMetalFunctionSnapshot(NULL, NULL,
+      (MTL::FunctionDescriptor *)desc);
+  [self.real newFunctionWithDescriptor:desc
+      completionHandler:^(id<MTLFunction> function, NSError *error) {
+        id<MTLFunction> wrapped = id<MTLFunction>(GetWrapped(self)->CaptureFunction(
+            (MTL::Function *)function, snapshot,
+            MetalChunk::MTLLibrary_newFunctionWithDescriptor_async, true));
+        if(completionHandler) completionHandler(wrapped, error);
+        [wrapped release];
+      }];
+  [values release]; [desc release];
 }
 
 - (nullable id<MTLFunction>)newFunctionWithDescriptor:(nonnull MTLFunctionDescriptor *)descriptor
                                                 error:(__autoreleasing NSError **)error
     API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newFunctionWithDescriptor:descriptor error:error];
+  MTLFunctionDescriptor *desc = [descriptor copy];
+  MTLFunctionConstantValues *values = [descriptor.constantValues copy];
+  desc.constantValues = values;
+  const MetalFunctionSnapshot snapshot = CaptureMetalFunctionSnapshot(NULL, NULL,
+      (MTL::FunctionDescriptor *)desc);
+  id<MTLFunction> real = [self.real newFunctionWithDescriptor:desc error:error];
+  id<MTLFunction> wrapped = id<MTLFunction>(GetWrapped(self)->CaptureFunction((MTL::Function *)real,
+      snapshot, MetalChunk::MTLLibrary_newFunctionWithDescriptor, false));
+  [values release]; [desc release];
+  return wrapped;
 }
 
 - (void)newIntersectionFunctionWithDescriptor:(nonnull MTLIntersectionFunctionDescriptor *)descriptor
@@ -128,9 +164,20 @@
                                                         NSError *__nullable error))completionHandler
     API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newIntersectionFunctionWithDescriptor:descriptor
-                                        completionHandler:completionHandler];
+  MTLIntersectionFunctionDescriptor *desc = [descriptor copy];
+  MTLFunctionConstantValues *values = [descriptor.constantValues copy];
+  desc.constantValues = values;
+  const MetalFunctionSnapshot snapshot = CaptureMetalFunctionSnapshot(NULL, NULL,
+      (MTL::FunctionDescriptor *)desc);
+  [self.real newIntersectionFunctionWithDescriptor:desc
+      completionHandler:^(id<MTLFunction> function, NSError *error) {
+        id<MTLFunction> wrapped = id<MTLFunction>(GetWrapped(self)->CaptureFunction(
+            (MTL::Function *)function, snapshot,
+            MetalChunk::MTLLibrary_newIntersectionFunctionWithDescriptor, true));
+        if(completionHandler) completionHandler(wrapped, error);
+        [wrapped release];
+      }];
+  [values release]; [desc release];
 }
 
 - (nullable id<MTLFunction>)newIntersectionFunctionWithDescriptor:
@@ -138,8 +185,17 @@
                                                             error:(__autoreleasing NSError **)error
     API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newIntersectionFunctionWithDescriptor:descriptor error:error];
+  MTLIntersectionFunctionDescriptor *desc = [descriptor copy];
+  MTLFunctionConstantValues *values = [descriptor.constantValues copy];
+  desc.constantValues = values;
+  const MetalFunctionSnapshot snapshot = CaptureMetalFunctionSnapshot(NULL, NULL,
+      (MTL::FunctionDescriptor *)desc);
+  id<MTLFunction> real = [self.real newIntersectionFunctionWithDescriptor:desc error:error];
+  id<MTLFunction> wrapped = id<MTLFunction>(GetWrapped(self)->CaptureFunction(
+      (MTL::Function *)real, snapshot,
+      MetalChunk::MTLLibrary_newIntersectionFunctionWithDescriptor, false));
+  [values release]; [desc release];
+  return wrapped;
 }
 
 - (NSArray<NSString *> *)functionNames

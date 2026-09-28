@@ -37,5 +37,21 @@ public:
     TypeEnum = eResRenderPipelineState
   };
 
+  WrappedMTLFunctionHandle *functionHandle(WrappedMTLFunction *function, MTL::RenderStages stage);
+  WrappedMTLVisibleFunctionTable *newVisibleFunctionTable(uint32_t count,
+                                                           MTL::RenderStages stage);
+  WrappedMTLIntersectionFunctionTable *newIntersectionFunctionTable(uint32_t count,
+                                                                     MTL::RenderStages stage);
+  template <typename SerialiserType>
+  bool Serialise_functionHandle(SerialiserType &ser, WrappedMTLFunctionHandle *handle,
+                                 WrappedMTLFunction *function, MTL::RenderStages stage);
+  template <typename SerialiserType>
+  bool Serialise_newVisibleFunctionTable(SerialiserType &ser,
+                                          WrappedMTLVisibleFunctionTable *table,
+                                          uint32_t count, MTL::RenderStages stage);
+  template <typename SerialiserType>
+  bool Serialise_newIntersectionFunctionTable(SerialiserType &ser,
+      WrappedMTLIntersectionFunctionTable *table, uint32_t count, MTL::RenderStages stage);
+
 private:
 };

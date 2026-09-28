@@ -26,7 +26,305 @@
 #include <Availability.h>
 #include "metal_command_queue.h"
 #include "metal_library.h"
+#include "metal_function.h"
+#include "metal_render_pipeline_state.h"
+#include "metal_compute_pipeline_state.h"
+#include "metal_heap.h"
+#include "metal_rate_map.h"
+#include "metal_acceleration_structure.h"
+#include "metal_buffer.h"
 #include "metal_types_bridge.h"
+
+bool SnapshotStitchedDescriptor(MTLStitchedLibraryDescriptor *descriptor,
+                                       StitchedDescriptorSnapshot &snapshot)
+{
+  if(!descriptor || descriptor.functions.count != 1 || descriptor.functionGraphs.count != 1)
+    return false;
+  id<MTLFunction> function = descriptor.functions[0];
+  MTLFunctionStitchingGraph *graph = descriptor.functionGraphs[0];
+  if(![(id)function isKindOfClass:[ObjCBridgeMTLFunction class]] ||
+     ![graph isKindOfClass:[MTLFunctionStitchingGraph class]] ||
+     graph.nodes.count != 1 || graph.attributes.count || !graph.outputNode ||
+     graph.outputNode != graph.nodes[0])
+    return false;
+  MTLFunctionStitchingFunctionNode *node = graph.outputNode;
+  if(![node isKindOfClass:[MTLFunctionStitchingFunctionNode class]] ||
+     node.arguments.count != 1 || node.controlDependencies.count ||
+     ![node.arguments[0] isKindOfClass:[MTLFunctionStitchingInputNode class]] ||
+     ((MTLFunctionStitchingInputNode *)node.arguments[0]).argumentIndex != 0 ||
+     !node.name.length || !graph.functionName.length || node.name.length > 128 ||
+     graph.functionName.length > 128 || ![node.name isEqualToString:function.name] ||
+     function.functionType != MTLFunctionTypeVisible ||
+     !graph.functionName.UTF8String || !node.name.UTF8String)
+    return false;
+  snapshot.function = GetWrapped((ObjCBridgeMTLFunction *)function);
+  snapshot.graphName = graph.functionName.UTF8String;
+  snapshot.functionName = node.name.UTF8String;
+  return snapshot.function && snapshot.function->m_Type == eResFunction &&
+         snapshot.function->m_Real;
+}
+
+// Keep the application's descriptor (and wrapped function references) alive until completion,
+// but pass a separate descriptor containing native functions to Metal.
+static NSArray<id<MTLDynamicLibrary>> *NativeDynamicLibraries(
+    NSArray<id<MTLDynamicLibrary>> *libraries)
+{
+  NSMutableArray<id<MTLDynamicLibrary>> *native = [NSMutableArray arrayWithCapacity:libraries.count];
+  for(id<MTLDynamicLibrary> library in libraries)
+  {
+    if([(id)library isKindOfClass:[ObjCBridgeMTLDynamicLibrary class]])
+      [native addObject:id<MTLDynamicLibrary>(
+          Unwrap(GetWrapped((ObjCBridgeMTLDynamicLibrary *)library)))];
+    else
+      [native addObject:library];
+  }
+  return native;
+}
+
+static NSArray<id<MTLBinaryArchive>> *NativeBinaryArchives(
+    NSArray<id<MTLBinaryArchive>> *archives)
+{
+  NSMutableArray<id<MTLBinaryArchive>> *native = [NSMutableArray arrayWithCapacity:archives.count];
+  for(id<MTLBinaryArchive> archive in archives)
+  {
+    if([(id)archive isKindOfClass:[ObjCBridgeMTLBinaryArchive class]])
+      [native addObject:id<MTLBinaryArchive>(
+          Unwrap(GetWrapped((ObjCBridgeMTLBinaryArchive *)archive)))];
+    else
+      [native addObject:archive];
+  }
+  return native;
+}
+
+static id<MTLBuffer> NativeAccelerationBuffer(id<MTLBuffer> buffer)
+{
+  if([(id)buffer isKindOfClass:[ObjCBridgeMTLBuffer class]])
+    return id<MTLBuffer>(Unwrap(GetWrapped((ObjCBridgeMTLBuffer *)buffer)));
+  return buffer;
+}
+
+// Size queries do not create a resource or need a replay chunk. Metal must still see
+// native buffers in the descriptor rather than our application-facing wrappers.
+// Keep this deliberately limited to static triangle/box geometry until the remaining
+// acceleration-structure descriptor families have complete capture/replay support.
+static MTLPrimitiveAccelerationStructureDescriptor *NativePrimitiveAccelerationDescriptor(
+    MTLAccelerationStructureDescriptor *descriptor)
+{
+  if(![(id)descriptor isKindOfClass:[MTLPrimitiveAccelerationStructureDescriptor class]])
+    return nil;
+  MTLPrimitiveAccelerationStructureDescriptor *primitive =
+      (MTLPrimitiveAccelerationStructureDescriptor *)descriptor;
+  if(primitive.motionKeyframeCount > 1 || !primitive.geometryDescriptors.count)
+    return nil;
+  MTLPrimitiveAccelerationStructureDescriptor *native = [primitive copy];
+  NSMutableArray *geometries = [NSMutableArray arrayWithCapacity:primitive.geometryDescriptors.count];
+  for(MTLAccelerationStructureGeometryDescriptor *geometry in primitive.geometryDescriptors)
+  {
+    if(![(id)geometry isKindOfClass:[MTLAccelerationStructureTriangleGeometryDescriptor class]] &&
+       ![(id)geometry isKindOfClass:[MTLAccelerationStructureBoundingBoxGeometryDescriptor class]])
+    {
+      [native release];
+      return nil;
+    }
+    MTLAccelerationStructureGeometryDescriptor *nativeGeometry = [geometry copy];
+    if([(id)nativeGeometry isKindOfClass:[MTLAccelerationStructureTriangleGeometryDescriptor class]])
+    {
+      MTLAccelerationStructureTriangleGeometryDescriptor *triangle =
+          (MTLAccelerationStructureTriangleGeometryDescriptor *)nativeGeometry;
+      triangle.vertexBuffer = NativeAccelerationBuffer(triangle.vertexBuffer);
+      triangle.indexBuffer = NativeAccelerationBuffer(triangle.indexBuffer);
+      if(@available(macOS 13.0, iOS 16.0, *))
+        triangle.transformationMatrixBuffer =
+            NativeAccelerationBuffer(triangle.transformationMatrixBuffer);
+    }
+    else
+    {
+      MTLAccelerationStructureBoundingBoxGeometryDescriptor *box =
+          (MTLAccelerationStructureBoundingBoxGeometryDescriptor *)nativeGeometry;
+      box.boundingBoxBuffer = NativeAccelerationBuffer(box.boundingBoxBuffer);
+    }
+    if(@available(macOS 13.0, iOS 16.0, *))
+      nativeGeometry.primitiveDataBuffer =
+          NativeAccelerationBuffer(nativeGeometry.primitiveDataBuffer);
+    [geometries addObject:nativeGeometry];
+    [nativeGeometry release];
+  }
+  native.geometryDescriptors = geometries;
+  return native;
+}
+
+static MTLInstanceAccelerationStructureDescriptor *NativeInstanceDescriptor(
+    MTLAccelerationStructureDescriptor *descriptor)
+{
+  if(![(id)descriptor isKindOfClass:[MTLInstanceAccelerationStructureDescriptor class]])
+    return nil;
+  MTLInstanceAccelerationStructureDescriptor *instance =
+      (MTLInstanceAccelerationStructureDescriptor *)descriptor;
+  MTLInstanceAccelerationStructureDescriptor *defaults =
+      [MTLInstanceAccelerationStructureDescriptor descriptor];
+  if(instance.usage != MTLAccelerationStructureUsageNone ||
+     instance.instanceCount < 1 || instance.instanceCount > 65536 ||
+     instance.instanceDescriptorBufferOffset != 0 ||
+     instance.instanceDescriptorStride != defaults.instanceDescriptorStride ||
+     instance.instanceDescriptorType != MTLAccelerationStructureInstanceDescriptorTypeDefault ||
+     instance.motionTransformBuffer || instance.motionTransformCount != 0 ||
+     instance.instancedAccelerationStructures.count < 1 ||
+     instance.instancedAccelerationStructures.count > 4 ||
+     instance.instanceCount < instance.instancedAccelerationStructures.count ||
+     ![(id)instance.instanceDescriptorBuffer isKindOfClass:[ObjCBridgeMTLBuffer class]] ||
+     ![(id)instance.instancedAccelerationStructures[0]
+         isKindOfClass:[ObjCBridgeMTLAccelerationStructure class]])
+    return nil;
+  for(id wrappedChild in instance.instancedAccelerationStructures)
+    if(![(id)wrappedChild isKindOfClass:[ObjCBridgeMTLAccelerationStructure class]])
+      return nil;
+  WrappedMTLBuffer *buffer =
+      GetWrapped((ObjCBridgeMTLBuffer *)instance.instanceDescriptorBuffer);
+  NSMutableArray<id<MTLAccelerationStructure>> *nativeChildren = [NSMutableArray array];
+  rdcarray<WrappedMTLAccelerationStructure *> wrappedChildren;
+  for(id wrappedChild in instance.instancedAccelerationStructures)
+  {
+    WrappedMTLAccelerationStructure *child =
+        GetWrapped((ObjCBridgeMTLAccelerationStructure *)wrappedChild);
+    if(!child || child->m_Type != eResAccelerationStructure || !Unwrap(child))
+      return nil;
+    for(WrappedMTLAccelerationStructure *previous : wrappedChildren)
+      if(child == previous && instance.instancedAccelerationStructures.count > 1)
+        return nil;
+    wrappedChildren.push_back(child);
+    [nativeChildren addObject:id<MTLAccelerationStructure>(Unwrap(child))];
+  }
+  if(!buffer || buffer->m_Type != eResBuffer || !Unwrap(buffer) ||
+     Unwrap(buffer)->storageMode() != MTL::StorageModeShared ||
+     Unwrap(buffer)->length() / sizeof(MTL::AccelerationStructureInstanceDescriptor) <
+         instance.instanceCount ||
+     wrappedChildren.empty())
+    return nil;
+  MTLInstanceAccelerationStructureDescriptor *native = [instance copy];
+  native.instanceDescriptorBuffer = id<MTLBuffer>(Unwrap(buffer));
+  native.instancedAccelerationStructures = nativeChildren;
+  return native;
+}
+
+static MTLRenderPipelineDescriptor *AsyncRenderDescriptor(MTLRenderPipelineDescriptor *snapshot)
+{
+  MTLRenderPipelineDescriptor *real = [snapshot copy];
+  RDMTL::RenderPipelineDescriptor captured((MTL::RenderPipelineDescriptor *)snapshot);
+  real.vertexFunction = id<MTLFunction>(Unwrap(captured.vertexFunction));
+  real.fragmentFunction = id<MTLFunction>(Unwrap(captured.fragmentFunction));
+  if(snapshot.binaryArchives.count)
+    real.binaryArchives = NativeBinaryArchives(snapshot.binaryArchives);
+  MTL::LinkedFunctions *vertex = RDMTL::MetalNativeLinkedFunctions(
+      (MTL::LinkedFunctions *)snapshot.vertexLinkedFunctions);
+  MTL::LinkedFunctions *fragment = RDMTL::MetalNativeLinkedFunctions(
+      (MTL::LinkedFunctions *)snapshot.fragmentLinkedFunctions);
+  real.vertexLinkedFunctions = (MTLLinkedFunctions *)vertex;
+  real.fragmentLinkedFunctions = (MTLLinkedFunctions *)fragment;
+  if(snapshot.vertexPreloadedLibraries.count)
+    real.vertexPreloadedLibraries = NativeDynamicLibraries(snapshot.vertexPreloadedLibraries);
+  if(snapshot.fragmentPreloadedLibraries.count)
+    real.fragmentPreloadedLibraries = NativeDynamicLibraries(snapshot.fragmentPreloadedLibraries);
+  vertex->release(); fragment->release();
+  return real;
+}
+
+static MTLComputePipelineDescriptor *AsyncComputeDescriptor(MTLComputePipelineDescriptor *snapshot)
+{
+  MTLComputePipelineDescriptor *real = [snapshot copy];
+  RDMTL::ComputePipelineDescriptor captured((MTL::ComputePipelineDescriptor *)snapshot);
+  real.computeFunction = id<MTLFunction>(Unwrap(captured.computeFunction));
+  if(snapshot.binaryArchives.count)
+    real.binaryArchives = NativeBinaryArchives(snapshot.binaryArchives);
+  MTL::LinkedFunctions *links = MTL::LinkedFunctions::alloc()->init();
+  captured.linkedFunctions.CopyTo(links);
+  real.linkedFunctions = (MTLLinkedFunctions *)links;
+  if(snapshot.preloadedLibraries.count)
+    real.preloadedLibraries = NativeDynamicLibraries(snapshot.preloadedLibraries);
+  links->release();
+  return real;
+}
+
+bool MetalTileDescriptorSupported(MTLTileRenderPipelineDescriptor *descriptor,
+                                  bool allowArchives)
+{
+  bool supported = (allowArchives || descriptor.binaryArchives.count == 0) &&
+                   descriptor.preloadedLibraries.count == 0 &&
+                   !descriptor.supportAddingBinaryFunctions &&
+                   (!descriptor.linkedFunctions ||
+                    (descriptor.linkedFunctions.functions.count <= 8 &&
+                     descriptor.linkedFunctions.binaryFunctions.count == 0 &&
+                     descriptor.linkedFunctions.privateFunctions.count == 0 &&
+                     descriptor.linkedFunctions.groups.count == 0));
+  MTLTileRenderPipelineDescriptor *defaults = [MTLTileRenderPipelineDescriptor new];
+  supported = supported && descriptor.maxCallStackDepth == defaults.maxCallStackDepth;
+  for(NSUInteger i = 0; i < 31; i++)
+    supported = supported &&
+                [descriptor.tileBuffers objectAtIndexedSubscript:i].mutability ==
+                    [defaults.tileBuffers objectAtIndexedSubscript:i].mutability;
+  [defaults release];
+  return supported;
+}
+
+static rdcarray<WrappedMTLFunction *> TileVisibleFunctions(MTLTileRenderPipelineDescriptor *descriptor)
+{
+  rdcarray<WrappedMTLFunction *> result;
+  for(id<MTLFunction> function in descriptor.linkedFunctions.functions)
+    result.push_back(MetalFunctionIsWrapped((MTL::Function *)function) ?
+                         GetWrapped((MTL::Function *)function) : NULL);
+  return result;
+}
+
+bool MetalMeshDescriptorSupported(MTLMeshRenderPipelineDescriptor *descriptor,
+                                  bool allowArchives)
+    API_AVAILABLE(macos(13.0), ios(16.0))
+{
+  MTLMeshRenderPipelineDescriptor *defaults = [MTLMeshRenderPipelineDescriptor new];
+  const bool objectStage = descriptor.objectFunction != nil;
+  bool supported = descriptor.meshFunction != nil &&
+                   descriptor.fragmentFunction != nil && descriptor.rasterSampleCount == 1 &&
+                   descriptor.payloadMemoryLength ==
+                       (objectStage ? 16U : defaults.payloadMemoryLength) &&
+                   descriptor.maxTotalThreadsPerObjectThreadgroup ==
+                       (objectStage ? 32U : defaults.maxTotalThreadsPerObjectThreadgroup) &&
+                   (objectStage ? descriptor.maxTotalThreadgroupsPerMeshGrid == 1U :
+                                  descriptor.maxTotalThreadgroupsPerMeshGrid <= 1048575U) &&
+                   descriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth ==
+                       defaults.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth &&
+                   descriptor.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth ==
+                       defaults.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth &&
+                   descriptor.alphaToCoverageEnabled == defaults.alphaToCoverageEnabled &&
+                   descriptor.alphaToOneEnabled == defaults.alphaToOneEnabled &&
+                   descriptor.rasterizationEnabled == defaults.rasterizationEnabled &&
+                   descriptor.maxVertexAmplificationCount == defaults.maxVertexAmplificationCount &&
+                   descriptor.depthAttachmentPixelFormat == defaults.depthAttachmentPixelFormat &&
+                   descriptor.stencilAttachmentPixelFormat == defaults.stencilAttachmentPixelFormat;
+  if(@available(macOS 14.0, *))
+    supported = supported &&
+                descriptor.supportIndirectCommandBuffers == defaults.supportIndirectCommandBuffers &&
+                (!descriptor.objectLinkedFunctions ||
+                 descriptor.objectLinkedFunctions.functions.count == 0) &&
+                (!descriptor.meshLinkedFunctions ||
+                 descriptor.meshLinkedFunctions.functions.count == 0) &&
+                (!descriptor.fragmentLinkedFunctions ||
+                 descriptor.fragmentLinkedFunctions.functions.count == 0);
+  if(@available(macOS 15.0, *))
+    supported = supported && (allowArchives || descriptor.binaryArchives.count == 0);
+  for(NSUInteger i = 0; i < 31; i++)
+    supported = supported &&
+                [descriptor.objectBuffers objectAtIndexedSubscript:i].mutability ==
+                    [defaults.objectBuffers objectAtIndexedSubscript:i].mutability &&
+                [descriptor.meshBuffers objectAtIndexedSubscript:i].mutability ==
+                    [defaults.meshBuffers objectAtIndexedSubscript:i].mutability &&
+                [descriptor.fragmentBuffers objectAtIndexedSubscript:i].mutability ==
+                    [defaults.fragmentBuffers objectAtIndexedSubscript:i].mutability;
+  for(NSUInteger i = 0; i < 8; i++)
+    supported = supported &&
+                ![descriptor.colorAttachments objectAtIndexedSubscript:i].blendingEnabled &&
+                [descriptor.colorAttachments objectAtIndexedSubscript:i].writeMask ==
+                    [defaults.colorAttachments objectAtIndexedSubscript:i].writeMask;
+  [defaults release];
+  return supported;
+}
 
 // Bridge for MTLDevice
 @implementation ObjCBridgeMTLDevice
@@ -199,14 +497,12 @@
 
 - (nullable id<MTLCommandQueue>)newCommandQueueWithMaxCommandBufferCount:(NSUInteger)maxCommandBufferCount
 {
-  METAL_NOT_HOOKED();
-  return [self.real newCommandQueueWithMaxCommandBufferCount:maxCommandBufferCount];
+  return id<MTLCommandQueue>(GetWrapped(self)->newCommandQueue(maxCommandBufferCount));
 }
 
 - (MTLSizeAndAlign)heapTextureSizeAndAlignWithDescriptor:(MTLTextureDescriptor *)desc
     API_AVAILABLE(macos(10.13), ios(10.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real heapTextureSizeAndAlignWithDescriptor:desc];
 }
 
@@ -214,15 +510,17 @@
                                             options:(MTLResourceOptions)options
     API_AVAILABLE(macos(10.13), ios(10.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real heapBufferSizeAndAlignWithLength:length options:options];
 }
 
 - (nullable id<MTLHeap>)newHeapWithDescriptor:(MTLHeapDescriptor *)descriptor
     API_AVAILABLE(macos(10.13), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newHeapWithDescriptor:descriptor];
+  id<MTLHeap> real = [self.real newHeapWithDescriptor:descriptor];
+  return id<MTLHeap>(GetWrapped(self)->WrapNewHeap(
+      (MTL::Heap *)real, descriptor.size, (MTL::StorageMode)descriptor.storageMode,
+      (MTL::CPUCacheMode)descriptor.cpuCacheMode,
+      (MTL::HazardTrackingMode)descriptor.hazardTrackingMode, (MTL::HeapType)descriptor.type));
 }
 
 - (nullable id<MTLBuffer>)newBufferWithLength:(NSUInteger)length options:(MTLResourceOptions)options
@@ -244,11 +542,13 @@
                                        deallocator:(void (^__nullable)(void *pointer,
                                                                        NSUInteger length))deallocator
 {
-  METAL_NOT_HOOKED();
-  return [self.real newBufferWithBytesNoCopy:pointer
-                                      length:length
-                                     options:options
-                                 deallocator:deallocator];
+  id<MTLBuffer> real = [self.real newBufferWithBytesNoCopy:pointer
+                                                    length:length
+                                                   options:options
+                                               deallocator:deallocator];
+  if(!real) return nil;
+  return id<MTLBuffer>(GetWrapped(self)->WrapNewBufferNoCopy(
+      (MTL::Buffer *)real, pointer, length, (MTL::ResourceOptions)options));
 }
 
 - (nullable id<MTLDepthStencilState>)newDepthStencilStateWithDescriptor:
@@ -277,15 +577,18 @@
 - (nullable id<MTLTexture>)newSharedTextureWithDescriptor:(MTLTextureDescriptor *)descriptor
     API_AVAILABLE(macos(10.14), ios(13.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newSharedTextureWithDescriptor:descriptor];
+  RDMTL::TextureDescriptor rdDescriptor((MTL::TextureDescriptor *)descriptor);
+  return id<MTLTexture>(GetWrapped(self)->newSharedTextureWithDescriptor(rdDescriptor));
 }
 
 - (nullable id<MTLTexture>)newSharedTextureWithHandle:(MTLSharedTextureHandle *)sharedHandle
     API_AVAILABLE(macos(10.14), ios(13.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newSharedTextureWithHandle:sharedHandle];
+  id<MTLTexture> source = MetalSharedTextureHandleSource(sharedHandle);
+  id<MTLTexture> real = [self.real newSharedTextureWithHandle:sharedHandle];
+  if(!real) return nil;
+  return id<MTLTexture>(GetWrapped(self)->WrapNewSharedTextureWithHandle(
+      (MTL::Texture *)real, source ? GetWrapped(source) : NULL));
 }
 
 - (nullable id<MTLSamplerState>)newSamplerStateWithDescriptor:(MTLSamplerDescriptor *)descriptor
@@ -303,31 +606,29 @@
                                                  error:(__autoreleasing NSError **)error
     API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newDefaultLibraryWithBundle:bundle error:error];
+  return id<MTLLibrary>(GetWrapped(self)->newDefaultLibraryWithBundle(
+      (NS::Bundle *)bundle, (NS::Error **)error));
 }
 
 - (nullable id<MTLLibrary>)newLibraryWithFile:(NSString *)filepath
                                         error:(__autoreleasing NSError **)error
     API_DEPRECATED("Use -newLibraryWithURL:error: instead", macos(10.11, 13.0), ios(8.0, 16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newLibraryWithFile:filepath error:error];
+  return id<MTLLibrary>(GetWrapped(self)->newLibraryWithFile(
+      (NS::String *)filepath, (NS::Error **)error));
 }
 
 - (nullable id<MTLLibrary>)newLibraryWithURL:(NSURL *)url
                                        error:(__autoreleasing NSError **)error
     API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newLibraryWithURL:url error:error];
+  return id<MTLLibrary>(GetWrapped(self)->newLibraryWithURL((NS::URL *)url, (NS::Error **)error));
 }
 
 - (nullable id<MTLLibrary>)newLibraryWithData:(dispatch_data_t)data
                                         error:(__autoreleasing NSError **)error
 {
-  METAL_NOT_HOOKED();
-  return [self.real newLibraryWithData:data error:error];
+  return id<MTLLibrary>(GetWrapped(self)->newLibraryWithData(data, (NS::Error **)error));
 }
 
 - (nullable id<MTLLibrary>)newLibraryWithSource:(NSString *)source
@@ -342,26 +643,72 @@
                      options:(nullable MTLCompileOptions *)options
            completionHandler:(MTLNewLibraryCompletionHandler)completionHandler
 {
-  METAL_NOT_HOOKED();
-  return [self.real newLibraryWithSource:source
-                                 options:options
-                       completionHandler:completionHandler];
+  NSString *snapshot = [source copy];
+  MTLCompileOptions *optionSnapshot = [options copy];
+  MTLCompileOptions *nativeOptions = [optionSnapshot copy];
+  if(optionSnapshot.libraries.count)
+  {
+    NSMutableArray *nativeLibraries = [NSMutableArray arrayWithCapacity:optionSnapshot.libraries.count];
+    for(id<MTLDynamicLibrary> dependency in optionSnapshot.libraries)
+    {
+      if([(id)dependency isKindOfClass:[ObjCBridgeMTLDynamicLibrary class]])
+        [nativeLibraries addObject:id<MTLDynamicLibrary>(
+            Unwrap(GetWrapped((ObjCBridgeMTLDynamicLibrary *)dependency)))];
+      else
+        [nativeLibraries addObject:dependency];
+    }
+    nativeOptions.libraries = nativeLibraries;
+  }
+  [self.real newLibraryWithSource:snapshot options:nativeOptions
+      completionHandler:^(id<MTLLibrary> library, NSError *error) {
+        id<MTLLibrary> wrapped = id<MTLLibrary>(GetWrapped(self)->CaptureAsyncLibrary(
+            (MTL::Library *)library, (NS::String *)snapshot,
+            (MTL::CompileOptions *)optionSnapshot, true));
+        if(completionHandler) completionHandler(wrapped, error);
+        [wrapped release];
+      }];
+  [snapshot release]; [optionSnapshot release]; [nativeOptions release];
 }
 
 - (nullable id<MTLLibrary>)newLibraryWithStitchedDescriptor:(MTLStitchedLibraryDescriptor *)descriptor
                                                       error:(__autoreleasing NSError **)error
     API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newLibraryWithStitchedDescriptor:descriptor error:error];
+  StitchedDescriptorSnapshot snapshot;
+  if(!SnapshotStitchedDescriptor(descriptor, snapshot)) return nil;
+  return id<MTLLibrary>(GetWrapped(self)->newStitchedLibrary(
+      snapshot.function, snapshot.graphName, snapshot.functionName, 0, (NS::Error **)error));
 }
 
 - (void)newLibraryWithStitchedDescriptor:(MTLStitchedLibraryDescriptor *)descriptor
                        completionHandler:(MTLNewLibraryCompletionHandler)completionHandler
     API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  [self.real newLibraryWithStitchedDescriptor:descriptor completionHandler:completionHandler];
+  StitchedDescriptorSnapshot snapshot;
+  if(!SnapshotStitchedDescriptor(descriptor, snapshot)) { METAL_NOT_HOOKED(); return; }
+  id<MTLFunction> function = descriptor.functions[0];
+  MTLFunctionStitchingInputNode *nativeInput = [[MTLFunctionStitchingInputNode alloc]
+      initWithArgumentIndex:0];
+  MTLFunctionStitchingFunctionNode *nativeOutput = [[MTLFunctionStitchingFunctionNode alloc]
+      initWithName:[NSString stringWithUTF8String:snapshot.functionName.c_str()]
+         arguments:@[ nativeInput ] controlDependencies:@[]];
+  MTLFunctionStitchingGraph *nativeGraph = [[MTLFunctionStitchingGraph alloc]
+      initWithFunctionName:[NSString stringWithUTF8String:snapshot.graphName.c_str()]
+      nodes:@[ nativeOutput ]
+      outputNode:nativeOutput attributes:@[]];
+  MTLStitchedLibraryDescriptor *native = [MTLStitchedLibraryDescriptor new];
+  native.functions = @[ id<MTLFunction>(Unwrap(snapshot.function)) ];
+  native.functionGraphs = @[ nativeGraph ];
+  [function retain];
+  [self.real newLibraryWithStitchedDescriptor:native
+                          completionHandler:^(id<MTLLibrary> library, NSError *failure) {
+    id<MTLLibrary> wrapped = id<MTLLibrary>(GetWrapped(self)->CaptureAsyncStitchedLibrary(
+        (MTL::Library *)library, snapshot.function, snapshot.graphName, snapshot.functionName, 0));
+    if(completionHandler) completionHandler(wrapped, failure);
+    [wrapped release];
+    [function release];
+  }];
+  [native release]; [nativeGraph release]; [nativeOutput release]; [nativeInput release];
 }
 
 - (nullable id<MTLRenderPipelineState>)
@@ -379,19 +726,26 @@
                               reflection:(MTLAutoreleasedRenderPipelineReflection *__nullable)reflection
                                    error:(__autoreleasing NSError **)error
 {
-  METAL_NOT_HOOKED();
-  return [self.real newRenderPipelineStateWithDescriptor:descriptor
-                                                 options:options
-                                              reflection:reflection
-                                                   error:error];
+  return id<MTLRenderPipelineState>(GetWrapped(self)->newRenderPipelineStateWithDescriptorOptions(
+      (MTL::RenderPipelineDescriptor *)descriptor, (MTL::PipelineOption)options,
+      (MTL::AutoreleasedRenderPipelineReflection *)reflection, (NS::Error **)error));
 }
 
 - (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)descriptor
                            completionHandler:(MTLNewRenderPipelineStateCompletionHandler)completionHandler
 {
-  METAL_NOT_HOOKED();
-  return [self.real newRenderPipelineStateWithDescriptor:descriptor
-                                       completionHandler:completionHandler];
+  MTLRenderPipelineDescriptor *snapshot = [descriptor copy];
+  MTLRenderPipelineDescriptor *real = AsyncRenderDescriptor(snapshot);
+  [self.real newRenderPipelineStateWithDescriptor:real
+      completionHandler:^(id<MTLRenderPipelineState> pipeline, NSError *error) {
+        id<MTLRenderPipelineState> wrapped = id<MTLRenderPipelineState>(
+            GetWrapped(self)->CaptureAsyncRenderPipeline((MTL::RenderPipelineState *)pipeline,
+                (MTL::RenderPipelineDescriptor *)snapshot, MTL::PipelineOptionNone,
+                MetalChunk::MTLDevice_newRenderPipelineStateWithDescriptor_async));
+        if(completionHandler) completionHandler(wrapped, error);
+        [wrapped release];
+      }];
+  [real release]; [snapshot release];
 }
 
 - (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)descriptor
@@ -399,10 +753,19 @@
                            completionHandler:
                                (MTLNewRenderPipelineStateWithReflectionCompletionHandler)completionHandler
 {
-  METAL_NOT_HOOKED();
-  return [self.real newRenderPipelineStateWithDescriptor:descriptor
-                                                 options:options
-                                       completionHandler:completionHandler];
+  MTLRenderPipelineDescriptor *snapshot = [descriptor copy];
+  MTLRenderPipelineDescriptor *real = AsyncRenderDescriptor(snapshot);
+  [self.real newRenderPipelineStateWithDescriptor:real options:options
+      completionHandler:^(id<MTLRenderPipelineState> pipeline, MTLRenderPipelineReflection *reflection,
+                           NSError *error) {
+        id<MTLRenderPipelineState> wrapped = id<MTLRenderPipelineState>(
+            GetWrapped(self)->CaptureAsyncRenderPipeline((MTL::RenderPipelineState *)pipeline,
+                (MTL::RenderPipelineDescriptor *)snapshot, (MTL::PipelineOption)options,
+                MetalChunk::MTLDevice_newRenderPipelineStateWithDescriptor_options_async));
+        if(completionHandler) completionHandler(wrapped, reflection, error);
+        [wrapped release];
+      }];
+  [real release]; [snapshot release];
 }
 
 - (nullable id<MTLComputePipelineState>)
@@ -419,19 +782,23 @@
                              reflection:(MTLAutoreleasedComputePipelineReflection *__nullable)reflection
                                   error:(__autoreleasing NSError **)error
 {
-  METAL_NOT_HOOKED();
-  return [self.real newComputePipelineStateWithFunction:computeFunction
-                                                options:options
-                                             reflection:reflection
-                                                  error:error];
+  return id<MTLComputePipelineState>(GetWrapped(self)->newComputePipelineStateWithFunctionOptions(
+      GetWrapped(computeFunction), (MTL::PipelineOption)options,
+      (MTL::AutoreleasedComputePipelineReflection *)reflection, (NS::Error **)error));
 }
 
 - (void)newComputePipelineStateWithFunction:(id<MTLFunction>)computeFunction
                           completionHandler:(MTLNewComputePipelineStateCompletionHandler)completionHandler
 {
-  METAL_NOT_HOOKED();
-  return [self.real newComputePipelineStateWithFunction:computeFunction
-                                      completionHandler:completionHandler];
+  [self.real newComputePipelineStateWithFunction:id<MTLFunction>(Unwrap(GetWrapped(computeFunction)))
+      completionHandler:^(id<MTLComputePipelineState> pipeline, NSError *error) {
+        id<MTLComputePipelineState> wrapped = id<MTLComputePipelineState>(
+            GetWrapped(self)->CaptureAsyncComputePipeline((MTL::ComputePipelineState *)pipeline,
+                GetWrapped(computeFunction), MTL::PipelineOptionNone,
+                MetalChunk::MTLDevice_newComputePipelineStateWithFunction_async));
+        if(completionHandler) completionHandler(wrapped, error);
+        [wrapped release];
+      }];
 }
 
 - (void)newComputePipelineStateWithFunction:(id<MTLFunction>)computeFunction
@@ -439,10 +806,16 @@
                           completionHandler:
                               (MTLNewComputePipelineStateWithReflectionCompletionHandler)completionHandler
 {
-  METAL_NOT_HOOKED();
-  return [self.real newComputePipelineStateWithFunction:computeFunction
-                                                options:options
-                                      completionHandler:completionHandler];
+  [self.real newComputePipelineStateWithFunction:id<MTLFunction>(Unwrap(GetWrapped(computeFunction)))
+      options:options completionHandler:^(id<MTLComputePipelineState> pipeline,
+                                         MTLComputePipelineReflection *reflection, NSError *error) {
+        id<MTLComputePipelineState> wrapped = id<MTLComputePipelineState>(
+            GetWrapped(self)->CaptureAsyncComputePipeline((MTL::ComputePipelineState *)pipeline,
+                GetWrapped(computeFunction), (MTL::PipelineOption)options,
+                MetalChunk::MTLDevice_newComputePipelineStateWithFunction_options_async));
+        if(completionHandler) completionHandler(wrapped, reflection, error);
+        [wrapped release];
+      }];
 }
 
 - (nullable id<MTLComputePipelineState>)
@@ -452,11 +825,9 @@
                                     error:(__autoreleasing NSError **)error
     API_AVAILABLE(macos(10.11), ios(9.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newComputePipelineStateWithDescriptor:descriptor
-                                                  options:options
-                                               reflection:reflection
-                                                    error:error];
+  return id<MTLComputePipelineState>(GetWrapped(self)->newComputePipelineStateWithDescriptor(
+      (MTL::ComputePipelineDescriptor *)descriptor, (MTL::PipelineOption)options,
+      (MTL::AutoreleasedComputePipelineReflection *)reflection, (NS::Error **)error));
 }
 
 - (void)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)descriptor
@@ -465,16 +836,23 @@
                                 (MTLNewComputePipelineStateWithReflectionCompletionHandler)completionHandler
     API_AVAILABLE(macos(10.11), ios(9.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newComputePipelineStateWithDescriptor:descriptor
-                                                  options:options
-                                        completionHandler:completionHandler];
+  MTLComputePipelineDescriptor *snapshot = [descriptor copy];
+  MTLComputePipelineDescriptor *real = AsyncComputeDescriptor(snapshot);
+  [self.real newComputePipelineStateWithDescriptor:real options:options
+      completionHandler:^(id<MTLComputePipelineState> pipeline,
+                           MTLComputePipelineReflection *reflection, NSError *error) {
+        id<MTLComputePipelineState> wrapped = id<MTLComputePipelineState>(
+            GetWrapped(self)->CaptureAsyncComputeDescriptor((MTL::ComputePipelineState *)pipeline,
+                (MTL::ComputePipelineDescriptor *)snapshot, (MTL::PipelineOption)options));
+        if(completionHandler) completionHandler(wrapped, reflection, error);
+        [wrapped release];
+      }];
+  [real release]; [snapshot release];
 }
 
 - (nullable id<MTLFence>)newFence API_AVAILABLE(macos(10.13), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newFence];
+  return id<MTLFence>(GetWrapped(self)->newFence());
 }
 
 - (BOOL)supportsFeatureSet:(MTLFeatureSet)featureSet
@@ -496,14 +874,13 @@
 - (NSUInteger)minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)format
     API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
+  // Device capability query: capture the resulting creation arguments, not the queried value.
   return [self.real minimumLinearTextureAlignmentForPixelFormat:format];
 }
 
 - (NSUInteger)minimumTextureBufferAlignmentForPixelFormat:(MTLPixelFormat)format
     API_AVAILABLE(macos(10.14), ios(12.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real minimumTextureBufferAlignmentForPixelFormat:format];
 }
 
@@ -514,11 +891,32 @@
                                        error:(__autoreleasing NSError **)error
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newRenderPipelineStateWithTileDescriptor:descriptor
-                                                     options:options
-                                                  reflection:reflection
-                                                       error:error];
+  MTLTileRenderPipelineDescriptor *real = [descriptor copy];
+  WrappedMTLFunction *function = descriptor.tileFunction ? GetWrapped(descriptor.tileFunction) : NULL;
+  rdcarray<WrappedMTLBinaryArchive *> archives;
+  bool validArchives = descriptor.binaryArchives.count <= 4;
+  for(id<MTLBinaryArchive> archive in descriptor.binaryArchives)
+  {
+    if(![(id)archive isKindOfClass:[ObjCBridgeMTLBinaryArchive class]])
+      validArchives = false;
+    else
+      archives.push_back(GetWrapped((ObjCBridgeMTLBinaryArchive *)archive));
+  }
+  rdcarray<WrappedMTLFunction *> visibleFunctions = TileVisibleFunctions(descriptor);
+  real.tileFunction = id<MTLFunction>(Unwrap(function));
+  real.binaryArchives = NativeBinaryArchives(descriptor.binaryArchives);
+  MTL::LinkedFunctions *nativeLinks = RDMTL::MetalNativeLinkedFunctions(
+      (MTL::LinkedFunctions *)descriptor.linkedFunctions);
+  real.linkedFunctions = (MTLLinkedFunctions *)nativeLinks;
+  nativeLinks->release();
+  bool supported = validArchives && MetalTileDescriptorSupported(descriptor, true);
+  id<MTLRenderPipelineState> wrapped = id<MTLRenderPipelineState>(
+      GetWrapped(self)->newTileRenderPipelineState(
+          (MTL::TileRenderPipelineDescriptor *)real, function, (MTL::PipelineOption)options,
+          (MTL::AutoreleasedRenderPipelineReflection *)reflection, (NS::Error **)error,
+          supported, visibleFunctions, archives));
+  [real release];
+  return wrapped;
 }
 
 - (void)newRenderPipelineStateWithTileDescriptor:(MTLTileRenderPipelineDescriptor *)descriptor
@@ -527,10 +925,27 @@
                                    (MTLNewRenderPipelineStateWithReflectionCompletionHandler)completionHandler
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newRenderPipelineStateWithTileDescriptor:descriptor
-                                                     options:options
-                                           completionHandler:completionHandler];
+  if(descriptor.binaryArchives.count) { METAL_NOT_HOOKED(); return; }
+  MTLTileRenderPipelineDescriptor *snapshot = [descriptor copy];
+  MTLTileRenderPipelineDescriptor *real = [snapshot copy];
+  WrappedMTLFunction *function = snapshot.tileFunction ? GetWrapped(snapshot.tileFunction) : NULL;
+  real.tileFunction = id<MTLFunction>(Unwrap(function));
+  MTL::LinkedFunctions *nativeLinks = RDMTL::MetalNativeLinkedFunctions(
+      (MTL::LinkedFunctions *)snapshot.linkedFunctions);
+  real.linkedFunctions = (MTLLinkedFunctions *)nativeLinks;
+  nativeLinks->release();
+  const bool supported = MetalTileDescriptorSupported(snapshot);
+  [self.real newRenderPipelineStateWithTileDescriptor:real options:options
+      completionHandler:^(id<MTLRenderPipelineState> pipeline,
+                          MTLRenderPipelineReflection *reflection, NSError *error) {
+        id<MTLRenderPipelineState> wrapped = id<MTLRenderPipelineState>(
+            GetWrapped(self)->CaptureAsyncTilePipeline((MTL::RenderPipelineState *)pipeline,
+                (MTL::TileRenderPipelineDescriptor *)snapshot, function,
+                (MTL::PipelineOption)options, supported));
+        if(completionHandler) completionHandler(wrapped, reflection, error);
+        [wrapped release];
+      }];
+  [real release]; [snapshot release];
 }
 
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_13_0
@@ -541,11 +956,38 @@
                                        error:(__autoreleasing NSError **)error
     API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newRenderPipelineStateWithMeshDescriptor:descriptor
-                                                     options:options
-                                                  reflection:reflection
-                                                       error:error];
+  MTLMeshRenderPipelineDescriptor *real = [descriptor copy];
+  NSArray<id<MTLBinaryArchive>> *archiveArray = nil;
+  if(@available(macOS 15.0, *)) archiveArray = descriptor.binaryArchives;
+  rdcarray<WrappedMTLBinaryArchive *> archives;
+  bool validArchives = archiveArray.count <= 4;
+  for(id<MTLBinaryArchive> archive in archiveArray)
+  {
+    if(![(id)archive isKindOfClass:[ObjCBridgeMTLBinaryArchive class]])
+      validArchives = false;
+    else
+      archives.push_back(GetWrapped((ObjCBridgeMTLBinaryArchive *)archive));
+  }
+  WrappedMTLFunction *objectFunction = descriptor.objectFunction ?
+      GetWrapped(descriptor.objectFunction) : NULL;
+  WrappedMTLFunction *meshFunction = descriptor.meshFunction ?
+      GetWrapped(descriptor.meshFunction) : NULL;
+  WrappedMTLFunction *fragmentFunction = descriptor.fragmentFunction ?
+      GetWrapped(descriptor.fragmentFunction) : NULL;
+  real.objectFunction = id<MTLFunction>(Unwrap(objectFunction));
+  real.meshFunction = id<MTLFunction>(Unwrap(meshFunction));
+  real.fragmentFunction = id<MTLFunction>(Unwrap(fragmentFunction));
+  if(@available(macOS 15.0, *))
+    real.binaryArchives = NativeBinaryArchives(archiveArray);
+  id<MTLRenderPipelineState> wrapped = id<MTLRenderPipelineState>(
+      GetWrapped(self)->newMeshRenderPipelineState(
+          (MTL::MeshRenderPipelineDescriptor *)real, objectFunction, meshFunction,
+          fragmentFunction, (MTL::PipelineOption)options,
+          (MTL::AutoreleasedRenderPipelineReflection *)reflection, (NS::Error **)error,
+          validArchives && (!objectFunction || archives.empty()) &&
+          MetalMeshDescriptorSupported(descriptor, true), archives));
+  [real release];
+  return wrapped;
 }
 #endif
 
@@ -556,10 +998,31 @@
                                    (MTLNewRenderPipelineStateWithReflectionCompletionHandler)
                                        completionHandler API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newRenderPipelineStateWithMeshDescriptor:descriptor
-                                                     options:options
-                                           completionHandler:completionHandler];
+  if(@available(macOS 15.0, *))
+    if(descriptor.binaryArchives.count) { METAL_NOT_HOOKED(); return; }
+  MTLMeshRenderPipelineDescriptor *snapshot = [descriptor copy];
+  MTLMeshRenderPipelineDescriptor *real = [snapshot copy];
+  WrappedMTLFunction *objectFunction = snapshot.objectFunction ?
+      GetWrapped(snapshot.objectFunction) : NULL;
+  WrappedMTLFunction *meshFunction = snapshot.meshFunction ?
+      GetWrapped(snapshot.meshFunction) : NULL;
+  WrappedMTLFunction *fragmentFunction = snapshot.fragmentFunction ?
+      GetWrapped(snapshot.fragmentFunction) : NULL;
+  real.objectFunction = id<MTLFunction>(Unwrap(objectFunction));
+  real.meshFunction = id<MTLFunction>(Unwrap(meshFunction));
+  real.fragmentFunction = id<MTLFunction>(Unwrap(fragmentFunction));
+  const bool supported = MetalMeshDescriptorSupported(snapshot);
+  [self.real newRenderPipelineStateWithMeshDescriptor:real options:options
+      completionHandler:^(id<MTLRenderPipelineState> pipeline,
+                          MTLRenderPipelineReflection *reflection, NSError *error) {
+        id<MTLRenderPipelineState> wrapped = id<MTLRenderPipelineState>(
+            GetWrapped(self)->CaptureAsyncMeshPipeline((MTL::RenderPipelineState *)pipeline,
+                (MTL::MeshRenderPipelineDescriptor *)snapshot, objectFunction, meshFunction,
+                fragmentFunction, (MTL::PipelineOption)options, supported));
+        if(completionHandler) completionHandler(wrapped, reflection, error);
+        [wrapped release];
+      }];
+  [real release]; [snapshot release];
 }
 #endif
 
@@ -581,15 +1044,13 @@
 - (void)getDefaultSamplePositions:(MTLSamplePosition *)positions
                             count:(NSUInteger)count API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real getDefaultSamplePositions:positions count:count];
 }
 
 - (nullable id<MTLArgumentEncoder>)newArgumentEncoderWithArguments:
     (NSArray<MTLArgumentDescriptor *> *)arguments API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newArgumentEncoderWithArguments:arguments];
+  return id<MTLArgumentEncoder>(GetWrapped(self)->newArgumentEncoderWithArguments((NS::Array *)arguments));
 }
 
 - (BOOL)supportsRasterizationRateMapWithLayerCount:(NSUInteger)layerCount
@@ -602,8 +1063,8 @@
     (MTLRasterizationRateMapDescriptor *)descriptor
     API_AVAILABLE(macos(10.15.4), ios(13.0), macCatalyst(13.4))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newRasterizationRateMapWithDescriptor:descriptor];
+  return id<MTLRasterizationRateMap>(GetWrapped(self)->newRasterizationRateMap(
+      (MTL::RasterizationRateMapDescriptor *)descriptor));
 }
 
 - (nullable id<MTLIndirectCommandBuffer>)
@@ -620,21 +1081,21 @@
 
 - (nullable id<MTLEvent>)newEvent API_AVAILABLE(macos(10.14), ios(12.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newEvent];
+  return id<MTLEvent>(GetWrapped(self)->newEvent());
 }
 
 - (nullable id<MTLSharedEvent>)newSharedEvent API_AVAILABLE(macos(10.14), ios(12.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newSharedEvent];
+  return id<MTLSharedEvent>(GetWrapped(self)->newSharedEvent());
 }
 
 - (nullable id<MTLSharedEvent>)newSharedEventWithHandle:(MTLSharedEventHandle *)sharedEventHandle
     API_AVAILABLE(macos(10.14), ios(12.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newSharedEventWithHandle:sharedEventHandle];
+  id<MTLSharedEvent> real = [self.real newSharedEventWithHandle:sharedEventHandle];
+  id<MTLSharedEvent> source = MetalSharedEventHandleSource(sharedEventHandle);
+  return id<MTLSharedEvent>(GetWrapped(self)->ImportSharedEventHandle(
+      (MTL::SharedEvent *)real, source ? GetWrapped(source) : NULL));
 }
 
 - (uint64_t)peerGroupID API_AVAILABLE(macos(10.15))API_UNAVAILABLE(ios)
@@ -711,7 +1172,6 @@
                              sampleCount:(NSUInteger)sampleCount
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(13.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real sparseTileSizeWithTextureType:textureType
                                       pixelFormat:pixelFormat
                                       sampleCount:sampleCount];
@@ -729,7 +1189,6 @@
                        numRegions:(NSUInteger)numRegions
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(13.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real convertSparsePixelRegions:pixelRegions
                                 toTileRegions:tileRegions
                                  withTileSize:tileSize
@@ -743,7 +1202,6 @@
                       numRegions:(NSUInteger)numRegions
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(13.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real convertSparseTileRegions:tileRegions
                               toPixelRegions:pixelRegions
                                 withTileSize:tileSize
@@ -754,7 +1212,6 @@
 - (NSUInteger)sparseTileSizeInBytesForSparsePageSize:(MTLSparsePageSize)sparsePageSize
     API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real sparseTileSizeInBytesForSparsePageSize:sparsePageSize];
 }
 #endif
@@ -766,7 +1223,6 @@
                           sparsePageSize:(MTLSparsePageSize)sparsePageSize
     API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real sparseTileSizeWithTextureType:textureType
                                       pixelFormat:pixelFormat
                                       sampleCount:sampleCount
@@ -789,14 +1245,13 @@
                                                                       error:(NSError **)error
     API_AVAILABLE(macos(10.15), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newCounterSampleBufferWithDescriptor:descriptor error:error];
+  return id<MTLCounterSampleBuffer>(GetWrapped(self)->newCounterSampleBuffer(
+      (MTL::CounterSampleBufferDescriptor *)descriptor, (NS::Error **)error));
 }
 
 - (void)sampleTimestamps:(MTLTimestamp *)cpuTimestamp
             gpuTimestamp:(MTLTimestamp *)gpuTimestamp API_AVAILABLE(macos(10.15), ios(14.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real sampleTimestamps:cpuTimestamp gpuTimestamp:gpuTimestamp];
 }
 
@@ -804,8 +1259,8 @@
 - (id<MTLArgumentEncoder>)newArgumentEncoderWithBufferBinding:(id<MTLBufferBinding>)bufferBinding
     API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newArgumentEncoderWithBufferBinding:bufferBinding];
+  return id<MTLArgumentEncoder>(GetWrapped(self)->newArgumentEncoderWithBufferBinding(
+      (MTL::BufferBinding *)bufferBinding));
 }
 #endif
 
@@ -835,24 +1290,24 @@
                                               error:(NSError **)error
     API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newDynamicLibrary:library error:error];
+  return id<MTLDynamicLibrary>(GetWrapped(self)->newDynamicLibrary(
+      GetWrapped(library), (NS::Error **)error));
 }
 
 - (nullable id<MTLDynamicLibrary>)newDynamicLibraryWithURL:(NSURL *)url
                                                      error:(NSError **)error
     API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newDynamicLibraryWithURL:url error:error];
+  return id<MTLDynamicLibrary>(GetWrapped(self)->newDynamicLibraryWithURL(
+      (NS::URL *)url, (NS::Error **)error));
 }
 
 - (nullable id<MTLBinaryArchive>)newBinaryArchiveWithDescriptor:(MTLBinaryArchiveDescriptor *)descriptor
                                                           error:(NSError **)error
     API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newBinaryArchiveWithDescriptor:descriptor error:error];
+  return id<MTLBinaryArchive>(GetWrapped(self)->newBinaryArchive(
+      (MTL::BinaryArchiveDescriptor *)descriptor, (NS::Error **)error));
 }
 
 - (BOOL)supportsRaytracing API_AVAILABLE(macos(11.0), ios(14.0))
@@ -863,29 +1318,123 @@
 - (MTLAccelerationStructureSizes)accelerationStructureSizesWithDescriptor:
     (MTLAccelerationStructureDescriptor *)descriptor API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real accelerationStructureSizesWithDescriptor:descriptor];
+  MTLAccelerationStructureDescriptor *native = NativePrimitiveAccelerationDescriptor(descriptor);
+  if(!native) native = NativeInstanceDescriptor(descriptor);
+  if(!native) METAL_NOT_HOOKED();
+  MTLAccelerationStructureSizes sizes = [self.real accelerationStructureSizesWithDescriptor:native];
+  [native release];
+  return sizes;
 }
 
 - (nullable id<MTLAccelerationStructure>)newAccelerationStructureWithSize:(NSUInteger)size
     API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newAccelerationStructureWithSize:size];
+  return id<MTLAccelerationStructure>(GetWrapped(self)->newAccelerationStructureWithSize(size));
 }
 
 - (nullable id<MTLAccelerationStructure>)newAccelerationStructureWithDescriptor:
     (MTLAccelerationStructureDescriptor *)descriptor API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newAccelerationStructureWithDescriptor:descriptor];
+  MTLInstanceAccelerationStructureDescriptor *nativeInstance = NativeInstanceDescriptor(descriptor);
+  if(nativeInstance)
+  {
+    WrappedMTLAccelerationStructure *wrapped =
+        GetWrapped(self)->newAccelerationStructureWithDescriptor(
+            (MTL::AccelerationStructureDescriptor *)nativeInstance);
+    [nativeInstance release];
+    return id<MTLAccelerationStructure>(wrapped);
+  }
+  if(![(id)descriptor isKindOfClass:[MTLPrimitiveAccelerationStructureDescriptor class]])
+    METAL_NOT_HOOKED();
+  MTLPrimitiveAccelerationStructureDescriptor *primitive =
+      (MTLPrimitiveAccelerationStructureDescriptor *)descriptor;
+  if((primitive.usage != MTLAccelerationStructureUsageNone &&
+      primitive.usage != MTLAccelerationStructureUsageRefit) ||
+     primitive.motionKeyframeCount > 1 || primitive.geometryDescriptors.count != 1 ||
+     (![(id)primitive.geometryDescriptors[0]
+           isKindOfClass:[MTLAccelerationStructureTriangleGeometryDescriptor class]] &&
+      ![(id)primitive.geometryDescriptors[0]
+           isKindOfClass:[MTLAccelerationStructureBoundingBoxGeometryDescriptor class]]))
+    METAL_NOT_HOOKED();
+  id geometry = primitive.geometryDescriptors[0];
+  if([(id)geometry isKindOfClass:[MTLAccelerationStructureBoundingBoxGeometryDescriptor class]])
+  {
+    MTLAccelerationStructureBoundingBoxGeometryDescriptor *box = geometry;
+    bool invalidBox = ![(id)box.boundingBoxBuffer isKindOfClass:[ObjCBridgeMTLBuffer class]] ||
+                      box.boundingBoxBufferOffset % 16 != 0 ||
+                      box.boundingBoxBufferOffset > box.boundingBoxBuffer.length ||
+                      box.boundingBoxCount == 0 || box.boundingBoxCount > 1000000 ||
+                      box.boundingBoxStride < 6 * sizeof(float) ||
+                      box.boundingBoxStride > 1024 * 1024 ||
+                      box.boundingBoxStride % 8 != 0 ||
+                      box.boundingBoxBuffer.length - box.boundingBoxBufferOffset <
+                          6 * sizeof(float) ||
+                      box.boundingBoxCount - 1 >
+                          (box.boundingBoxBuffer.length - box.boundingBoxBufferOffset -
+                           6 * sizeof(float)) / box.boundingBoxStride ||
+                      box.intersectionFunctionTableOffset > 31;
+    if(@available(macOS 13.0, iOS 16.0, *))
+      invalidBox |= box.primitiveDataBuffer != nil;
+    if(invalidBox) METAL_NOT_HOOKED();
+  }
+  else
+  {
+    MTLAccelerationStructureTriangleGeometryDescriptor *triangle = geometry;
+    MTLAccelerationStructureTriangleGeometryDescriptor *defaults =
+        [MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
+    MTLAttributeFormat vertexFormat = MTLAttributeFormatFloat3;
+    if(@available(macOS 13.0, iOS 16.0, *))
+      vertexFormat = triangle.vertexFormat;
+    else
+      METAL_NOT_HOOKED();
+    const NSUInteger vertexBytes = vertexFormat == MTLAttributeFormatFloat3 ? 12 :
+                                   vertexFormat == MTLAttributeFormatFloat4 ? 16 : 0;
+    const NSUInteger available = triangle.vertexBufferOffset <= triangle.vertexBuffer.length ?
+        triangle.vertexBuffer.length - triangle.vertexBufferOffset : 0;
+    if(![(id)triangle.vertexBuffer isKindOfClass:[ObjCBridgeMTLBuffer class]] ||
+       triangle.vertexBufferOffset % sizeof(float) != 0 ||
+       triangle.vertexBufferOffset > triangle.vertexBuffer.length ||
+       !vertexBytes || triangle.vertexStride < vertexBytes ||
+       triangle.vertexStride > 1024 * 1024 || triangle.vertexStride % sizeof(float) ||
+       available < vertexBytes || triangle.triangleCount == 0 ||
+       triangle.triangleCount > 1000000 ||
+       (!triangle.indexBuffer &&
+        triangle.triangleCount * 3 - 1 > (available - vertexBytes) / triangle.vertexStride) ||
+       triangle.intersectionFunctionTableOffset > 31 ||
+       (triangle.indexBuffer &&
+        (![(id)triangle.indexBuffer isKindOfClass:[ObjCBridgeMTLBuffer class]] ||
+         available < vertexBytes + 2 * triangle.vertexStride ||
+         ((triangle.vertexStride == 12 && vertexFormat == MTLAttributeFormatFloat3) &&
+          triangle.vertexBufferOffset % (3 * sizeof(float)) != 0) ||
+         triangle.indexBufferOffset % (triangle.indexType == MTLIndexTypeUInt16 ? 2 : 4) != 0 ||
+         triangle.indexBufferOffset > triangle.indexBuffer.length ||
+         (triangle.indexType != MTLIndexTypeUInt16 && triangle.indexType != MTLIndexTypeUInt32) ||
+         triangle.triangleCount > (triangle.indexBuffer.length - triangle.indexBufferOffset) /
+             (3 * (triangle.indexType == MTLIndexTypeUInt16 ? 2 : 4)))) ||
+       (primitive.usage == MTLAccelerationStructureUsageRefit &&
+        ((triangle.vertexBufferOffset != 0 && !triangle.indexBuffer) ||
+         (triangle.intersectionFunctionTableOffset != 0 && !triangle.indexBuffer) ||
+         (triangle.opaque != defaults.opaque && !triangle.indexBuffer))))
+      METAL_NOT_HOOKED();
+    if(@available(macOS 13.0, iOS 16.0, *))
+    {
+      if(triangle.transformationMatrixBuffer || triangle.primitiveDataBuffer)
+        METAL_NOT_HOOKED();
+    }
+  }
+  MTLPrimitiveAccelerationStructureDescriptor *native =
+      NativePrimitiveAccelerationDescriptor(descriptor);
+  if(!native) METAL_NOT_HOOKED();
+  WrappedMTLAccelerationStructure *wrapped = GetWrapped(self)->newAccelerationStructureWithDescriptor(
+      (MTL::AccelerationStructureDescriptor *)native);
+  [native release];
+  return id<MTLAccelerationStructure>(wrapped);
 }
 
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_13_0
 - (MTLSizeAndAlign)heapAccelerationStructureSizeAndAlignWithSize:(NSUInteger)size
     API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
   return [self.real heapAccelerationStructureSizeAndAlignWithSize:size];
 }
 #endif
@@ -894,8 +1443,12 @@
 - (MTLSizeAndAlign)heapAccelerationStructureSizeAndAlignWithDescriptor:
     (MTLAccelerationStructureDescriptor *)descriptor API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real heapAccelerationStructureSizeAndAlignWithDescriptor:descriptor];
+  MTLAccelerationStructureDescriptor *native = NativePrimitiveAccelerationDescriptor(descriptor);
+  if(!native) native = NativeInstanceDescriptor(descriptor);
+  if(!native) METAL_NOT_HOOKED();
+  MTLSizeAndAlign layout = [self.real heapAccelerationStructureSizeAndAlignWithDescriptor:native];
+  [native release];
+  return layout;
 }
 #endif
 
@@ -930,7 +1483,7 @@
 - (void)setShouldMaximizeConcurrentCompilation:(BOOL)value API_AVAILABLE(macos(13.3))
                                                    API_UNAVAILABLE(ios)
 {
-  METAL_NOT_HOOKED();
+  // Host-side compilation scheduling does not affect captured GPU commands.
   return [self.real setShouldMaximizeConcurrentCompilation:value];
 }
 #endif

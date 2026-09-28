@@ -24,7 +24,11 @@
 
 #include "metal_buffer.h"
 #include "core/core.h"
+#include "metal_device.h"
+#include "metal_manager.h"
+#include "metal_replay.h"
 #include "metal_resources.h"
+#include "metal_texture.h"
 
 WrappedMTLBuffer::WrappedMTLBuffer(MTL::Buffer *realMTLBuffer, ResourceId objId,
                                    WrappedMTLDevice *wrappedMTLDevice)
@@ -33,6 +37,262 @@ WrappedMTLBuffer::WrappedMTLBuffer(MTL::Buffer *realMTLBuffer, ResourceId objId,
   if(realMTLBuffer && objId != ResourceId() && IsCaptureMode(m_State))
     AllocateObjCBridge(this);
 }
+
+template <typename SerialiserType>
+bool WrappedMTLBuffer::Serialise_makeAliasable(SerialiserType &ser)
+{
+  SERIALISE_ELEMENT_LOCAL(Buffer, this).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!Buffer || Buffer->m_Type != eResBuffer || !Buffer->m_Real ||
+       !Unwrap(Buffer)->heap())
+    {
+      RDCERR("Invalid Metal heap buffer aliasable resource");
+      return false;
+    }
+    Unwrap(Buffer)->makeAliasable();
+  }
+  return true;
+}
+
+void WrappedMTLBuffer::makeAliasable()
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->makeAliasable());
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBuffer_makeAliasable);
+    Serialise_makeAliasable(ser);
+    if(IsActiveCapturing(m_State))
+    {
+      m_Device->AddFrameCaptureRecordChunk(scope.Get());
+      GetResourceManager()->MarkResourceFrameReferenced(m_ID, eFrameRef_Read);
+    }
+    else
+      GetRecord(this)->AddChunk(scope.Get());
+  }
+}
+
+template bool WrappedMTLBuffer::Serialise_makeAliasable(ReadSerialiser &);
+template bool WrappedMTLBuffer::Serialise_makeAliasable(WriteSerialiser &);
+
+template <typename SerialiserType>
+bool WrappedMTLBuffer::Serialise_setPurgeableState(SerialiserType &ser, MTL::PurgeableState state)
+{
+  SERIALISE_ELEMENT_LOCAL(Buffer, this).Important();
+  SERIALISE_ELEMENT_LOCAL(State, (uint32_t)state).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    if(!Buffer || Buffer->m_Type != eResBuffer || !Buffer->m_Real ||
+       (State != MTL::PurgeableStateKeepCurrent && State != MTL::PurgeableStateNonVolatile))
+    {
+      RDCERR("Invalid or unsupported Metal buffer purgeable state");
+      return false;
+    }
+    Unwrap(Buffer)->setPurgeableState((MTL::PurgeableState)State);
+  }
+  return true;
+}
+
+MTL::PurgeableState WrappedMTLBuffer::setPurgeableState(MTL::PurgeableState state)
+{
+  MTL::PurgeableState previous = MTL::PurgeableStateKeepCurrent;
+  SERIALISE_TIME_CALL(previous = Unwrap(this)->setPurgeableState(state));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBuffer_setPurgeableState);
+    Serialise_setPurgeableState(ser, state);
+    if(IsActiveCapturing(m_State))
+    {
+      m_Device->AddFrameCaptureRecordChunk(scope.Get());
+      GetResourceManager()->MarkResourceFrameReferenced(m_ID, eFrameRef_Read);
+    }
+    else
+    {
+      GetRecord(this)->AddChunk(scope.Get());
+    }
+  }
+  return previous;
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLBuffer, MTL::PurgeableState, setPurgeableState,
+                                MTL::PurgeableState);
+
+template <typename SerialiserType>
+bool WrappedMTLBuffer::Serialise_newTextureWithDescriptor(
+    SerialiserType &ser, WrappedMTLTexture *texture, RDMTL::TextureDescriptor &descriptor,
+    NS::UInteger offset, NS::UInteger bytesPerRow)
+{
+  SERIALISE_ELEMENT_LOCAL(Buffer, this).Important();
+  SERIALISE_ELEMENT_LOCAL(Texture, GetResID(texture)).TypedAs("MTLTexture"_lit).Important();
+  SERIALISE_ELEMENT(descriptor).Important();
+  SERIALISE_ELEMENT(offset).Important();
+  SERIALISE_ELEMENT(bytesPerRow).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    if(!Buffer || Buffer->m_Type != eResBuffer || !Buffer->m_Real ||
+       Texture == ResourceId() || GetResourceManager()->HasResource(Texture) ||
+       Unwrap(Buffer)->storageMode() != MTL::StorageModeShared ||
+       descriptor.storageMode != MTL::StorageModeShared ||
+       descriptor.textureType != MTL::TextureType2D ||
+       (descriptor.pixelFormat != MTL::PixelFormatRGBA8Unorm &&
+        descriptor.pixelFormat != MTL::PixelFormatBGRA8Unorm) ||
+       descriptor.width == 0 || descriptor.height == 0 || descriptor.depth != 1 ||
+       descriptor.mipmapLevelCount != 1 || descriptor.arrayLength != 1 ||
+       descriptor.sampleCount != 1 || descriptor.width > UINT64_MAX / 4 ||
+       bytesPerRow < descriptor.width * 4 || offset > Unwrap(Buffer)->length() ||
+       bytesPerRow == 0 || descriptor.height > (Unwrap(Buffer)->length() - offset) / bytesPerRow)
+    {
+      RDCERR("Invalid or unsupported Metal buffer-backed texture identity, descriptor or range");
+      return false;
+    }
+    const uint64_t linearAlignment = Unwrap(m_Device)->minimumLinearTextureAlignmentForPixelFormat(
+        descriptor.pixelFormat);
+    const uint64_t bufferAlignment = Unwrap(m_Device)->minimumTextureBufferAlignmentForPixelFormat(
+        descriptor.pixelFormat);
+    if(linearAlignment == 0 || bufferAlignment == 0 || offset % bufferAlignment ||
+       bytesPerRow % linearAlignment)
+    {
+      RDCERR("Invalid Metal buffer-backed texture alignment");
+      return false;
+    }
+    MTL::TextureDescriptor *nativeDescriptor(descriptor);
+    MTL::Texture *real = Unwrap(Buffer)->newTexture(nativeDescriptor, offset, bytesPerRow);
+    nativeDescriptor->release();
+    if(!real)
+    {
+      RDCERR("Metal failed to create buffer-backed texture from captured parameters");
+      return false;
+    }
+    WrappedMTLTexture *wrapped = NULL;
+    GetResourceManager()->WrapResource(Texture, real, wrapped, true);
+    m_Device->AddResource(Texture, ResourceType::Texture, "Buffer Texture");
+    m_Device->GetReplay()->AddTexture(Texture, real, false);
+    m_Device->DerivedResource(Buffer, Texture);
+  }
+  return true;
+}
+
+WrappedMTLTexture *WrappedMTLBuffer::newTextureWithDescriptor(
+    RDMTL::TextureDescriptor &descriptor, NS::UInteger offset, NS::UInteger bytesPerRow)
+{
+  MTL::TextureDescriptor *nativeDescriptor(descriptor);
+  MTL::Texture *real = NULL;
+  SERIALISE_TIME_CALL(real = Unwrap(this)->newTexture(nativeDescriptor, offset, bytesPerRow));
+  nativeDescriptor->release();
+  if(!real)
+    return NULL;
+  WrappedMTLTexture *wrapped = NULL;
+  GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBuffer_newTextureWithDescriptor);
+    Serialise_newTextureWithDescriptor(ser, wrapped, descriptor, offset, bytesPerRow);
+    MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
+    record->AddParent(GetRecord(this));
+    record->AddChunk(scope.Get());
+    m_Device->RegisterBufferTextureParent(GetResID(wrapped), GetResID(this));
+  }
+  return wrapped;
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLBuffer, bool, newTextureWithDescriptor,
+                                WrappedMTLTexture *, RDMTL::TextureDescriptor &,
+                                NS::UInteger, NS::UInteger);
+
+template <typename SerialiserType>
+bool WrappedMTLBuffer::Serialise_addDebugMarker(SerialiserType &ser, NS::String *marker,
+                                                        NS::Range range)
+{
+  SERIALISE_ELEMENT_LOCAL(Buffer, this);
+  SERIALISE_ELEMENT(marker).Important();
+  SERIALISE_ELEMENT(range).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!Buffer || Buffer->m_Type != eResBuffer || !Buffer->m_Real ||
+       range.location > Unwrap(Buffer)->length() ||
+       range.length > Unwrap(Buffer)->length() - range.location)
+    {
+      RDCERR("Invalid Metal buffer debug marker resource or range");
+      return false;
+    }
+    // Preserve annotations as structured data, not persistent native debug state across seeks.
+  }
+  return true;
+}
+
+void WrappedMTLBuffer::addDebugMarker(NS::String *marker, NS::Range range)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->addDebugMarker(marker, range));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBuffer_addDebugMarker);
+    Serialise_addDebugMarker(ser, marker, range);
+    if(IsActiveCapturing(m_State))
+    {
+      m_Device->AddFrameCaptureRecordChunk(scope.Get());
+      GetResourceManager()->MarkResourceFrameReferenced(m_ID, eFrameRef_Read);
+    }
+    else
+    {
+      GetRecord(this)->AddChunk(scope.Get());
+    }
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLBuffer, void, addDebugMarker, NS::String *marker,
+                                NS::Range range);
+
+template <typename SerialiserType>
+bool WrappedMTLBuffer::Serialise_removeAllDebugMarkers(SerialiserType &ser)
+{
+  SERIALISE_ELEMENT_LOCAL(Buffer, this);
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!Buffer || Buffer->m_Type != eResBuffer || !Buffer->m_Real)
+    {
+      RDCERR("Invalid Metal buffer debug marker resource or range");
+      return false;
+    }
+    // Preserve annotations as structured data, not persistent native debug state across seeks.
+  }
+  return true;
+}
+
+void WrappedMTLBuffer::removeAllDebugMarkers()
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->removeAllDebugMarkers());
+  if(IsCaptureMode(m_State))
+  {
+    if(IsBackgroundCapturing(m_State))
+      GetRecord(this)->DiscardBackgroundBufferMarkers();
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBuffer_removeAllDebugMarkers);
+    Serialise_removeAllDebugMarkers(ser);
+    if(IsActiveCapturing(m_State))
+    {
+      m_Device->AddFrameCaptureRecordChunk(scope.Get());
+      GetResourceManager()->MarkResourceFrameReferenced(m_ID, eFrameRef_Read);
+    }
+    else
+    {
+      GetRecord(this)->AddChunk(scope.Get());
+    }
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLBuffer, void, removeAllDebugMarkers);
+
 
 void *WrappedMTLBuffer::contents()
 {
@@ -116,30 +376,34 @@ bool WrappedMTLBuffer::Serialise_InternalModifyCPUContents(SerialiserType &ser, 
 {
   SERIALISE_ELEMENT_LOCAL(Buffer, this).Important();
   SERIALISE_ELEMENT(start).Important();
-  uint64_t size = end - start;
+  uint64_t size = ser.IsWriting() ? end - start : 0;
   SERIALISE_ELEMENT(size).Important();
-  byte *pData = NULL;
+  bytebuf data;
   if(ser.IsWriting())
   {
-    pData = (byte *)Unwrap(this)->contents() + start;
-  }
-  if(IsReplayingAndReading())
-  {
-    pData = (byte *)Unwrap(Buffer)->contents() + start;
+    data.assign((byte *)Unwrap(this)->contents() + start, size);
   }
 
-  // serialise directly using buffer memory
-  ser.Serialise("data"_lit, pData, size, SerialiserFlags::NoFlags);
+  // bytebuf uses the same length/alignment/payload format as the old raw byte pointer path.
+  // Read into owned memory so malformed payload lengths cannot overwrite a live GPU buffer.
+  ser.Serialise("data"_lit, data);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading() &&
+     (size != data.size() || !m_Device->ReplayCPUBufferUpdate(Buffer, start, data)))
+  {
+    RDCERR("Invalid Metal CPU buffer update range, payload or resource");
+    return false;
+  }
 
   if(IsCaptureMode(m_State))
   {
     // update the base snapshot from the serialised data
-    size_t offs = size_t(ser.GetWriter()->GetOffset() - size);
-    const byte *serialisedData = ser.GetWriter()->GetData() + offs;
     if(bufInfo->baseSnapshot.isEmpty())
       bufInfo->baseSnapshot.resize(bufInfo->length);
     RDCASSERTEQUAL(bufInfo->baseSnapshot.size(), bufInfo->length);
-    memcpy(bufInfo->baseSnapshot.data() + start, serialisedData, size);
+    memcpy(bufInfo->baseSnapshot.data() + start, data.data(), size);
   }
 
   SERIALISE_CHECK_READ_ERRORS();

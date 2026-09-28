@@ -42,6 +42,138 @@ WrappedMTLIndirectRenderCommand::WrappedMTLIndirectRenderCommand(MTL::IndirectRe
     AllocateObjCBridge(this);
 }
 
+bool WrappedMTLIndirectCommandBuffer::PrepareReplay()
+{
+  const uint64_t epoch = m_Device->GetReplayEpoch();
+  if(!epoch || !SupportedDescriptor() || !Unwrap(this) ||
+     Unwrap(this)->storageMode() != MTL::StorageModeShared)
+    return false;
+  if(m_ReplayEpoch == epoch)
+    return true;
+  if(!m_ReplayEpoch)
+  {
+    // Initial CPU encoding is complete before the first frame command references this ICB.
+    m_ReplayInitialDraws = m_Draws;
+  }
+  else
+  {
+    // The previous replay's GPU work is complete. Reset in place so previously created command
+    // wrappers keep referring to the same native ICB. OnlyDraw shares the WithoutDraw epoch.
+    Unwrap(this)->reset(NS::Range::Make(0, m_Count));
+    m_Draws = m_ReplayInitialDraws;
+    for(NS::UInteger i = 0; i < m_Count; ++i)
+    {
+      const MetalIndirectDraw &draw = m_Draws[i];
+      MTL::IndirectRenderCommand *command = Unwrap(this)->indirectRenderCommand(i);
+      if(!command)
+        return false;
+      if(draw.pipeline)
+        command->setRenderPipelineState(Unwrap(draw.pipeline));
+      for(unsigned slot = 0; slot < 2; ++slot)
+        if(draw.vertexBuffers[slot])
+          command->setVertexBuffer(Unwrap(draw.vertexBuffers[slot]), draw.vertexBufferOffsets[slot], slot);
+      if(draw.encoded)
+      {
+        if(draw.indexed)
+          command->drawIndexedPrimitives(draw.primitive, draw.indexCount, draw.indexType,
+                                        Unwrap(draw.indexBuffer), draw.indexBufferOffset,
+                                        draw.instanceCount, draw.baseVertex, draw.baseInstance);
+        else
+          command->drawPrimitives(draw.primitive, draw.vertexStart, draw.vertexCount,
+                                  draw.instanceCount, draw.baseInstance);
+      }
+    }
+  }
+  m_ReplayEpoch = epoch;
+  m_Optimizations.clear();
+  return true;
+}
+
+bool WrappedMTLIndirectCommandBuffer::RegisterOptimization(ResourceId commandBuffer,
+                                                           const NS::Range &range)
+{
+  for(const auto &previous : m_Optimizations)
+    if(previous.first == commandBuffer && range.length && previous.second.length &&
+       range.location < previous.second.location + previous.second.length &&
+       previous.second.location < range.location + range.length)
+      return false;
+  m_Optimizations.push_back({commandBuffer, range});
+  return true;
+}
+
+template <typename SerialiserType>
+bool WrappedMTLIndirectCommandBuffer::Serialise_unavailableInitialContents(SerialiserType &ser)
+{
+  SERIALISE_ELEMENT_LOCAL(IndirectCommandBuffer, this).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    RDCERR("Unsupported Metal ICB initial contents: GPU writes before capture require a CPU reset/re-encode");
+    return false;
+  }
+  return true;
+}
+
+void WrappedMTLIndirectCommandBuffer::CaptureReplayDependency(MetalResourceRecord *record)
+{
+  if(IsActiveCapturing(m_State) && m_CaptureGPUWritten &&
+     m_CaptureGPUWriteEpoch != m_Device->GetCaptureEpoch())
+  {
+    // Preserve native execution but fail closed offline: CPU encoding records cannot reconstruct
+    // opaque ICB bytes produced by a GPU submission outside this capture.
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLIndirectCommandBuffer_unavailableInitialContents);
+    Serialise_unavailableInitialContents(ser);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(m_ID, eFrameRef_Read);
+  }
+}
+
+void WrappedMTLIndirectCommandBuffer::MarkGPUWrite()
+{
+  m_CaptureGPUWritten = true;
+  m_CaptureGPUWriteEpoch = IsActiveCapturing(m_State) ? m_Device->GetCaptureEpoch() : 0;
+}
+
+template bool WrappedMTLIndirectCommandBuffer::Serialise_unavailableInitialContents(ReadSerialiser &);
+template bool WrappedMTLIndirectCommandBuffer::Serialise_unavailableInitialContents(WriteSerialiser &);
+
+template <typename SerialiserType>
+bool WrappedMTLIndirectRenderCommand::Serialise_reset(SerialiserType &ser)
+{
+  SERIALISE_ELEMENT_LOCAL(IndirectRenderCommand, this).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!IndirectRenderCommand || IndirectRenderCommand->m_Type != eResIndirectRenderCommand ||
+       !Unwrap(IndirectRenderCommand) || !IndirectRenderCommand->m_Parent ||
+       IndirectRenderCommand->m_Index >= IndirectRenderCommand->m_Parent->Count())
+    {
+      RDCERR("Invalid Metal indirect render command reset identity");
+      return false;
+    }
+    Unwrap(IndirectRenderCommand)->reset();
+    IndirectRenderCommand->m_Parent->Draw(IndirectRenderCommand->m_Index) = MetalIndirectDraw();
+  }
+  return true;
+}
+
+void WrappedMTLIndirectRenderCommand::reset()
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->reset());
+  if(m_Parent)
+    m_Parent->Draw(m_Index) = MetalIndirectDraw();
+  if(IsCaptureMode(m_State) && m_Parent)
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLIndirectRenderCommand_reset);
+    Serialise_reset(ser);
+    GetRecord(m_Parent)->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLIndirectRenderCommand, void, reset);
+
 template <typename SerialiserType>
 bool WrappedMTLIndirectCommandBuffer::Serialise_indirectRenderCommand(
     SerialiserType &ser, WrappedMTLIndirectRenderCommand *command, NS::UInteger index)
@@ -126,6 +258,8 @@ void WrappedMTLIndirectCommandBuffer::reset(NS::Range range)
     return;
   }
   SERIALISE_TIME_CALL(Unwrap(this)->reset(range));
+  if(range.location == 0 && range.length == m_Count)
+    m_CaptureGPUWritten = false;
   for(NS::UInteger index = range.location; index < range.location + range.length; ++index)
     m_Draws[index] = MetalIndirectDraw();
   if(IsCaptureMode(m_State))

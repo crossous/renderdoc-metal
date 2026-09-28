@@ -31,7 +31,7 @@
 template <>
 rdcstr DoStringise(const MetalChunk &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1250, "Chunks changed without updating names");
+  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1384, "Chunks changed without updating names");
 
   BEGIN_ENUM_STRINGISE(MetalChunk)
   {
@@ -65,8 +65,28 @@ rdcstr DoStringise(const MetalChunk &el)
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newLibraryWithURL, "MTLDevice::newLibraryWithURL");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newLibraryWithData, "MTLDevice::newLibraryWithData");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newLibraryWithSource, "MTLDevice::newLibraryWithSource");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newLibraryWithSource_async, "MTLDevice::newLibraryWithSource(completionHandler)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithDescriptor_async, "MTLDevice::newRenderPipelineStateWithDescriptor(completionHandler)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithDescriptor_options_async, "MTLDevice::newRenderPipelineStateWithDescriptor(options, completionHandler)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newComputePipelineStateWithFunction_async, "MTLDevice::newComputePipelineStateWithFunction(completionHandler)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newComputePipelineStateWithFunction_options_async, "MTLDevice::newComputePipelineStateWithFunction(options, completionHandler)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newComputePipelineStateWithDescriptor_async, "MTLDevice::newComputePipelineStateWithDescriptor(completionHandler)");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newLibraryWithStitchedDescriptor,
                                "MTLDevice::newLibraryWithStitchedDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newLibraryWithStitchedDescriptor_async,
+                               "MTLDevice::newLibraryWithStitchedDescriptor(completionHandler)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBinaryArchive_addComputePipelineFunctionsWithDescriptor,
+                               "MTLBinaryArchive::addComputePipelineFunctionsWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBinaryArchive_addRenderPipelineFunctionsWithDescriptor,
+                               "MTLBinaryArchive::addRenderPipelineFunctionsWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBinaryArchive_addFunctionWithDescriptor,
+                               "MTLBinaryArchive::addFunctionWithDescriptor:library:");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBinaryArchive_addLibraryWithDescriptor,
+                               "MTLBinaryArchive::addLibraryWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBinaryArchive_addTileRenderPipelineFunctionsWithDescriptor,
+                               "MTLBinaryArchive::addTileRenderPipelineFunctionsWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBinaryArchive_addMeshRenderPipelineFunctionsWithDescriptor,
+                               "MTLBinaryArchive::addMeshRenderPipelineFunctionsWithDescriptor");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithDescriptor,
                                "MTLDevice::newRenderPipelineStateWithDescriptor");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithDescriptor_options,
@@ -80,8 +100,70 @@ rdcstr DoStringise(const MetalChunk &el)
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newFence, "MTLDevice::newFence");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithTileDescriptor,
                                "MTLDevice::newRenderPipelineStateWithTileDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithTileDescriptor_async,
+                               "MTLDevice::newRenderPipelineStateWithTileDescriptor(completionHandler)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithMeshDescriptor,
+                               "MTLDevice::newRenderPipelineStateWithMeshDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_drawMeshThreadgroups,
+                               "MTLRenderCommandEncoder::drawMeshThreadgroups");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_drawMeshThreadgroups_indirect,
+                               "MTLRenderCommandEncoder::drawMeshThreadgroups(indirect)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRasterizationRateMap_copyParameterDataToBuffer,
+                               "MTLRasterizationRateMap::copyParameterDataToBuffer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshBuffer,
+                               "MTLRenderCommandEncoder::setMeshBuffer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshBytes,
+                               "MTLRenderCommandEncoder::setMeshBytes");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshBufferOffset,
+                               "MTLRenderCommandEncoder::setMeshBufferOffset");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshBuffers,
+                               "MTLRenderCommandEncoder::setMeshBuffers");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshTexture,
+                               "MTLRenderCommandEncoder::setMeshTexture");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshTextures,
+                               "MTLRenderCommandEncoder::setMeshTextures");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshSamplerState,
+                               "MTLRenderCommandEncoder::setMeshSamplerState");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshSamplerStates,
+                               "MTLRenderCommandEncoder::setMeshSamplerStates");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshSamplerState_lodclamp,
+                               "MTLRenderCommandEncoder::setMeshSamplerState(lodclamp)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setMeshSamplerStates_lodclamp,
+                               "MTLRenderCommandEncoder::setMeshSamplerStates(lodclamp)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_drawMeshThreads,
+                               "MTLRenderCommandEncoder::drawMeshThreads");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithMeshDescriptor_async,
+                               "MTLDevice::newRenderPipelineStateWithMeshDescriptor(completionHandler)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithObjectMeshDescriptor,
+                               "MTLDevice::newRenderPipelineStateWithObjectMeshDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectBuffer,
+                               "MTLRenderCommandEncoder::setObjectBuffer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectBytes,
+                               "MTLRenderCommandEncoder::setObjectBytes");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectBufferOffset,
+                               "MTLRenderCommandEncoder::setObjectBufferOffset");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectBuffers,
+                               "MTLRenderCommandEncoder::setObjectBuffers");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectTexture,
+                               "MTLRenderCommandEncoder::setObjectTexture");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectTextures,
+                               "MTLRenderCommandEncoder::setObjectTextures");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectSamplerState,
+                               "MTLRenderCommandEncoder::setObjectSamplerState");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectSamplerStates,
+                               "MTLRenderCommandEncoder::setObjectSamplerStates");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectSamplerState_lodclamp,
+                               "MTLRenderCommandEncoder::setObjectSamplerState(lodclamp)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectSamplerStates_lodclamp,
+                               "MTLRenderCommandEncoder::setObjectSamplerStates(lodclamp)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setObjectThreadgroupMemoryLength,
+                               "MTLRenderCommandEncoder::setObjectThreadgroupMemoryLength");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRenderPipelineStateWithObjectMeshDescriptor_async,
+                               "MTLDevice::newRenderPipelineStateWithObjectMeshDescriptor(completionHandler)");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newArgumentEncoderWithArguments,
                                "MTLDevice::newArgumentEncoderWithArguments");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newArgumentEncoderWithBufferBinding,
+                               "MTLDevice::newArgumentEncoderWithBufferBinding");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_supportsRasterizationRateMapWithLayerCount,
                                "MTLDevice::supportsRasterizationRateMapWithLayerCount");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newRasterizationRateMapWithDescriptor,
@@ -176,6 +258,120 @@ rdcstr DoStringise(const MetalChunk &el)
                                "MTLRenderPipelineState::functionHandleWithFunction");
     STRINGISE_ENUM_CLASS_NAMED(MTLRenderPipelineState_newVisibleFunctionTableWithDescriptor,
                                "MTLRenderPipelineState::newVisibleFunctionTableWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLVisibleFunctionTable_setFunction,
+                               "MTLVisibleFunctionTable::setFunction");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_functionHandleWithFunction,
+                               "MTLComputePipelineState::functionHandleWithFunction");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_newVisibleFunctionTableWithDescriptor,
+                               "MTLComputePipelineState::newVisibleFunctionTableWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_newIntersectionFunctionTableWithDescriptor,
+                               "MTLComputePipelineState::newIntersectionFunctionTableWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setVisibleFunctionTable,
+                               "MTLComputeCommandEncoder::setVisibleFunctionTable");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setVisibleFunctionTables,
+                               "MTLComputeCommandEncoder::setVisibleFunctionTables");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setIntersectionFunctionTable,
+                               "MTLComputeCommandEncoder::setIntersectionFunctionTable");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setIntersectionFunctionTables,
+                               "MTLComputeCommandEncoder::setIntersectionFunctionTables");
+    STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setVisibleFunctionTable,
+                               "MTLArgumentEncoder::setVisibleFunctionTable");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newAccelerationStructureWithSize,
+                               "MTLDevice::newAccelerationStructureWithSize");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildAccelerationStructure,
+                               "MTLAccelerationStructureCommandEncoder::buildAccelerationStructure");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_writeCompactedAccelerationStructureSize,
+                               "MTLAccelerationStructureCommandEncoder::writeCompactedAccelerationStructureSize");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_endEncoding,
+                               "MTLAccelerationStructureCommandEncoder::endEncoding");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildIndexedTriangle,
+                               "MTLAccelerationStructureCommandEncoder::buildIndexedTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildBoundingBox,
+                               "MTLAccelerationStructureCommandEncoder::buildBoundingBox");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_newAccelerationStructureWithDescriptor,
+                               "MTLDevice::newAccelerationStructureWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_copyAccelerationStructure,
+                               "MTLAccelerationStructureCommandEncoder::copyAccelerationStructure");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_copyAndCompactAccelerationStructure,
+                               "MTLAccelerationStructureCommandEncoder::copyAndCompactAccelerationStructure");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildRefittableTriangle,
+                               "MTLAccelerationStructureCommandEncoder::buildRefittableTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_refitTriangle,
+                               "MTLAccelerationStructureCommandEncoder::refitTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_refitTriangleExtended,
+                               "MTLAccelerationStructureCommandEncoder::refitTriangleExtended");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildBoundingBoxExtended,
+                               "MTLAccelerationStructureCommandEncoder::buildBoundingBoxExtended");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildBoundingBoxStrided,
+                               "MTLAccelerationStructureCommandEncoder::buildBoundingBoxStrided");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildBoundingBoxTableOffset,
+                               "MTLAccelerationStructureCommandEncoder::buildBoundingBoxTableOffset");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildBoundingBoxOpaque,
+                               "MTLAccelerationStructureCommandEncoder::buildBoundingBoxOpaque");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildIndexedTriangleOffset,
+                               "MTLAccelerationStructureCommandEncoder::buildIndexedTriangleOffset");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildIndexedTriangleExtended,
+                               "MTLAccelerationStructureCommandEncoder::buildIndexedTriangleExtended");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildTriangleTableOffset,
+                               "MTLAccelerationStructureCommandEncoder::buildTriangleTableOffset");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildBoundingBoxNoDuplicate,
+                               "MTLAccelerationStructureCommandEncoder::buildBoundingBoxNoDuplicate");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildTriangleNoDuplicate,
+                               "MTLAccelerationStructureCommandEncoder::buildTriangleNoDuplicate");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildRefittableTriangleNoDuplicate,
+                               "MTLAccelerationStructureCommandEncoder::buildRefittableTriangleNoDuplicate");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_refitTriangleNoDuplicate,
+                               "MTLAccelerationStructureCommandEncoder::refitTriangleNoDuplicate");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildFormattedTriangle,
+                               "MTLAccelerationStructureCommandEncoder::buildFormattedTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildIndexedFormattedTriangle,
+                               "MTLAccelerationStructureCommandEncoder::buildIndexedFormattedTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildRefittableFormattedTriangle,
+                               "MTLAccelerationStructureCommandEncoder::buildRefittableFormattedTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_refitFormattedTriangle,
+                               "MTLAccelerationStructureCommandEncoder::refitFormattedTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildRefittableBoundingBox,
+                               "MTLAccelerationStructureCommandEncoder::buildRefittableBoundingBox");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_refitBoundingBox,
+                               "MTLAccelerationStructureCommandEncoder::refitBoundingBox");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildRefittableIndexedTriangle,
+                               "MTLAccelerationStructureCommandEncoder::buildRefittableIndexedTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_refitIndexedTriangle,
+                               "MTLAccelerationStructureCommandEncoder::refitIndexedTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setAccelerationStructure,
+                               "MTLComputeCommandEncoder::setAccelerationStructure");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildInstance,
+                               "MTLAccelerationStructureCommandEncoder::buildInstance");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildInstances,
+                               "MTLAccelerationStructureCommandEncoder::buildInstances");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildDistinctInstances,
+                               "MTLAccelerationStructureCommandEncoder::buildDistinctInstances");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildMultipleDistinctInstances,
+                               "MTLAccelerationStructureCommandEncoder::buildMultipleDistinctInstances");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildRepeatedDistinctInstances,
+                               "MTLAccelerationStructureCommandEncoder::buildRepeatedDistinctInstances");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildNonOpaqueTriangle,
+                               "MTLAccelerationStructureCommandEncoder::buildNonOpaqueTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIntersectionFunctionTable_setFunction,
+                               "MTLIntersectionFunctionTable::setFunction");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIntersectionFunctionTable_setOpaqueTriangleFunction,
+                               "MTLIntersectionFunctionTable::setOpaqueTriangleFunction");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIntersectionFunctionTable_setOpaqueTriangleFunctions,
+                               "MTLIntersectionFunctionTable::setOpaqueTriangleFunctions");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIntersectionFunctionTable_setBuffer,
+                               "MTLIntersectionFunctionTable::setBuffer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIntersectionFunctionTable_setBuffers,
+                               "MTLIntersectionFunctionTable::setBuffers");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIntersectionFunctionTable_setVisibleFunctionTable,
+                               "MTLIntersectionFunctionTable::setVisibleFunctionTable");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIntersectionFunctionTable_setVisibleFunctionTables,
+                               "MTLIntersectionFunctionTable::setVisibleFunctionTables");
+    STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_accelerationStructureCommandEncoderWithDescriptor,
+                               "MTLCommandBuffer::accelerationStructureCommandEncoderWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildOpaqueTriangle,
+                               "MTLAccelerationStructureCommandEncoder::buildOpaqueTriangle");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildIndexedOpaqueTriangle,
+                               "MTLAccelerationStructureCommandEncoder::buildIndexedOpaqueTriangle");
     STRINGISE_ENUM_CLASS_NAMED(
         MTLRenderPipelineState_newIntersectionFunctionTableWithDescriptor,
         "MTLRenderPipelineState::newIntersectionFunctionTableWithDescriptor");
@@ -380,7 +576,7 @@ rdcstr DoStringise(const MetalChunk &el)
     STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_executeCommandsInBuffer,
                                "MTLRenderCommandEncoder::executeCommandsInBuffer");
     STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_executeCommandsInBuffer_indirect,
-                               "MTLRenderCommandEncoder::executeCommandsInBuffer");
+                               "MTLRenderCommandEncoder::executeCommandsInBuffer (indirect range)");
     STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_memoryBarrierWithScope,
                                "MTLRenderCommandEncoder::memoryBarrierWithScope");
     STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_memoryBarrierWithResources,
@@ -473,6 +669,34 @@ rdcstr DoStringise(const MetalChunk &el)
                                "MTLComputeCommandEncoder::dispatchThreads");
     STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setBuffer,
                                "MTLComputeCommandEncoder::setBuffer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_useResource,
+                               "MTLComputeCommandEncoder::useResource");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_useResources,
+                               "MTLComputeCommandEncoder::useResources");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_memoryBarrierWithScope,
+                               "MTLComputeCommandEncoder::memoryBarrierWithScope");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_memoryBarrierWithResources,
+                               "MTLComputeCommandEncoder::memoryBarrierWithResources");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_pushDebugGroup,
+                               "MTLComputeCommandEncoder::pushDebugGroup");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_insertDebugSignpost,
+                               "MTLComputeCommandEncoder::insertDebugSignpost");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_popDebugGroup,
+                               "MTLComputeCommandEncoder::popDebugGroup");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_updateFence,
+                               "MTLComputeCommandEncoder::updateFence");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_waitForFence,
+                               "MTLComputeCommandEncoder::waitForFence");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setBytes,
+                               "MTLComputeCommandEncoder::setBytes");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setBufferOffset,
+                               "MTLComputeCommandEncoder::setBufferOffset");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setThreadgroupMemoryLength,
+                               "MTLComputeCommandEncoder::setThreadgroupMemoryLength");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setSamplerState_lodclamp,
+                               "MTLComputeCommandEncoder::setSamplerState_lodclamp");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setSamplerStates_lodclamp,
+                               "MTLComputeCommandEncoder::setSamplerStates_lodclamp");
     STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setSamplerState,
                                "MTLComputeCommandEncoder::setSamplerState");
     STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_setTextures,
@@ -483,6 +707,13 @@ rdcstr DoStringise(const MetalChunk &el)
                                "MTLComputeCommandEncoder::setBuffers");
     STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setArgumentBuffer,
                                "MTLArgumentEncoder::setArgumentBuffer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setArgumentBuffer_arrayElement,
+                               "MTLArgumentEncoder::setArgumentBuffer_arrayElement");
+    STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setBuffer, "MTLArgumentEncoder::setBuffer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_constantDataAtIndex,
+                               "MTLArgumentEncoder::constantDataAtIndex");
+    STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_unsupportedEncoding,
+                               "MTLArgumentEncoder::unsupportedEncoding");
     STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setTexture,
                                "MTLArgumentEncoder::setTexture");
     STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setSamplerState,
@@ -499,8 +730,33 @@ rdcstr DoStringise(const MetalChunk &el)
                                "MTLIndirectRenderCommand::drawIndexedPrimitives");
     STRINGISE_ENUM_CLASS_NAMED(MTLIndirectCommandBuffer_reset,
                                "MTLIndirectCommandBuffer::resetWithRange");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIndirectRenderCommand_reset, "MTLIndirectRenderCommand::reset");
+    STRINGISE_ENUM_CLASS_NAMED(MTLIndirectCommandBuffer_unavailableInitialContents,
+                               "MTLIndirectCommandBuffer::unavailableInitialContents");
     STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_executeCommandsMarker,
                                "MTLRenderCommandEncoder::executeCommandsInBuffer (begin)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLLibrary_newFunctionWithName_constantValues_async,
+                               "MTLLibrary::newFunctionWithName_constantValues_completionHandler");
+    STRINGISE_ENUM_CLASS_NAMED(MTLLibrary_newFunctionWithDescriptor_async,
+                               "MTLLibrary::newFunctionWithDescriptor_completionHandler");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setVertexBuffer_stride,
+                               "MTLRenderCommandEncoder::setVertexBuffer(attributeStride)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setVertexBuffers_strides,
+                               "MTLRenderCommandEncoder::setVertexBuffers(attributeStrides)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setVertexBufferOffset_stride,
+                               "MTLRenderCommandEncoder::setVertexBufferOffset(attributeStride)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_setVertexBytes_stride,
+                               "MTLRenderCommandEncoder::setVertexBytes(attributeStride)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLSharedEvent_unsupportedHostMutation,
+                               "MTLSharedEvent::unsupportedHostMutation");
+    STRINGISE_ENUM_CLASS_NAMED(MTLSharedEvent_setInitialSignaledValue,
+                               "MTLSharedEvent::setInitialSignaledValue");
+    STRINGISE_ENUM_CLASS_NAMED(MTLHeap_newBuffer, "MTLHeap::newBuffer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLHeap_newTexture, "MTLHeap::newTexture");
+    STRINGISE_ENUM_CLASS_NAMED(MTLHeap_newBufferWithOffset, "MTLHeap::newBuffer(offset)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLHeap_newTextureWithOffset, "MTLHeap::newTexture(offset)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_newArgumentEncoderForBufferAtIndex,
+                               "MTLArgumentEncoder::newArgumentEncoderForBufferAtIndex");
     STRINGISE_ENUM_CLASS_NAMED(Max, "Max Chunk");
   }
   END_ENUM_STRINGISE()
@@ -1369,7 +1625,7 @@ rdcstr DoStringise(const MTL::IndirectCommandType &el)
 template <>
 rdcstr DoStringise(const MetalResourceType &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)MetalResourceType::eResMax == 18, "MetalResourceType changed");
+  RDCCOMPILE_ASSERT((uint32_t)MetalResourceType::eResMax == 30, "MetalResourceType changed");
   BEGIN_ENUM_STRINGISE(MetalResourceType);
   {
     STRINGISE_ENUM(eResUnknown);
@@ -1390,6 +1646,18 @@ rdcstr DoStringise(const MetalResourceType &el)
     STRINGISE_ENUM(eResSamplerState);
     STRINGISE_ENUM(eResIndirectCommandBuffer);
     STRINGISE_ENUM(eResIndirectRenderCommand);
+    STRINGISE_ENUM(eResFence);
+    STRINGISE_ENUM(eResEvent);
+    STRINGISE_ENUM(eResHeap);
+    STRINGISE_ENUM(eResRasterizationRateMap);
+    STRINGISE_ENUM(eResCounterSampleBuffer);
+    STRINGISE_ENUM(eResDynamicLibrary);
+    STRINGISE_ENUM(eResFunctionHandle);
+    STRINGISE_ENUM(eResVisibleFunctionTable);
+    STRINGISE_ENUM(eResIntersectionFunctionTable);
+    STRINGISE_ENUM(eResAccelerationStructure);
+    STRINGISE_ENUM(eResAccelerationStructureCommandEncoder);
+    STRINGISE_ENUM(eResBinaryArchive);
   }
   END_ENUM_STRINGISE();
 }

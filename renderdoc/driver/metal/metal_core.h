@@ -35,7 +35,7 @@ struct MetalInitParams
   uint64_t GetSerialiseSize();
 
   // check if a frame capture section version is supported
-  static const uint64_t CurrentVersion = 0x1;
+  static const uint64_t CurrentVersion = 0xC;
 
   ResourceId DeviceID;
 };

@@ -23,6 +23,8 @@
  ******************************************************************************/
 
 #include "metal_render_command_encoder.h"
+#include "metal_visible_function_table.h"
+#include "metal_heap.h"
 #include "metal_types_bridge.h"
 
 // Wrapper for MTLRenderCommandEncoder
@@ -87,20 +89,17 @@
 
 - (void)insertDebugSignpost:(NSString *)string
 {
-  METAL_NOT_HOOKED();
-  return [self.real insertDebugSignpost:string];
+  GetWrapped(self)->insertDebugSignpost((NS::String *)string);
 }
 
 - (void)pushDebugGroup:(NSString *)string
 {
-  METAL_NOT_HOOKED();
-  return [self.real pushDebugGroup:string];
+  GetWrapped(self)->pushDebugGroup((NS::String *)string);
 }
 
 - (void)popDebugGroup
 {
-  METAL_NOT_HOOKED();
-  return [self.real popDebugGroup];
+  GetWrapped(self)->popDebugGroup();
 }
 
 // MTLRenderCommandEncoder : based on the protocol defined in
@@ -115,8 +114,9 @@
                 length:(NSUInteger)length
                atIndex:(NSUInteger)index API_AVAILABLE(macos(10.11), ios(8.3))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexBytes:bytes length:length atIndex:index];
+  rdcarray<byte> data;
+  data.assign((const byte *)bytes, length);
+  GetWrapped(self)->setVertexBytes(data, index);
 }
 
 - (void)setVertexBuffer:(nullable id<MTLBuffer>)buffer
@@ -129,16 +129,22 @@
 - (void)setVertexBufferOffset:(NSUInteger)offset
                       atIndex:(NSUInteger)index API_AVAILABLE(macos(10.11), ios(8.3))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexBufferOffset:offset atIndex:index];
+  GetWrapped(self)->setVertexBufferOffset(offset, index);
 }
 
 - (void)setVertexBuffers:(const id<MTLBuffer> __nullable[__nonnull])buffers
                  offsets:(const NSUInteger[__nonnull])offsets
                withRange:(NSRange)range
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexBuffers:buffers offsets:offsets withRange:range];
+  rdcarray<WrappedMTLBuffer *> wrapped;
+  rdcarray<NS::UInteger> copiedOffsets;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(buffers[i]));
+    copiedOffsets.push_back(offsets[i]);
+  }
+  GetWrapped(self)->setVertexBuffers(wrapped, copiedOffsets,
+                                     NS::Range::Make(range.location, range.length));
 }
 
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_14_0
@@ -147,8 +153,7 @@
         attributeStride:(NSUInteger)stride
                 atIndex:(NSUInteger)index API_AVAILABLE(macos(14.0), ios(17.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexBuffer:buffer offset:offset attributeStride:stride atIndex:index];
+  GetWrapped(self)->setVertexBufferWithStride(GetWrapped(buffer),offset,stride,index);
 }
 #endif
 
@@ -158,11 +163,16 @@
         attributeStrides:(NSUInteger const[__nonnull])strides
                withRange:(NSRange)range API_AVAILABLE(macos(14.0), ios(17.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexBuffers:buffers
-                             offsets:offsets
-                    attributeStrides:strides
-                           withRange:range];
+  rdcarray<WrappedMTLBuffer *> wrapped;
+  rdcarray<NS::UInteger> copiedOffsets, copiedStrides;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(buffers[i]));
+    copiedOffsets.push_back(offsets[i]);
+    copiedStrides.push_back(strides[i]);
+  }
+  GetWrapped(self)->setVertexBuffersWithStrides(wrapped,copiedOffsets,copiedStrides,
+                                                 NS::Range::Make(range.location,range.length));
 }
 #endif
 
@@ -171,8 +181,7 @@
               attributeStride:(NSUInteger)stride
                       atIndex:(NSUInteger)index API_AVAILABLE(macos(14.0), ios(17.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexBufferOffset:offset attributeStride:stride atIndex:index];
+  GetWrapped(self)->setVertexBufferOffsetWithStride(offset,stride,index);
 }
 #endif
 
@@ -182,8 +191,9 @@
        attributeStride:(NSUInteger)stride
                atIndex:(NSUInteger)index API_AVAILABLE(macos(14.0), ios(17.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexBytes:bytes length:length attributeStride:stride atIndex:index];
+  rdcarray<byte> data;
+  if(bytes && length) data.assign((const byte *)bytes,length);
+  GetWrapped(self)->setVertexBytesWithStride(data,stride,index);
 }
 #endif
 
@@ -220,11 +230,7 @@
                   lodMaxClamp:(float)lodMaxClamp
                       atIndex:(NSUInteger)index
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexSamplerState:sampler
-                              lodMinClamp:lodMinClamp
-                              lodMaxClamp:lodMaxClamp
-                                  atIndex:index];
+  GetWrapped(self)->setVertexSamplerStateWithLOD(GetWrapped(sampler), lodMinClamp, lodMaxClamp, index);
 }
 
 - (void)setVertexSamplerStates:(const id<MTLSamplerState> __nullable[__nonnull])samplers
@@ -232,26 +238,54 @@
                   lodMaxClamps:(const float[__nonnull])lodMaxClamps
                      withRange:(NSRange)range
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexSamplerStates:samplers
-                              lodMinClamps:lodMinClamps
-                              lodMaxClamps:lodMaxClamps
-                                 withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  rdcarray<float> minimums, maximums;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(samplers[i]));
+    minimums.push_back(lodMinClamps[i]);
+    maximums.push_back(lodMaxClamps[i]);
+  }
+  GetWrapped(self)->setVertexSamplerStatesWithLOD(wrapped, minimums, maximums,
+                                               NS::Range::Make(range.location, range.length));
 }
 
 - (void)setVertexVisibleFunctionTable:(nullable id<MTLVisibleFunctionTable>)functionTable
                         atBufferIndex:(NSUInteger)bufferIndex API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexVisibleFunctionTable:functionTable atBufferIndex:bufferIndex];
+  if(functionTable && ![functionTable isKindOfClass:[ObjCBridgeMTLVisibleFunctionTable class]])
+  {
+    RDCERR("Cannot capture unwrapped Metal vertex visible function table");
+    return;
+  }
+  GetWrapped(self)->setVertexVisibleFunctionTable(
+      functionTable ? GetWrapped((ObjCBridgeMTLVisibleFunctionTable *)functionTable) : NULL,
+      (uint32_t)bufferIndex);
 }
 
 - (void)setVertexVisibleFunctionTables:
             (const id<MTLVisibleFunctionTable> __nullable[__nonnull])functionTables
                        withBufferRange:(NSRange)range API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexVisibleFunctionTables:functionTables withBufferRange:range];
+  if(range.length == 0 || range.length > 31 || !functionTables)
+  {
+    RDCERR("Unsupported Metal vertex visible-function-table range");
+    return;
+  }
+  rdcarray<WrappedMTLVisibleFunctionTable *> wrapped;
+  wrapped.reserve(range.length);
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    id<MTLVisibleFunctionTable> table = functionTables[i];
+    if(table && ![table isKindOfClass:[ObjCBridgeMTLVisibleFunctionTable class]])
+    {
+      RDCERR("Cannot capture unwrapped Metal vertex visible function table");
+      return;
+    }
+    wrapped.push_back(table ? GetWrapped((ObjCBridgeMTLVisibleFunctionTable *)table) : NULL);
+  }
+  GetWrapped(self)->setVertexVisibleFunctionTables(wrapped,
+      NS::Range::Make(range.location, range.length));
 }
 
 - (void)setVertexIntersectionFunctionTable:
@@ -259,25 +293,50 @@
                              atBufferIndex:(NSUInteger)bufferIndex
     API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexIntersectionFunctionTable:intersectionFunctionTable
-                                         atBufferIndex:bufferIndex];
+  if(!intersectionFunctionTable ||
+     ![intersectionFunctionTable isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]])
+  {
+    RDCERR("Unsupported or unwrapped Metal vertex intersection function table");
+    return;
+  }
+  GetWrapped(self)->setVertexIntersectionFunctionTable(
+      GetWrapped((ObjCBridgeMTLIntersectionFunctionTable *)intersectionFunctionTable),
+      (uint32_t)bufferIndex);
 }
 
 - (void)setVertexIntersectionFunctionTables:
             (const id<MTLIntersectionFunctionTable> __nullable[__nonnull])intersectionFunctionTables
                             withBufferRange:(NSRange)range API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexIntersectionFunctionTables:intersectionFunctionTables
-                                        withBufferRange:range];
+  if(!intersectionFunctionTables || range.length == 0 || range.length > 31 ||
+     range.location > 31 - range.length)
+  {
+    RDCERR("Unsupported Metal vertex intersection-table range");
+    return;
+  }
+  rdcarray<WrappedMTLIntersectionFunctionTable *> wrapped;
+  for(NSUInteger i = 0; i < range.length; ++i)
+  {
+    id<MTLIntersectionFunctionTable> table = intersectionFunctionTables[i];
+    if(!table || ![table isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]])
+    {
+      RDCERR("Unsupported Metal vertex intersection-table member");
+      return;
+    }
+    wrapped.push_back(GetWrapped((ObjCBridgeMTLIntersectionFunctionTable *)table));
+  }
+  GetWrapped(self)->setIntersectionFunctionTables(wrapped,
+      NS::Range::Make(range.location, range.length), MTL::RenderStageVertex);
 }
 
 - (void)setVertexAccelerationStructure:(nullable id<MTLAccelerationStructure>)accelerationStructure
                          atBufferIndex:(NSUInteger)bufferIndex API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexAccelerationStructure:accelerationStructure atBufferIndex:bufferIndex];
+  if(accelerationStructure &&
+     ![(id)accelerationStructure isKindOfClass:[ObjCBridgeMTLAccelerationStructure class]])
+    METAL_NOT_HOOKED();
+  GetWrapped(self)->setVertexAccelerationStructure(
+      GetWrapped((ObjCBridgeMTLAccelerationStructure *)accelerationStructure), bufferIndex);
 }
 
 - (void)setViewport:(MTLViewport)viewport
@@ -288,8 +347,9 @@
 - (void)setViewports:(const MTLViewport[__nonnull])viewports
                count:(NSUInteger)count API_AVAILABLE(macos(10.13), ios(12.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setViewports:viewports count:count];
+  rdcarray<MTL::Viewport> wrapped;
+  wrapped.assign((const MTL::Viewport *)viewports, count);
+  GetWrapped(self)->setViewports(wrapped);
 }
 
 - (void)setFrontFacingWinding:(MTLWinding)frontFacingWinding
@@ -301,8 +361,20 @@
                        viewMappings:(nullable const MTLVertexAmplificationViewMapping *)viewMappings
     API_AVAILABLE(macos(10.15.4), ios(13.0), macCatalyst(13.4))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVertexAmplificationCount:count viewMappings:viewMappings];
+  if(count > 32)
+  {
+    RDCERR("Invalid Metal vertex amplification count %llu",(uint64_t)count);
+    return;
+  }
+  rdcarray<uint32_t> viewportOffsets, targetOffsets;
+  if(viewMappings)
+    for(NSUInteger i = 0; i < count; i++)
+    {
+      viewportOffsets.push_back(viewMappings[i].viewportArrayIndexOffset);
+      targetOffsets.push_back(viewMappings[i].renderTargetArrayIndexOffset);
+    }
+  GetWrapped(self)->setVertexAmplificationCount(count,viewportOffsets,targetOffsets,
+                                                 viewMappings != NULL);
 }
 
 - (void)setCullMode:(MTLCullMode)cullMode
@@ -312,14 +384,12 @@
 
 - (void)setDepthClipMode:(MTLDepthClipMode)depthClipMode API_AVAILABLE(macos(10.11), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setDepthClipMode:depthClipMode];
+  GetWrapped(self)->setDepthClipMode((MTL::DepthClipMode)depthClipMode);
 }
 
 - (void)setDepthBias:(float)depthBias slopeScale:(float)slopeScale clamp:(float)clamp
 {
-  METAL_NOT_HOOKED();
-  return [self.real setDepthBias:depthBias slopeScale:slopeScale clamp:clamp];
+  GetWrapped(self)->setDepthBias(depthBias, slopeScale, clamp);
 }
 
 - (void)setScissorRect:(MTLScissorRect)rect
@@ -330,22 +400,23 @@
 - (void)setScissorRects:(const MTLScissorRect[__nonnull])scissorRects
                   count:(NSUInteger)count API_AVAILABLE(macos(10.13), ios(12.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setScissorRects:scissorRects count:count];
+  rdcarray<MTL::ScissorRect> wrapped;
+  wrapped.assign((const MTL::ScissorRect *)scissorRects, count);
+  GetWrapped(self)->setScissorRects(wrapped);
 }
 
 - (void)setTriangleFillMode:(MTLTriangleFillMode)fillMode
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTriangleFillMode:fillMode];
+  GetWrapped(self)->setTriangleFillMode((MTL::TriangleFillMode)fillMode);
 }
 
 - (void)setFragmentBytes:(const void *)bytes
                   length:(NSUInteger)length
                  atIndex:(NSUInteger)index API_AVAILABLE(macos(10.11), ios(8.3))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentBytes:bytes length:length atIndex:index];
+  rdcarray<byte> data;
+  data.assign((const byte *)bytes, length);
+  GetWrapped(self)->setFragmentBytes(data, index);
 }
 
 - (void)setFragmentBuffer:(nullable id<MTLBuffer>)buffer
@@ -365,8 +436,15 @@
                    offsets:(const NSUInteger[__nonnull])offsets
                  withRange:(NSRange)range
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentBuffers:buffers offsets:offsets withRange:range];
+  rdcarray<WrappedMTLBuffer *> wrapped;
+  rdcarray<NS::UInteger> copiedOffsets;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(buffers[i]));
+    copiedOffsets.push_back(offsets[i]);
+  }
+  GetWrapped(self)->setFragmentBuffers(wrapped, copiedOffsets,
+                                       NS::Range::Make(range.location, range.length));
 }
 
 - (void)setFragmentTexture:(nullable id<MTLTexture>)texture atIndex:(NSUInteger)index
@@ -402,11 +480,7 @@
                     lodMaxClamp:(float)lodMaxClamp
                         atIndex:(NSUInteger)index
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentSamplerState:sampler
-                                lodMinClamp:lodMinClamp
-                                lodMaxClamp:lodMaxClamp
-                                    atIndex:index];
+  GetWrapped(self)->setFragmentSamplerStateWithLOD(GetWrapped(sampler), lodMinClamp, lodMaxClamp, index);
 }
 
 - (void)setFragmentSamplerStates:(const id<MTLSamplerState> __nullable[__nonnull])samplers
@@ -414,26 +488,54 @@
                     lodMaxClamps:(const float[__nonnull])lodMaxClamps
                        withRange:(NSRange)range
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentSamplerStates:samplers
-                                lodMinClamps:lodMinClamps
-                                lodMaxClamps:lodMaxClamps
-                                   withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  rdcarray<float> minimums, maximums;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(samplers[i]));
+    minimums.push_back(lodMinClamps[i]);
+    maximums.push_back(lodMaxClamps[i]);
+  }
+  GetWrapped(self)->setFragmentSamplerStatesWithLOD(wrapped, minimums, maximums,
+                                               NS::Range::Make(range.location, range.length));
 }
 
 - (void)setFragmentVisibleFunctionTable:(nullable id<MTLVisibleFunctionTable>)functionTable
                           atBufferIndex:(NSUInteger)bufferIndex API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentVisibleFunctionTable:functionTable atBufferIndex:bufferIndex];
+  if(functionTable && ![functionTable isKindOfClass:[ObjCBridgeMTLVisibleFunctionTable class]])
+  {
+    RDCERR("Cannot capture unwrapped Metal visible function table");
+    return;
+  }
+  GetWrapped(self)->setFragmentVisibleFunctionTable(
+      functionTable ? GetWrapped((ObjCBridgeMTLVisibleFunctionTable *)functionTable) : NULL,
+      (uint32_t)bufferIndex);
 }
 
 - (void)setFragmentVisibleFunctionTables:
             (const id<MTLVisibleFunctionTable> __nullable[__nonnull])functionTables
                          withBufferRange:(NSRange)range API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentVisibleFunctionTables:functionTables withBufferRange:range];
+  if(range.length == 0 || range.length > 31 || !functionTables)
+  {
+    RDCERR("Unsupported Metal fragment visible-function-table range");
+    return;
+  }
+  rdcarray<WrappedMTLVisibleFunctionTable *> wrapped;
+  wrapped.reserve(range.length);
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    id<MTLVisibleFunctionTable> table = functionTables[i];
+    if(table && ![table isKindOfClass:[ObjCBridgeMTLVisibleFunctionTable class]])
+    {
+      RDCERR("Cannot capture unwrapped Metal visible function table");
+      return;
+    }
+    wrapped.push_back(table ? GetWrapped((ObjCBridgeMTLVisibleFunctionTable *)table) : NULL);
+  }
+  GetWrapped(self)->setFragmentVisibleFunctionTables(wrapped,
+      NS::Range::Make(range.location, range.length));
 }
 
 - (void)setFragmentIntersectionFunctionTable:
@@ -441,33 +543,57 @@
                                atBufferIndex:(NSUInteger)bufferIndex
     API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentIntersectionFunctionTable:intersectionFunctionTable
-                                           atBufferIndex:bufferIndex];
+  if(!intersectionFunctionTable ||
+     ![intersectionFunctionTable isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]])
+  {
+    RDCERR("Unsupported or unwrapped Metal intersection function table");
+    return;
+  }
+  GetWrapped(self)->setFragmentIntersectionFunctionTable(
+      intersectionFunctionTable ?
+          GetWrapped((ObjCBridgeMTLIntersectionFunctionTable *)intersectionFunctionTable) : NULL,
+      (uint32_t)bufferIndex);
 }
 
 - (void)setFragmentIntersectionFunctionTables:
             (const id<MTLIntersectionFunctionTable> __nullable[__nonnull])intersectionFunctionTables
                               withBufferRange:(NSRange)range API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentIntersectionFunctionTables:intersectionFunctionTables
-                                          withBufferRange:range];
+  if(!intersectionFunctionTables || range.length == 0 || range.length > 31 ||
+     range.location > 31 - range.length)
+  {
+    RDCERR("Unsupported Metal fragment intersection-table range");
+    return;
+  }
+  rdcarray<WrappedMTLIntersectionFunctionTable *> wrapped;
+  for(NSUInteger i = 0; i < range.length; ++i)
+  {
+    id<MTLIntersectionFunctionTable> table = intersectionFunctionTables[i];
+    if(!table || ![table isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]])
+    {
+      RDCERR("Unsupported Metal fragment intersection-table member");
+      return;
+    }
+    wrapped.push_back(GetWrapped((ObjCBridgeMTLIntersectionFunctionTable *)table));
+  }
+  GetWrapped(self)->setIntersectionFunctionTables(wrapped,
+      NS::Range::Make(range.location, range.length), MTL::RenderStageFragment);
 }
 
 - (void)setFragmentAccelerationStructure:(nullable id<MTLAccelerationStructure>)accelerationStructure
                            atBufferIndex:(NSUInteger)bufferIndex
     API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setFragmentAccelerationStructure:accelerationStructure
-                                       atBufferIndex:bufferIndex];
+  if(accelerationStructure &&
+     ![(id)accelerationStructure isKindOfClass:[ObjCBridgeMTLAccelerationStructure class]])
+    METAL_NOT_HOOKED();
+  GetWrapped(self)->setFragmentAccelerationStructure(
+      GetWrapped((ObjCBridgeMTLAccelerationStructure *)accelerationStructure), bufferIndex);
 }
 
 - (void)setBlendColorRed:(float)red green:(float)green blue:(float)blue alpha:(float)alpha
 {
-  METAL_NOT_HOOKED();
-  return [self.real setBlendColorRed:red green:green blue:blue alpha:alpha];
+  GetWrapped(self)->setBlendColor(red, green, blue, alpha);
 }
 
 - (void)setDepthStencilState:(nullable id<MTLDepthStencilState>)depthStencilState
@@ -489,49 +615,43 @@
 
 - (void)setVisibilityResultMode:(MTLVisibilityResultMode)mode offset:(NSUInteger)offset
 {
-  METAL_NOT_HOOKED();
-  return [self.real setVisibilityResultMode:mode offset:offset];
+  GetWrapped(self)->setVisibilityResultMode((MTL::VisibilityResultMode)mode, offset);
 }
 
 - (void)setColorStoreAction:(MTLStoreAction)storeAction
                     atIndex:(NSUInteger)colorAttachmentIndex API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setColorStoreAction:storeAction atIndex:colorAttachmentIndex];
+  GetWrapped(self)->setColorStoreAction((MTL::StoreAction)storeAction, colorAttachmentIndex);
 }
 
 - (void)setDepthStoreAction:(MTLStoreAction)storeAction API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setDepthStoreAction:storeAction];
+  GetWrapped(self)->setDepthStoreAction((MTL::StoreAction)storeAction);
 }
 
 - (void)setStencilStoreAction:(MTLStoreAction)storeAction API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setStencilStoreAction:storeAction];
+  GetWrapped(self)->setStencilStoreAction((MTL::StoreAction)storeAction);
 }
 
 - (void)setColorStoreActionOptions:(MTLStoreActionOptions)storeActionOptions
                            atIndex:(NSUInteger)colorAttachmentIndex
     API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setColorStoreActionOptions:storeActionOptions atIndex:colorAttachmentIndex];
+  GetWrapped(self)->setColorStoreActionOptions((MTL::StoreActionOptions)storeActionOptions,
+                                               colorAttachmentIndex);
 }
 
 - (void)setDepthStoreActionOptions:(MTLStoreActionOptions)storeActionOptions
     API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setDepthStoreActionOptions:storeActionOptions];
+  GetWrapped(self)->setDepthStoreActionOptions((MTL::StoreActionOptions)storeActionOptions);
 }
 
 - (void)setStencilStoreActionOptions:(MTLStoreActionOptions)storeActionOptions
     API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setStencilStoreActionOptions:storeActionOptions];
+  GetWrapped(self)->setStencilStoreActionOptions((MTL::StoreActionOptions)storeActionOptions);
 }
 
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_13_0
@@ -539,8 +659,9 @@
                 length:(NSUInteger)length
                atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectBytes:bytes length:length atIndex:index];
+  rdcarray<byte> data;
+  if(bytes && length) data.assign((const byte *)bytes, length);
+  GetWrapped(self)->setObjectBytes(data, index);
 }
 #endif
 
@@ -549,8 +670,7 @@
                  offset:(NSUInteger)offset
                 atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectBuffer:buffer offset:offset atIndex:index];
+  GetWrapped(self)->setObjectBuffer(GetWrapped(buffer), offset, index);
 }
 #endif
 
@@ -558,8 +678,7 @@
 - (void)setObjectBufferOffset:(NSUInteger)offset
                       atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectBufferOffset:offset atIndex:index];
+  GetWrapped(self)->setObjectBufferOffset(offset, index);
 }
 #endif
 
@@ -568,8 +687,15 @@
                  offsets:(const NSUInteger[__nonnull])offsets
                withRange:(NSRange)range API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectBuffers:buffers offsets:offsets withRange:range];
+  rdcarray<WrappedMTLBuffer *> wrapped;
+  rdcarray<NS::UInteger> capturedOffsets;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(buffers[i]));
+    capturedOffsets.push_back(offsets[i]);
+  }
+  GetWrapped(self)->setObjectBuffers(wrapped, capturedOffsets,
+                                      NS::Range::Make(range.location, range.length));
 }
 #endif
 
@@ -577,8 +703,7 @@
 - (void)setObjectTexture:(nullable id<MTLTexture>)texture
                  atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectTexture:texture atIndex:index];
+  GetWrapped(self)->setObjectTextures({GetWrapped(texture)}, NS::Range::Make(index, 1), 0);
 }
 #endif
 
@@ -586,8 +711,9 @@
 - (void)setObjectTextures:(const id<MTLTexture> __nullable[__nonnull])textures
                 withRange:(NSRange)range API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectTextures:textures withRange:range];
+  rdcarray<WrappedMTLTexture *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++) wrapped.push_back(GetWrapped(textures[i]));
+  GetWrapped(self)->setObjectTextures(wrapped, NS::Range::Make(range.location, range.length), 1);
 }
 #endif
 
@@ -595,8 +721,7 @@
 - (void)setObjectSamplerState:(nullable id<MTLSamplerState>)sampler
                       atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectSamplerState:sampler atIndex:index];
+  GetWrapped(self)->setObjectSamplers({GetWrapped(sampler)}, {}, {}, NS::Range::Make(index, 1), 0);
 }
 #endif
 
@@ -604,8 +729,9 @@
 - (void)setObjectSamplerStates:(const id<MTLSamplerState> __nullable[__nonnull])samplers
                      withRange:(NSRange)range API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectSamplerStates:samplers withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++) wrapped.push_back(GetWrapped(samplers[i]));
+  GetWrapped(self)->setObjectSamplers(wrapped, {}, {}, NS::Range::Make(range.location, range.length), 1);
 }
 #endif
 
@@ -615,11 +741,8 @@
                   lodMaxClamp:(float)lodMaxClamp
                       atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectSamplerState:sampler
-                              lodMinClamp:lodMinClamp
-                              lodMaxClamp:lodMaxClamp
-                                  atIndex:index];
+  GetWrapped(self)->setObjectSamplers({GetWrapped(sampler)}, {lodMinClamp}, {lodMaxClamp},
+                                       NS::Range::Make(index, 1), 2);
 }
 #endif
 
@@ -629,11 +752,16 @@
                   lodMaxClamps:(const float[__nonnull])lodMaxClamps
                      withRange:(NSRange)range API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectSamplerStates:samplers
-                              lodMinClamps:lodMinClamps
-                              lodMaxClamps:lodMaxClamps
-                                 withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  rdcarray<float> minimums, maximums;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(samplers[i]));
+    minimums.push_back(lodMinClamps[i]);
+    maximums.push_back(lodMaxClamps[i]);
+  }
+  GetWrapped(self)->setObjectSamplers(wrapped, minimums, maximums,
+                                      NS::Range::Make(range.location, range.length), 3);
 }
 #endif
 
@@ -641,8 +769,7 @@
 - (void)setObjectThreadgroupMemoryLength:(NSUInteger)length
                                  atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setObjectThreadgroupMemoryLength:length atIndex:index];
+  GetWrapped(self)->setObjectThreadgroupMemoryLength(length, index);
 }
 #endif
 
@@ -651,8 +778,9 @@
               length:(NSUInteger)length
              atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshBytes:bytes length:length atIndex:index];
+  rdcarray<byte> data;
+  if(bytes && length) data.assign((const byte *)bytes, length);
+  GetWrapped(self)->setMeshBytes(data, index);
 }
 #endif
 
@@ -661,8 +789,7 @@
                offset:(NSUInteger)offset
               atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshBuffer:buffer offset:offset atIndex:index];
+  GetWrapped(self)->setMeshBuffer(GetWrapped(buffer), offset, index);
 }
 #endif
 
@@ -670,8 +797,7 @@
 - (void)setMeshBufferOffset:(NSUInteger)offset
                     atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshBufferOffset:offset atIndex:index];
+  GetWrapped(self)->setMeshBufferOffset(offset, index);
 }
 #endif
 
@@ -680,8 +806,15 @@
                offsets:(const NSUInteger[__nonnull])offsets
              withRange:(NSRange)range API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshBuffers:buffers offsets:offsets withRange:range];
+  rdcarray<WrappedMTLBuffer *> wrapped;
+  rdcarray<NS::UInteger> capturedOffsets;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(buffers[i]));
+    capturedOffsets.push_back(offsets[i]);
+  }
+  GetWrapped(self)->setMeshBuffers(wrapped, capturedOffsets,
+                                    NS::Range::Make(range.location, range.length));
 }
 #endif
 
@@ -689,8 +822,7 @@
 - (void)setMeshTexture:(nullable id<MTLTexture>)texture
                atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshTexture:texture atIndex:index];
+  GetWrapped(self)->setMeshTextures({GetWrapped(texture)}, NS::Range::Make(index, 1), 0);
 }
 #endif
 
@@ -698,8 +830,9 @@
 - (void)setMeshTextures:(const id<MTLTexture> __nullable[__nonnull])textures
               withRange:(NSRange)range API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshTextures:textures withRange:range];
+  rdcarray<WrappedMTLTexture *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++) wrapped.push_back(GetWrapped(textures[i]));
+  GetWrapped(self)->setMeshTextures(wrapped, NS::Range::Make(range.location, range.length), 1);
 }
 #endif
 
@@ -707,8 +840,7 @@
 - (void)setMeshSamplerState:(nullable id<MTLSamplerState>)sampler
                     atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshSamplerState:sampler atIndex:index];
+  GetWrapped(self)->setMeshSamplers({GetWrapped(sampler)}, {}, {}, NS::Range::Make(index, 1), 0);
 }
 #endif
 
@@ -716,8 +848,9 @@
 - (void)setMeshSamplerStates:(const id<MTLSamplerState> __nullable[__nonnull])samplers
                    withRange:(NSRange)range API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshSamplerStates:samplers withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++) wrapped.push_back(GetWrapped(samplers[i]));
+  GetWrapped(self)->setMeshSamplers(wrapped, {}, {}, NS::Range::Make(range.location, range.length), 1);
 }
 #endif
 
@@ -727,11 +860,8 @@
                 lodMaxClamp:(float)lodMaxClamp
                     atIndex:(NSUInteger)index API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshSamplerState:sampler
-                            lodMinClamp:lodMinClamp
-                            lodMaxClamp:lodMaxClamp
-                                atIndex:index];
+  GetWrapped(self)->setMeshSamplers({GetWrapped(sampler)}, {lodMinClamp}, {lodMaxClamp},
+                                     NS::Range::Make(index, 1), 2);
 }
 #endif
 
@@ -741,11 +871,16 @@
                 lodMaxClamps:(const float[__nonnull])lodMaxClamps
                    withRange:(NSRange)range API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setMeshSamplerStates:samplers
-                            lodMinClamps:lodMinClamps
-                            lodMaxClamps:lodMaxClamps
-                               withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  rdcarray<float> minimums, maximums;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(samplers[i]));
+    minimums.push_back(lodMinClamps[i]);
+    maximums.push_back(lodMaxClamps[i]);
+  }
+  GetWrapped(self)->setMeshSamplers(wrapped, minimums, maximums,
+                                    NS::Range::Make(range.location, range.length), 3);
 }
 #endif
 
@@ -755,10 +890,9 @@
       threadsPerMeshThreadgroup:(MTLSize)threadsPerMeshThreadgroup
     API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawMeshThreadgroups:threadgroupsPerGrid
-             threadsPerObjectThreadgroup:threadsPerObjectThreadgroup
-               threadsPerMeshThreadgroup:threadsPerMeshThreadgroup];
+  GetWrapped(self)->drawMeshThreadgroups((MTL::Size &)threadgroupsPerGrid,
+                                         (MTL::Size &)threadsPerObjectThreadgroup,
+                                         (MTL::Size &)threadsPerMeshThreadgroup);
 }
 #endif
 
@@ -768,10 +902,9 @@
       threadsPerMeshThreadgroup:(MTLSize)threadsPerMeshThreadgroup
     API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawMeshThreads:threadsPerGrid
-        threadsPerObjectThreadgroup:threadsPerObjectThreadgroup
-          threadsPerMeshThreadgroup:threadsPerMeshThreadgroup];
+  GetWrapped(self)->drawMeshThreads((MTL::Size &)threadsPerGrid,
+                                    (MTL::Size &)threadsPerObjectThreadgroup,
+                                    (MTL::Size &)threadsPerMeshThreadgroup);
 }
 #endif
 
@@ -782,11 +915,9 @@
                      threadsPerMeshThreadgroup:(MTLSize)threadsPerMeshThreadgroup
     API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawMeshThreadgroupsWithIndirectBuffer:indirectBuffer
-                                      indirectBufferOffset:indirectBufferOffset
-                               threadsPerObjectThreadgroup:threadsPerObjectThreadgroup
-                                 threadsPerMeshThreadgroup:threadsPerMeshThreadgroup];
+  GetWrapped(self)->drawMeshThreadgroups(GetWrapped(indirectBuffer), indirectBufferOffset,
+                                         (MTL::Size &)threadsPerObjectThreadgroup,
+                                         (MTL::Size &)threadsPerMeshThreadgroup);
 }
 #endif
 
@@ -813,13 +944,9 @@
             indexBufferOffset:(NSUInteger)indexBufferOffset
                 instanceCount:(NSUInteger)instanceCount
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawIndexedPrimitives:primitiveType
-                               indexCount:indexCount
-                                indexType:indexType
-                              indexBuffer:indexBuffer
-                        indexBufferOffset:indexBufferOffset
-                            instanceCount:instanceCount];
+  GetWrapped(self)->drawIndexedPrimitives((MTL::PrimitiveType)primitiveType, indexCount,
+                                          (MTL::IndexType)indexType, GetWrapped(indexBuffer),
+                                          indexBufferOffset, instanceCount);
 }
 
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)primitiveType
@@ -883,37 +1010,32 @@
 - (void)textureBarrier API_DEPRECATED_WITH_REPLACEMENT(
     "memoryBarrierWithScope:MTLBarrierScopeRenderTargets", macos(10.11, 10.14))API_UNAVAILABLE(ios)
 {
-  METAL_NOT_HOOKED();
-  return [self.real textureBarrier];
+  GetWrapped(self)->textureBarrier();
 }
 #pragma clang diagnostic pop
 
 - (void)updateFence:(id<MTLFence>)fence
         afterStages:(MTLRenderStages)stages API_AVAILABLE(macos(10.13), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real updateFence:fence afterStages:stages];
+  GetWrapped(self)->updateFence(GetWrapped(fence), (MTL::RenderStages)stages);
 }
 
 - (void)waitForFence:(id<MTLFence>)fence
         beforeStages:(MTLRenderStages)stages API_AVAILABLE(macos(10.13), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real waitForFence:fence beforeStages:stages];
+  GetWrapped(self)->waitForFence(GetWrapped(fence), (MTL::RenderStages)stages);
 }
 
 - (void)setTessellationFactorBuffer:(nullable id<MTLBuffer>)buffer
                              offset:(NSUInteger)offset
                      instanceStride:(NSUInteger)instanceStride API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTessellationFactorBuffer:buffer offset:offset instanceStride:instanceStride];
+  GetWrapped(self)->setTessellationFactorBuffer(GetWrapped(buffer), offset, instanceStride);
 }
 
 - (void)setTessellationFactorScale:(float)scale API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTessellationFactorScale:scale];
+  GetWrapped(self)->setTessellationFactorScale(scale);
 }
 
 - (void)drawPatches:(NSUInteger)numberOfPatchControlPoints
@@ -924,14 +1046,9 @@
              instanceCount:(NSUInteger)instanceCount
               baseInstance:(NSUInteger)baseInstance API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawPatches:numberOfPatchControlPoints
-                     patchStart:patchStart
-                     patchCount:patchCount
-               patchIndexBuffer:patchIndexBuffer
-         patchIndexBufferOffset:patchIndexBufferOffset
-                  instanceCount:instanceCount
-                   baseInstance:baseInstance];
+  GetWrapped(self)->drawPatches(numberOfPatchControlPoints, patchStart, patchCount,
+                                GetWrapped(patchIndexBuffer), patchIndexBufferOffset,
+                                instanceCount, baseInstance);
 }
 
 - (void)drawPatches:(NSUInteger)numberOfPatchControlPoints
@@ -941,12 +1058,9 @@
       indirectBufferOffset:(NSUInteger)indirectBufferOffset
     API_AVAILABLE(macos(10.12), ios(12.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawPatches:numberOfPatchControlPoints
-               patchIndexBuffer:patchIndexBuffer
-         patchIndexBufferOffset:patchIndexBufferOffset
-                 indirectBuffer:indirectBuffer
-           indirectBufferOffset:indirectBufferOffset];
+  GetWrapped(self)->drawPatchesIndirect(numberOfPatchControlPoints, GetWrapped(patchIndexBuffer),
+                                         patchIndexBufferOffset, GetWrapped(indirectBuffer),
+                                         indirectBufferOffset);
 }
 
 - (void)drawIndexedPatches:(NSUInteger)numberOfPatchControlPoints
@@ -959,16 +1073,10 @@
                     instanceCount:(NSUInteger)instanceCount
                      baseInstance:(NSUInteger)baseInstance API_AVAILABLE(macos(10.12), ios(10.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawIndexedPatches:numberOfPatchControlPoints
-                            patchStart:patchStart
-                            patchCount:patchCount
-                      patchIndexBuffer:patchIndexBuffer
-                patchIndexBufferOffset:patchIndexBufferOffset
-               controlPointIndexBuffer:controlPointIndexBuffer
-         controlPointIndexBufferOffset:controlPointIndexBufferOffset
-                         instanceCount:instanceCount
-                          baseInstance:baseInstance];
+  GetWrapped(self)->drawIndexedPatches(numberOfPatchControlPoints, patchStart, patchCount,
+                                       GetWrapped(patchIndexBuffer), patchIndexBufferOffset,
+                                       GetWrapped(controlPointIndexBuffer),
+                                       controlPointIndexBufferOffset, instanceCount, baseInstance);
 }
 
 - (void)drawIndexedPatches:(NSUInteger)numberOfPatchControlPoints
@@ -980,14 +1088,10 @@
              indirectBufferOffset:(NSUInteger)indirectBufferOffset
     API_AVAILABLE(macos(10.12), ios(12.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real drawIndexedPatches:numberOfPatchControlPoints
-                      patchIndexBuffer:patchIndexBuffer
-                patchIndexBufferOffset:patchIndexBufferOffset
-               controlPointIndexBuffer:controlPointIndexBuffer
-         controlPointIndexBufferOffset:controlPointIndexBufferOffset
-                        indirectBuffer:indirectBuffer
-                  indirectBufferOffset:indirectBufferOffset];
+  GetWrapped(self)->drawIndexedPatchesIndirect(
+      numberOfPatchControlPoints, GetWrapped(patchIndexBuffer), patchIndexBufferOffset,
+      GetWrapped(controlPointIndexBuffer), controlPointIndexBufferOffset,
+      GetWrapped(indirectBuffer), indirectBufferOffset);
 }
 
 - (NSUInteger)tileWidth API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
@@ -1005,8 +1109,9 @@
              atIndex:(NSUInteger)index
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileBytes:bytes length:length atIndex:index];
+  rdcarray<byte> data;
+  if(bytes && length) data.assign((const byte *)bytes, length);
+  GetWrapped(self)->setTileBytes(data, index);
 }
 
 - (void)setTileBuffer:(nullable id<MTLBuffer>)buffer
@@ -1014,16 +1119,14 @@
               atIndex:(NSUInteger)index
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileBuffer:buffer offset:offset atIndex:index];
+  GetWrapped(self)->setTileBuffer(GetWrapped(buffer), offset, index);
 }
 
 - (void)setTileBufferOffset:(NSUInteger)offset
                     atIndex:(NSUInteger)index
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileBufferOffset:offset atIndex:index];
+  GetWrapped(self)->setTileBufferOffset(offset, index);
 }
 
 - (void)setTileBuffers:(const id<MTLBuffer> __nullable[__nonnull])buffers
@@ -1031,40 +1134,47 @@
              withRange:(NSRange)range
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileBuffers:buffers offsets:offsets withRange:range];
+  rdcarray<WrappedMTLBuffer *> wrapped;
+  rdcarray<NS::UInteger> capturedOffsets;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(buffers[i]));
+    capturedOffsets.push_back(offsets[i]);
+  }
+  GetWrapped(self)->setTileBuffers(wrapped, capturedOffsets,
+                                    NS::Range::Make(range.location, range.length));
 }
 
 - (void)setTileTexture:(nullable id<MTLTexture>)texture
                atIndex:(NSUInteger)index
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileTexture:texture atIndex:index];
+  GetWrapped(self)->setTileTextures({GetWrapped(texture)}, NS::Range::Make(index, 1), 0);
 }
 
 - (void)setTileTextures:(const id<MTLTexture> __nullable[__nonnull])textures
               withRange:(NSRange)range
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileTextures:textures withRange:range];
+  rdcarray<WrappedMTLTexture *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++) wrapped.push_back(GetWrapped(textures[i]));
+  GetWrapped(self)->setTileTextures(wrapped, NS::Range::Make(range.location, range.length), 1);
 }
 
 - (void)setTileSamplerState:(nullable id<MTLSamplerState>)sampler
                     atIndex:(NSUInteger)index
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileSamplerState:sampler atIndex:index];
+  GetWrapped(self)->setTileSamplers({GetWrapped(sampler)}, {}, {}, NS::Range::Make(index, 1), 0);
 }
 
 - (void)setTileSamplerStates:(const id<MTLSamplerState> __nullable[__nonnull])samplers
                    withRange:(NSRange)range
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileSamplerStates:samplers withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  for(NSUInteger i = 0; i < range.length; i++) wrapped.push_back(GetWrapped(samplers[i]));
+  GetWrapped(self)->setTileSamplers(wrapped, {}, {}, NS::Range::Make(range.location, range.length), 1);
 }
 
 - (void)setTileSamplerState:(nullable id<MTLSamplerState>)sampler
@@ -1073,11 +1183,8 @@
                     atIndex:(NSUInteger)index
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileSamplerState:sampler
-                            lodMinClamp:lodMinClamp
-                            lodMaxClamp:lodMaxClamp
-                                atIndex:index];
+  GetWrapped(self)->setTileSamplers({GetWrapped(sampler)}, {lodMinClamp}, {lodMaxClamp},
+                                    NS::Range::Make(index, 1), 2);
 }
 
 - (void)setTileSamplerStates:(const id<MTLSamplerState> __nullable[__nonnull])samplers
@@ -1086,25 +1193,53 @@
                    withRange:(NSRange)range
     API_AVAILABLE(ios(11.0), tvos(14.5), macos(11.0), macCatalyst(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileSamplerStates:samplers
-                            lodMinClamps:lodMinClamps
-                            lodMaxClamps:lodMaxClamps
-                               withRange:range];
+  rdcarray<WrappedMTLSamplerState *> wrapped;
+  rdcarray<float> minClamps, maxClamps;
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    wrapped.push_back(GetWrapped(samplers[i]));
+    minClamps.push_back(lodMinClamps[i]);
+    maxClamps.push_back(lodMaxClamps[i]);
+  }
+  GetWrapped(self)->setTileSamplers(wrapped, minClamps, maxClamps,
+                                    NS::Range::Make(range.location, range.length), 3);
 }
 
 - (void)setTileVisibleFunctionTable:(nullable id<MTLVisibleFunctionTable>)functionTable
                       atBufferIndex:(NSUInteger)bufferIndex API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileVisibleFunctionTable:functionTable atBufferIndex:bufferIndex];
+  if(functionTable && ![functionTable isKindOfClass:[ObjCBridgeMTLVisibleFunctionTable class]])
+  {
+    RDCERR("Cannot capture unwrapped Metal tile visible function table");
+    return;
+  }
+  GetWrapped(self)->setTileVisibleFunctionTable(
+      functionTable ? GetWrapped((ObjCBridgeMTLVisibleFunctionTable *)functionTable) : NULL,
+      (uint32_t)bufferIndex);
 }
 
 - (void)setTileVisibleFunctionTables:(const id<MTLVisibleFunctionTable> __nullable[__nonnull])functionTables
                      withBufferRange:(NSRange)range API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileVisibleFunctionTables:functionTables withBufferRange:range];
+  if(range.length == 0 || range.length > 31 || !functionTables)
+  {
+    RDCERR("Unsupported Metal tile visible-function-table range");
+    return;
+  }
+  rdcarray<WrappedMTLVisibleFunctionTable *> wrapped;
+  wrapped.reserve(range.length);
+  for(NSUInteger i = 0; i < range.length; i++)
+  {
+    id<MTLVisibleFunctionTable> table = functionTables[i];
+    if(table && ![table isKindOfClass:[ObjCBridgeMTLVisibleFunctionTable class]])
+    {
+      RDCERR("Cannot capture unwrapped Metal tile visible function table");
+      return;
+    }
+    wrapped.push_back(table ? GetWrapped((ObjCBridgeMTLVisibleFunctionTable *)table) : NULL);
+  }
+  GetWrapped(self)->setTileVisibleFunctionTables(wrapped,
+      NS::Range::Make(range.location, range.length));
 }
 
 - (void)setTileIntersectionFunctionTable:
@@ -1112,32 +1247,56 @@
                            atBufferIndex:(NSUInteger)bufferIndex
     API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileIntersectionFunctionTable:intersectionFunctionTable
-                                       atBufferIndex:bufferIndex];
+  if(!intersectionFunctionTable ||
+     ![intersectionFunctionTable isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]])
+  {
+    RDCERR("Unsupported or unwrapped Metal tile intersection function table");
+    return;
+  }
+  GetWrapped(self)->setTileIntersectionFunctionTable(
+      GetWrapped((ObjCBridgeMTLIntersectionFunctionTable *)intersectionFunctionTable),
+      (uint32_t)bufferIndex);
 }
 
 - (void)setTileIntersectionFunctionTables:
             (const id<MTLIntersectionFunctionTable> __nullable[__nonnull])intersectionFunctionTable
                           withBufferRange:(NSRange)range API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileIntersectionFunctionTables:intersectionFunctionTable
-                                      withBufferRange:range];
+  if(!intersectionFunctionTable || range.length == 0 || range.length > 31 ||
+     range.location > 31 - range.length)
+  {
+    RDCERR("Unsupported Metal tile intersection-table range");
+    return;
+  }
+  rdcarray<WrappedMTLIntersectionFunctionTable *> wrapped;
+  for(NSUInteger i = 0; i < range.length; ++i)
+  {
+    id<MTLIntersectionFunctionTable> table = intersectionFunctionTable[i];
+    if(!table || ![table isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]])
+    {
+      RDCERR("Unsupported Metal tile intersection-table member");
+      return;
+    }
+    wrapped.push_back(GetWrapped((ObjCBridgeMTLIntersectionFunctionTable *)table));
+  }
+  GetWrapped(self)->setIntersectionFunctionTables(wrapped,
+      NS::Range::Make(range.location, range.length), MTL::RenderStageTile);
 }
 
 - (void)setTileAccelerationStructure:(nullable id<MTLAccelerationStructure>)accelerationStructure
                        atBufferIndex:(NSUInteger)bufferIndex API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setTileAccelerationStructure:accelerationStructure atBufferIndex:bufferIndex];
+  if(accelerationStructure &&
+     ![(id)accelerationStructure isKindOfClass:[ObjCBridgeMTLAccelerationStructure class]])
+    METAL_NOT_HOOKED();
+  GetWrapped(self)->setTileAccelerationStructure(
+      GetWrapped((ObjCBridgeMTLAccelerationStructure *)accelerationStructure), bufferIndex);
 }
 
 - (void)dispatchThreadsPerTile:(MTLSize)threadsPerTile
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real dispatchThreadsPerTile:threadsPerTile];
+  GetWrapped(self)->dispatchThreadsPerTile((MTL::Size &)threadsPerTile);
 }
 
 - (void)setThreadgroupMemoryLength:(NSUInteger)length
@@ -1145,8 +1304,7 @@
                            atIndex:(NSUInteger)index
     API_AVAILABLE(macos(11.0), macCatalyst(14.0), ios(11.0), tvos(14.5))
 {
-  METAL_NOT_HOOKED();
-  return [self.real setThreadgroupMemoryLength:length offset:offset atIndex:index];
+  GetWrapped(self)->setThreadgroupMemoryLength(length, offset, index);
 }
 
 - (void)useResource:(id<MTLResource>)resource
@@ -1159,16 +1317,18 @@
                count:(NSUInteger)count
                usage:(MTLResourceUsage)usage API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real useResources:resources count:count usage:usage];
+  rdcarray<WrappedMTLResource *> wrapped;
+  for(NSUInteger i = 0; i < count; i++)
+    wrapped.push_back(GetWrapped(resources[i]));
+  GetWrapped(self)->useResources(wrapped, (MTL::ResourceUsage)usage);
 }
 
 - (void)useResource:(id<MTLResource>)resource
               usage:(MTLResourceUsage)usage
              stages:(MTLRenderStages)stages API_AVAILABLE(macos(10.15), ios(13.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real useResource:resource usage:usage stages:stages];
+  GetWrapped(self)->useResourceWithStages(GetWrapped(resource), (MTL::ResourceUsage)usage,
+                                          (MTL::RenderStages)stages);
 }
 
 - (void)useResources:(const id<MTLResource> __nonnull[__nonnull])resources
@@ -1176,36 +1336,39 @@
                usage:(MTLResourceUsage)usage
               stages:(MTLRenderStages)stages API_AVAILABLE(macos(10.15), ios(13.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real useResources:resources count:count usage:usage stages:stages];
+  rdcarray<WrappedMTLResource *> wrapped;
+  for(NSUInteger i = 0; i < count; i++)
+    wrapped.push_back(GetWrapped(resources[i]));
+  GetWrapped(self)->useResourcesWithStages(wrapped, (MTL::ResourceUsage)usage,
+                                           (MTL::RenderStages)stages);
 }
 
 - (void)useHeap:(id<MTLHeap>)heap API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real useHeap:heap];
+  GetWrapped(self)->declareHeaps({GetWrapped(heap)}, MTL::RenderStageVertex, 0);
 }
 
 - (void)useHeaps:(const id<MTLHeap> __nonnull[__nonnull])heaps
            count:(NSUInteger)count API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real useHeaps:heaps count:count];
+  rdcarray<WrappedMTLHeap *> wrapped;
+  for(NSUInteger i = 0; i < count; i++) wrapped.push_back(GetWrapped(heaps[i]));
+  GetWrapped(self)->declareHeaps(wrapped, MTL::RenderStageVertex, 2);
 }
 
 - (void)useHeap:(id<MTLHeap>)heap
          stages:(MTLRenderStages)stages API_AVAILABLE(macos(10.15), ios(13.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real useHeap:heap stages:stages];
+  GetWrapped(self)->declareHeaps({GetWrapped(heap)}, (MTL::RenderStages)stages, 1);
 }
 
 - (void)useHeaps:(const id<MTLHeap> __nonnull[__nonnull])heaps
            count:(NSUInteger)count
           stages:(MTLRenderStages)stages API_AVAILABLE(macos(10.15), ios(13.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real useHeaps:heaps count:count stages:stages];
+  rdcarray<WrappedMTLHeap *> wrapped;
+  for(NSUInteger i = 0; i < count; i++) wrapped.push_back(GetWrapped(heaps[i]));
+  GetWrapped(self)->declareHeaps(wrapped, (MTL::RenderStages)stages, 3);
 }
 
 - (void)executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)indirectCommandBuffer
@@ -1221,10 +1384,9 @@
            indirectBufferOffset:(NSUInteger)indirectBufferOffset
     API_AVAILABLE(macos(10.14), macCatalyst(13.0), ios(13.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real executeCommandsInBuffer:indirectCommandbuffer
-                             indirectBuffer:indirectRangeBuffer
-                       indirectBufferOffset:indirectBufferOffset];
+  GetWrapped(self)->executeCommandsInBufferIndirect(GetWrapped(indirectCommandbuffer),
+                                                     GetWrapped(indirectRangeBuffer),
+                                                     indirectBufferOffset);
 }
 
 - (void)memoryBarrierWithScope:(MTLBarrierScope)scope
@@ -1232,8 +1394,8 @@
                   beforeStages:(MTLRenderStages)before
     API_AVAILABLE(macos(10.14), macCatalyst(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real memoryBarrierWithScope:scope afterStages:after beforeStages:before];
+  GetWrapped(self)->memoryBarrierWithScope((MTL::BarrierScope)scope, (MTL::RenderStages)after,
+                                            (MTL::RenderStages)before);
 }
 
 - (void)memoryBarrierWithResources:(const id<MTLResource> __nonnull[__nonnull])resources
@@ -1242,11 +1404,11 @@
                       beforeStages:(MTLRenderStages)before
     API_AVAILABLE(macos(10.14), macCatalyst(13.0), ios(16.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real memoryBarrierWithResources:resources
-                                         count:count
-                                   afterStages:after
-                                  beforeStages:before];
+  rdcarray<WrappedMTLResource *> wrapped;
+  for(NSUInteger i = 0; i < count; i++)
+    wrapped.push_back(GetWrapped(resources[i]));
+  GetWrapped(self)->memoryBarrierWithResources(wrapped, (MTL::RenderStages)after,
+                                                (MTL::RenderStages)before);
 }
 
 - (void)sampleCountersInBuffer:(id<MTLCounterSampleBuffer>)sampleBuffer

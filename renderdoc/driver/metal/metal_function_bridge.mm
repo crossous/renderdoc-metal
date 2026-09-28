@@ -25,6 +25,11 @@
 #include "metal_function.h"
 #include "metal_types_bridge.h"
 
+bool MetalFunctionIsWrapped(MTL::Function *function)
+{
+  return [(id)function isKindOfClass:[ObjCBridgeMTLFunction class]];
+}
+
 // Bridge for MTLFunction
 @implementation ObjCBridgeMTLFunction
 
@@ -127,8 +132,8 @@
                                                  reflection:(MTLAutoreleasedArgument *__nullable)reflection
     API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newArgumentEncoderWithBufferIndex:bufferIndex reflection:reflection];
+  return id<MTLArgumentEncoder>(GetWrapped(self)->newArgumentEncoderWithReflection(
+      bufferIndex, (MTL::AutoreleasedArgument *)reflection));
 }
 
 - (MTLFunctionOptions)options API_AVAILABLE(macos(11.0), ios(14.0))

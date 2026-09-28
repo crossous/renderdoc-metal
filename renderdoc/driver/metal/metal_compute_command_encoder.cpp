@@ -23,12 +23,17 @@
  ******************************************************************************/
 
 #include "metal_compute_command_encoder.h"
+#include "metal_fence.h"
+#include <cmath>
 #include "metal_command_buffer.h"
 #include "metal_compute_pipeline_state.h"
+#include "metal_visible_function_table.h"
 #include "metal_replay.h"
+#include "metal_resource_commands.h"
 #include "metal_texture.h"
 #include "metal_buffer.h"
 #include "metal_sampler_state.h"
+#include "metal_acceleration_structure.h"
 
 WrappedMTLComputeCommandEncoder::WrappedMTLComputeCommandEncoder(MTL::ComputeCommandEncoder *real,
                                                                  ResourceId id,
@@ -38,6 +43,310 @@ WrappedMTLComputeCommandEncoder::WrappedMTLComputeCommandEncoder(MTL::ComputeCom
   if(real && id != ResourceId() && IsCaptureMode(m_State))
     AllocateObjCBridge(this);
 }
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_useResource(SerialiserType &ser, WrappedMTLResource *resource, MTL::ResourceUsage usage)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(resource).Important();
+  SERIALISE_ELEMENT_LOCAL(usageValue, (uint64_t)usage).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       !Unwrap(ComputeCommandEncoder) || !ValidMetalResourceUsage(usageValue) ||
+       !ValidMetalResidencyResource(m_Device, resource))
+    {
+      RDCERR("Invalid Metal compute resource declaration");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->useResource(Unwrap(resource), (MTL::ResourceUsage)usageValue);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::useResource(WrappedMTLResource *resource, MTL::ResourceUsage usage)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->useResource(Unwrap(resource), usage));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_useResource);
+    Serialise_useResource(ser, resource, usage);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    ReferenceMetalCommandResources(record, {resource}, (usage & MTL::ResourceUsageWrite) != 0);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, useResource, WrappedMTLResource *resource, MTL::ResourceUsage usage);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_useResources(SerialiserType &ser, rdcarray<WrappedMTLResource *> resources, MTL::ResourceUsage usage)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(resources).Important();
+  SERIALISE_ELEMENT_LOCAL(usageValue, (uint64_t)usage).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       !Unwrap(ComputeCommandEncoder) || !ValidMetalResourceUsage(usageValue) ||
+       !ValidMetalResidencyResources(m_Device, resources))
+    {
+      RDCERR("Invalid Metal compute resource declaration");
+      return false;
+    }
+    const auto real = UnwrapMetalResources(resources);
+    if(!real.empty())
+      Unwrap(ComputeCommandEncoder)->useResources(real.data(), real.size(), (MTL::ResourceUsage)usageValue);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::useResources(rdcarray<WrappedMTLResource *> resources, MTL::ResourceUsage usage)
+{
+  const auto real = UnwrapMetalResources(resources);
+  if(!real.empty())
+  {
+    SERIALISE_TIME_CALL(Unwrap(this)->useResources(real.data(), real.size(), usage));
+  }
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_useResources);
+    Serialise_useResources(ser, resources, usage);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    ReferenceMetalCommandResources(record, resources, (usage & MTL::ResourceUsageWrite) != 0);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, useResources, rdcarray<WrappedMTLResource *> resources, MTL::ResourceUsage usage);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_memoryBarrierWithScope(SerialiserType &ser, MTL::BarrierScope barrierScope)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT_LOCAL(scopeValue, (uint64_t)barrierScope).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || scopeValue == 0 || (scopeValue & ~uint64_t(MTL::BarrierScopeBuffers | MTL::BarrierScopeTextures)) != 0)
+    {
+      RDCERR("Invalid Metal compute memory barrier");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->memoryBarrier((MTL::BarrierScope)scopeValue);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::memoryBarrierWithScope(MTL::BarrierScope barrierScope)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->memoryBarrier(barrierScope));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_memoryBarrierWithScope);
+    Serialise_memoryBarrierWithScope(ser, barrierScope);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, memoryBarrierWithScope, MTL::BarrierScope scope);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_memoryBarrierWithResources(SerialiserType &ser, rdcarray<WrappedMTLResource *> resources)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(resources).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || !ValidMetalCommandResources(m_Device, resources))
+    {
+      RDCERR("Invalid Metal compute memory barrier");
+      return false;
+    }
+    const auto real = UnwrapMetalResources(resources);
+    if(!real.empty())
+      Unwrap(ComputeCommandEncoder)->memoryBarrier(real.data(), real.size());
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::memoryBarrierWithResources(rdcarray<WrappedMTLResource *> resources)
+{
+  const auto real = UnwrapMetalResources(resources);
+  if(!real.empty())
+  {
+    SERIALISE_TIME_CALL(Unwrap(this)->memoryBarrier(real.data(), real.size()));
+  }
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_memoryBarrierWithResources);
+    Serialise_memoryBarrierWithResources(ser, resources);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    ReferenceMetalCommandResources(record, resources, false);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, memoryBarrierWithResources, rdcarray<WrappedMTLResource *> resources);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_pushDebugGroup(SerialiserType &ser, NS::String *string)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(string).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  // Keep markers as structured API events. Partial replay may stop inside a debug group.
+  return !IsReplayingAndReading() || ComputeCommandEncoder != NULL;
+}
+
+void WrappedMTLComputeCommandEncoder::pushDebugGroup(NS::String *string)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->pushDebugGroup(string));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_pushDebugGroup);
+    Serialise_pushDebugGroup(ser, string);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, pushDebugGroup, NS::String *string);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_insertDebugSignpost(SerialiserType &ser, NS::String *string)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(string).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  // Keep markers as structured API events. Partial replay may stop inside a debug group.
+  return !IsReplayingAndReading() || ComputeCommandEncoder != NULL;
+}
+
+void WrappedMTLComputeCommandEncoder::insertDebugSignpost(NS::String *string)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->insertDebugSignpost(string));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_insertDebugSignpost);
+    Serialise_insertDebugSignpost(ser, string);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, insertDebugSignpost, NS::String *string);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_popDebugGroup(SerialiserType &ser)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_CHECK_READ_ERRORS();
+  // Keep markers as structured API events. Partial replay may stop inside a debug group.
+  return !IsReplayingAndReading() || ComputeCommandEncoder != NULL;
+}
+
+void WrappedMTLComputeCommandEncoder::popDebugGroup()
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->popDebugGroup());
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_popDebugGroup);
+    Serialise_popDebugGroup(ser);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, popDebugGroup);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_updateFence(
+    SerialiserType &ser, WrappedMTLFence *fence)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(fence).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       !ComputeCommandEncoder->m_Real || !ValidMetalFence(fence))
+    {
+      RDCERR("Invalid Metal compute updateFence resource, stage or dependency");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->updateFence(Unwrap(fence));
+    fence->Updated(m_Device->GetReplayEpoch(), GetResID(ComputeCommandEncoder));
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::updateFence(WrappedMTLFence *fence)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->updateFence(Unwrap(fence)));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_updateFence);
+    Serialise_updateFence(ser, fence);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(fence), eFrameRef_Read);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, updateFence,
+                                WrappedMTLFence *fence);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_waitForFence(
+    SerialiserType &ser, WrappedMTLFence *fence)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(fence).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       !ComputeCommandEncoder->m_Real || !ValidMetalFence(fence) ||
+       !fence->CanWait(m_Device->GetReplayEpoch(), GetResID(ComputeCommandEncoder)))
+    {
+      RDCERR("Invalid Metal compute waitForFence resource, stage or dependency");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->waitForFence(Unwrap(fence));
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::waitForFence(WrappedMTLFence *fence)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->waitForFence(Unwrap(fence)));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_waitForFence);
+    Serialise_waitForFence(ser, fence);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(fence), eFrameRef_Read);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, waitForFence,
+                                WrappedMTLFence *fence);
 
 template <typename SerialiserType>
 bool WrappedMTLComputeCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
@@ -86,10 +395,231 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setComputePipelineState(
     if(!pipeline)
       return false;
     Unwrap(ComputeCommandEncoder)->setComputePipelineState(Unwrap(pipeline));
+    m_Pipeline = pipeline;
     m_Device->GetReplay()->SetComputePipeline(GetResID(pipeline));
   }
   return true;
 }
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTable(
+    SerialiserType &ser, WrappedMTLVisibleFunctionTable *table, uint32_t index)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this).Important();
+  SERIALISE_ELEMENT(table).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() || index >= 31 ||
+       (table && (table->m_Type != eResVisibleFunctionTable || !table->m_Real ||
+                  table->m_Pipeline != m_Pipeline || table->m_Stage != (MTL::RenderStages)0)))
+    {
+      RDCERR("Invalid Metal compute visible-function-table binding");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->setVisibleFunctionTable(Unwrap(table), index);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setVisibleFunctionTable(
+    WrappedMTLVisibleFunctionTable *table, uint32_t index)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->setVisibleFunctionTable(Unwrap(table), index));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setVisibleFunctionTable);
+    Serialise_setVisibleFunctionTable(ser, table, index);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    if(table) record->MarkResourceFrameReferenced(GetResID(table), eFrameRef_Read);
+  }
+}
+
+template bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTable(
+    ReadSerialiser &, WrappedMTLVisibleFunctionTable *, uint32_t);
+template bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTable(
+    WriteSerialiser &, WrappedMTLVisibleFunctionTable *, uint32_t);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTables(
+    SerialiserType &ser, rdcarray<WrappedMTLVisibleFunctionTable *> tables, NS::Range range)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this).Important();
+  SERIALISE_ELEMENT(tables).Important();
+  SERIALISE_ELEMENT(range).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       range.length == 0 || range.length > 31 || range.location > 31 - range.length ||
+       tables.size() != range.length)
+    {
+      RDCERR("Invalid Metal compute visible-function-table range");
+      return false;
+    }
+    rdcarray<const MTL::VisibleFunctionTable *> native;
+    native.reserve(tables.size());
+    for(WrappedMTLVisibleFunctionTable *table : tables)
+    {
+      if(table && (table->m_Type != eResVisibleFunctionTable || !table->m_Real ||
+                   table->m_Stage != (MTL::RenderStages)0 ||
+                   table->m_Pipeline != m_Pipeline))
+      {
+        RDCERR("Invalid Metal compute visible-function-table member");
+        return false;
+      }
+      native.push_back(Unwrap(table));
+    }
+    Unwrap(ComputeCommandEncoder)->setVisibleFunctionTables(native.data(), range);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setVisibleFunctionTables(
+    rdcarray<WrappedMTLVisibleFunctionTable *> tables, NS::Range range)
+{
+  if(range.length == 0 || range.length > 31 || tables.size() != range.length)
+  {
+    RDCERR("Unsupported Metal compute visible-function-table range");
+    return;
+  }
+  rdcarray<const MTL::VisibleFunctionTable *> native;
+  native.reserve(tables.size());
+  for(WrappedMTLVisibleFunctionTable *table : tables) native.push_back(Unwrap(table));
+  SERIALISE_TIME_CALL(Unwrap(this)->setVisibleFunctionTables(native.data(), range));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setVisibleFunctionTables);
+    Serialise_setVisibleFunctionTables(ser, tables, range);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    for(WrappedMTLVisibleFunctionTable *table : tables)
+      if(table) record->MarkResourceFrameReferenced(GetResID(table), eFrameRef_Read);
+  }
+}
+
+template bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTables(
+    ReadSerialiser &, rdcarray<WrappedMTLVisibleFunctionTable *>, NS::Range);
+template bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTables(
+    WriteSerialiser &, rdcarray<WrappedMTLVisibleFunctionTable *>, NS::Range);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTable(
+    SerialiserType &ser, WrappedMTLIntersectionFunctionTable *table, uint32_t index)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this).Important();
+  SERIALISE_ELEMENT(table).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() || index >= 31 ||
+       (table && (table->m_Type != eResIntersectionFunctionTable || !table->m_Real ||
+                  table->m_Pipeline != m_Pipeline || table->m_Stage != (MTL::RenderStages)0)))
+    {
+      RDCERR("Invalid Metal compute intersection-function-table binding");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->setIntersectionFunctionTable(Unwrap(table), index);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setIntersectionFunctionTable(
+    WrappedMTLIntersectionFunctionTable *table, uint32_t index)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->setIntersectionFunctionTable(Unwrap(table), index));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setIntersectionFunctionTable);
+    Serialise_setIntersectionFunctionTable(ser, table, index);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    if(table) record->MarkResourceFrameReferenced(GetResID(table), eFrameRef_Read);
+  }
+}
+
+template bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTable(
+    ReadSerialiser &, WrappedMTLIntersectionFunctionTable *, uint32_t);
+template bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTable(
+    WriteSerialiser &, WrappedMTLIntersectionFunctionTable *, uint32_t);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTables(
+    SerialiserType &ser, rdcarray<WrappedMTLIntersectionFunctionTable *> tables, NS::Range range)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this).Important();
+  SERIALISE_ELEMENT(tables).Important();
+  SERIALISE_ELEMENT(range).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       range.length == 0 || range.length > 31 || range.location > 31 - range.length ||
+       tables.size() != range.length)
+    {
+      RDCERR("Invalid Metal compute intersection-function-table range");
+      return false;
+    }
+    rdcarray<const MTL::IntersectionFunctionTable *> native;
+    native.reserve(tables.size());
+    for(WrappedMTLIntersectionFunctionTable *table : tables)
+    {
+      if(table && (table->m_Type != eResIntersectionFunctionTable || !table->m_Real ||
+                   table->m_Stage != (MTL::RenderStages)0 ||
+                   table->m_Pipeline != m_Pipeline))
+      {
+        RDCERR("Invalid Metal compute intersection-function-table member");
+        return false;
+      }
+      native.push_back(Unwrap(table));
+    }
+    Unwrap(ComputeCommandEncoder)->setIntersectionFunctionTables(native.data(), range);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setIntersectionFunctionTables(
+    rdcarray<WrappedMTLIntersectionFunctionTable *> tables, NS::Range range)
+{
+  if(range.length == 0 || range.length > 31 || tables.size() != range.length)
+  {
+    RDCERR("Unsupported Metal compute intersection-function-table range");
+    return;
+  }
+  rdcarray<const MTL::IntersectionFunctionTable *> native;
+  native.reserve(tables.size());
+  for(WrappedMTLIntersectionFunctionTable *table : tables) native.push_back(Unwrap(table));
+  SERIALISE_TIME_CALL(Unwrap(this)->setIntersectionFunctionTables(native.data(), range));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setIntersectionFunctionTables);
+    Serialise_setIntersectionFunctionTables(ser, tables, range);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    for(WrappedMTLIntersectionFunctionTable *table : tables)
+      if(table) record->MarkResourceFrameReferenced(GetResID(table), eFrameRef_Read);
+  }
+}
+
+template bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTables(
+    ReadSerialiser &, rdcarray<WrappedMTLIntersectionFunctionTable *>, NS::Range);
+template bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTables(
+    WriteSerialiser &, rdcarray<WrappedMTLIntersectionFunctionTable *>, NS::Range);
 
 void WrappedMTLComputeCommandEncoder::setComputePipelineState(
     WrappedMTLComputePipelineState *pipeline)
@@ -316,7 +846,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setBuffer(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    if(index >= 31 || (buffer && offset >= Unwrap(buffer)->length()) ||
+    if(!ComputeCommandEncoder || index >= 31 || (buffer && offset >= Unwrap(buffer)->length()) ||
        (!buffer && offset != 0))
     {
       RDCERR("Invalid Metal compute buffer binding or offset");
@@ -343,6 +873,56 @@ void WrappedMTLComputeCommandEncoder::setBuffer(WrappedMTLBuffer *buffer, NS::UI
       record->MarkResourceFrameReferenced(GetResID(buffer), eFrameRef_ReadBeforeWrite);
   }
 }
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setAccelerationStructure(
+    SerialiserType &ser, WrappedMTLAccelerationStructure *structure, NS::UInteger index)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(structure).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       !Unwrap(ComputeCommandEncoder) || index >= 31 ||
+       (structure && (structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
+                      !structure->m_LastBuildKind)))
+    {
+      RDCERR("Invalid Metal compute acceleration structure binding");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->setAccelerationStructure(Unwrap(structure), index);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setAccelerationStructure(
+    WrappedMTLAccelerationStructure *structure, NS::UInteger index)
+{
+  if(index >= 31 ||
+     (structure && (structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
+                    !structure->m_LastBuildKind)))
+  {
+    RDCERR("Invalid Metal compute acceleration structure binding");
+    return;
+  }
+  SERIALISE_TIME_CALL(Unwrap(this)->setAccelerationStructure(Unwrap(structure), index));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setAccelerationStructure);
+    Serialise_setAccelerationStructure(ser, structure, index);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    if(structure) record->AddParent(GetRecord(structure));
+    record->AddChunk(scope.Get());
+  }
+}
+
+template bool WrappedMTLComputeCommandEncoder::Serialise_setAccelerationStructure(
+    ReadSerialiser &, WrappedMTLAccelerationStructure *, NS::UInteger);
+template bool WrappedMTLComputeCommandEncoder::Serialise_setAccelerationStructure(
+    WriteSerialiser &, WrappedMTLAccelerationStructure *, NS::UInteger);
 
 template <typename SerialiserType>
 bool WrappedMTLComputeCommandEncoder::Serialise_setBuffers(
@@ -411,6 +991,115 @@ void WrappedMTLComputeCommandEncoder::setBuffers(rdcarray<WrappedMTLBuffer *> bu
 }
 
 template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setBytes(SerialiserType &ser, rdcarray<byte> data,
+                                                         NS::UInteger index)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(data).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || index >= 31 || data.size() > 4096)
+    {
+      RDCERR("Invalid Metal compute inline bytes binding");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->setBytes(data.data(), data.size(), index);
+    m_Device->GetReplay()->BindComputeBytes((uint32_t)index, data.size());
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setBytes(rdcarray<byte> data, NS::UInteger index)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->setBytes(data.data(), data.size(), index));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setBytes);
+    Serialise_setBytes(ser, data, index);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setBufferOffset(SerialiserType &ser,
+                                                                NS::UInteger offset,
+                                                                NS::UInteger index)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(offset).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || index >= 31 ||
+       !m_Device->GetReplay()->SetComputeBufferOffset((uint32_t)index, (uint64_t)offset))
+    {
+      RDCERR("Invalid Metal compute buffer offset or missing binding");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->setBufferOffset(offset, index);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setBufferOffset(NS::UInteger offset, NS::UInteger index)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->setBufferOffset(offset, index));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setBufferOffset);
+    Serialise_setBufferOffset(ser, offset, index);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setThreadgroupMemoryLength(
+    SerialiserType &ser, NS::UInteger length, NS::UInteger index)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(length).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || index >= 31 || (length & 15) != 0 ||
+       length > Unwrap(m_Device)->maxThreadgroupMemoryLength())
+    {
+      RDCERR("Invalid Metal compute threadgroup memory binding");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->setThreadgroupMemoryLength(length, index);
+    m_Device->GetReplay()->SetComputeThreadgroupMemory((uint32_t)index, (uint64_t)length);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setThreadgroupMemoryLength(NS::UInteger length,
+                                                                 NS::UInteger index)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->setThreadgroupMemoryLength(length, index));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setThreadgroupMemoryLength);
+    Serialise_setThreadgroupMemoryLength(ser, length, index);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setBytes,
+                                rdcarray<byte> data, NS::UInteger index);
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setBufferOffset,
+                                NS::UInteger offset, NS::UInteger index);
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setThreadgroupMemoryLength,
+                                NS::UInteger length, NS::UInteger index);
+
+template <typename SerialiserType>
 bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserType &ser,
                                                                         MTL::Size &groups,
                                                                         MTL::Size &threadsPerGroup)
@@ -428,11 +1117,9 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
     const TextureDescription destination = replay->GetTexture(replay->GetComputeTextureForAccess(true));
     const MetalPipe::BufferBinding input = replay->GetComputeBufferForAccess(false);
     const MetalPipe::BufferBinding output = replay->GetComputeBufferForAccess(true);
-    const bool bufferOnly = source.resourceId == ResourceId() &&
-                            destination.resourceId == ResourceId() &&
-                            input.resourceId == ResourceId() &&
+    const bool bufferOnly = destination.resourceId == ResourceId() &&
                             output.resourceId != ResourceId();
-    if((!bufferOnly &&
+    if(!ComputeCommandEncoder || !replay->ValidateComputeThreadgroup(threadsPerGroup) || (!bufferOnly &&
         (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
          source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
          source.width != destination.width || source.height != destination.height ||
@@ -449,7 +1136,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       RDCERR("Invalid Metal compute texture binding or dispatch grid");
       return false;
     }
-    if(bufferOnly && output.byteSize < 12)
+    if(bufferOnly && !replay->ValidateComputeBufferBindings())
     {
       RDCERR("Invalid Metal compute output buffer range");
       return false;
@@ -486,6 +1173,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       }
       else
       {
+        if(source.resourceId != ResourceId())
+          replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
         replay->AddUsage(output.resourceId, ResourceUsage::CS_RWResource);
       }
       if(input.resourceId != ResourceId())
@@ -526,7 +1215,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
   {
     MTL::Buffer *realBuffer = Unwrap(indirectBuffer);
     const uint64_t argumentSize = sizeof(MTL::DispatchThreadgroupsIndirectArguments);
-    if(realBuffer == NULL || (indirectBufferOffset & 3) != 0 ||
+    if(!ComputeCommandEncoder || !m_Device->GetReplay()->ValidateComputeThreadgroup(threadsPerGroup) ||
+       realBuffer == NULL || (indirectBufferOffset & 3) != 0 ||
        indirectBufferOffset > realBuffer->length() ||
        argumentSize > realBuffer->length() - indirectBufferOffset ||
        threadsPerGroup.width == 0 || threadsPerGroup.height == 0 ||
@@ -623,11 +1313,16 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreads(SerialiserType &
     MetalReplay *replay = m_Device->GetReplay();
     const TextureDescription source = replay->GetTexture(replay->GetComputeTextureForAccess(false));
     const TextureDescription destination = replay->GetTexture(replay->GetComputeTextureForAccess(true));
-    if(source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
+    const MetalPipe::BufferBinding output = replay->GetComputeBufferForAccess(true);
+    const bool bufferOutput = destination.resourceId == ResourceId() && output.resourceId != ResourceId();
+    if(!ComputeCommandEncoder || !replay->ValidateComputeThreadgroup(threadsPerGroup, &grid) ||
+       (bufferOutput && !replay->ValidateComputeBufferBindings()) ||
+       (!bufferOutput && (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
        source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
        source.width != destination.width || source.height != destination.height ||
-       source.format != destination.format || grid.width == 0 || grid.height == 0 ||
-       grid.depth != 1 || grid.width > destination.width || grid.height > destination.height ||
+       source.format != destination.format || grid.width > destination.width || grid.height > destination.height)) ||
+       grid.width == 0 || grid.height == 0 || grid.depth != 1 ||
+       grid.width > UINT32_MAX || grid.height > UINT32_MAX ||
        threadsPerGroup.width == 0 || threadsPerGroup.height == 0 ||
        threadsPerGroup.depth != 1 || threadsPerGroup.width > 1024 ||
        threadsPerGroup.height > 1024 ||
@@ -655,6 +1350,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreads(SerialiserType &
       AddAction(action);
       replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
       replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);
+      if(bufferOutput)
+        replay->AddUsage(output.resourceId, ResourceUsage::CS_RWResource);
     }
   }
   return true;
@@ -680,6 +1377,138 @@ INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setTextur
                                 WrappedMTLTexture *texture, NS::UInteger index);
 INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setTextures,
                                 rdcarray<WrappedMTLTexture *> textures, NS::Range range);
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setSamplerStateWithLOD(
+    SerialiserType &ser, WrappedMTLSamplerState *sampler, float lodMinClamp,
+    float lodMaxClamp, NS::UInteger index)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT_LOCAL(bound, sampler != NULL);
+  SERIALISE_ELEMENT(sampler).Important();
+  SERIALISE_ELEMENT(lodMinClamp).Important();
+  SERIALISE_ELEMENT(lodMaxClamp).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || index >= 16 || bound != (sampler != NULL) ||
+       !std::isfinite(lodMinClamp) || !std::isfinite(lodMaxClamp) ||
+       lodMinClamp < 0.0f || lodMaxClamp < lodMinClamp)
+    {
+      RDCERR("Invalid Metal compute sampler LOD binding");
+      return false;
+    }
+    Unwrap(ComputeCommandEncoder)->setSamplerState(Unwrap(sampler), lodMinClamp, lodMaxClamp, index);
+    m_Device->GetReplay()->BindComputeSampler((uint32_t)index, GetResID(sampler));
+    if(sampler)
+      m_Device->GetReplay()->SetSamplerLOD(ShaderStage::Compute, (uint32_t)index,
+                                           lodMinClamp, lodMaxClamp);
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setSamplerStateWithLOD(
+    WrappedMTLSamplerState *sampler, float lodMinClamp, float lodMaxClamp, NS::UInteger index)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->setSamplerState(Unwrap(sampler), lodMinClamp, lodMaxClamp, index));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setSamplerState_lodclamp);
+    Serialise_setSamplerStateWithLOD(ser, sampler, lodMinClamp, lodMaxClamp, index);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    if(sampler)
+      record->MarkResourceFrameReferenced(GetResID(sampler), eFrameRef_Read);
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_setSamplerStatesWithLOD(
+    SerialiserType &ser, rdcarray<WrappedMTLSamplerState *> samplers,
+    rdcarray<float> lodMinClamps, rdcarray<float> lodMaxClamps, NS::Range range)
+{
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(range).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading() && (range.location >= 16 || range.length > 16 - range.location))
+  {
+    RDCERR("Invalid Metal compute sampler LOD range");
+    return false;
+  }
+  rdcarray<uint8_t> bound;
+  if(ser.IsWriting())
+    for(WrappedMTLSamplerState *sampler : samplers)
+      bound.push_back(sampler ? 1 : 0);
+  SERIALISE_ELEMENT(bound);
+  SERIALISE_ELEMENT(samplers).Important();
+  SERIALISE_ELEMENT(lodMinClamps).Important();
+  SERIALISE_ELEMENT(lodMaxClamps).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || samplers.size() != range.length || bound.size() != range.length ||
+       lodMinClamps.size() != range.length || lodMaxClamps.size() != range.length)
+    {
+      RDCERR("Invalid Metal compute sampler LOD array lengths");
+      return false;
+    }
+    rdcarray<const MTL::SamplerState *> real;
+    for(size_t i = 0; i < samplers.size(); i++)
+    {
+      if(bound[i] > 1 || (bound[i] != 0) != (samplers[i] != NULL) ||
+         !std::isfinite(lodMinClamps[i]) || !std::isfinite(lodMaxClamps[i]) ||
+         lodMinClamps[i] < 0.0f || lodMaxClamps[i] < lodMinClamps[i])
+      {
+        RDCERR("Invalid Metal compute sampler LOD array element");
+        return false;
+      }
+      real.push_back(Unwrap(samplers[i]));
+    }
+    Unwrap(ComputeCommandEncoder)->setSamplerStates(real.data(), lodMinClamps.data(), lodMaxClamps.data(), range);
+    for(size_t i = 0; i < samplers.size(); i++)
+    {
+      const uint32_t slot = (uint32_t)(range.location + i);
+      m_Device->GetReplay()->BindComputeSampler(slot, GetResID(samplers[i]));
+      if(samplers[i])
+        m_Device->GetReplay()->SetSamplerLOD(ShaderStage::Compute, slot,
+                                             lodMinClamps[i], lodMaxClamps[i]);
+    }
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::setSamplerStatesWithLOD(
+    rdcarray<WrappedMTLSamplerState *> samplers, rdcarray<float> lodMinClamps,
+    rdcarray<float> lodMaxClamps, NS::Range range)
+{
+  rdcarray<const MTL::SamplerState *> real;
+  for(WrappedMTLSamplerState *sampler : samplers)
+    real.push_back(Unwrap(sampler));
+  SERIALISE_TIME_CALL(Unwrap(this)->setSamplerStates(real.data(), lodMinClamps.data(),
+                                                     lodMaxClamps.data(), range));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setSamplerStates_lodclamp);
+    Serialise_setSamplerStatesWithLOD(ser, samplers, lodMinClamps, lodMaxClamps, range);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    for(WrappedMTLSamplerState *sampler : samplers)
+      if(sampler)
+        record->MarkResourceFrameReferenced(GetResID(sampler), eFrameRef_Read);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setSamplerStateWithLOD,
+                                WrappedMTLSamplerState *sampler, float lodMinClamp,
+                                float lodMaxClamp, NS::UInteger index);
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setSamplerStatesWithLOD,
+                                rdcarray<WrappedMTLSamplerState *> samplers,
+                                rdcarray<float> lodMinClamps, rdcarray<float> lodMaxClamps,
+                                NS::Range range);
+
 INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setSamplerState,
                                 WrappedMTLSamplerState *sampler, NS::UInteger index);
 INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLComputeCommandEncoder, void, setSamplerStates,

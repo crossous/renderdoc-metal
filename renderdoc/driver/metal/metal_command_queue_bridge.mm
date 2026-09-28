@@ -88,14 +88,13 @@
 - (nullable id<MTLCommandBuffer>)commandBufferWithDescriptor:(MTLCommandBufferDescriptor *)descriptor
     API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real commandBufferWithDescriptor:descriptor];
+  return id<MTLCommandBuffer>(GetWrapped(self)->commandBufferWithDescriptor(
+      (MTL::CommandBufferDescriptor *)descriptor));
 }
 
 - (nullable id<MTLCommandBuffer>)commandBufferWithUnretainedReferences
 {
-  METAL_NOT_HOOKED();
-  return [self.real commandBufferWithUnretainedReferences];
+  return id<MTLCommandBuffer>(GetWrapped(self)->commandBufferWithUnretainedReferences());
 }
 
 #pragma clang diagnostic push
@@ -103,7 +102,7 @@
 - (void)insertDebugCaptureBoundary API_DEPRECATED("Use MTLCaptureScope instead",
                                                   macos(10.11, 10.13), ios(8.0, 11.0))
 {
-  METAL_NOT_HOOKED();
+  // Legacy native capture hint; there is no RenderDoc replay command to record.
   return [self.real insertDebugCaptureBoundary];
 }
 #pragma clang diagnostic pop

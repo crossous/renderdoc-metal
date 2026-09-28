@@ -75,8 +75,108 @@ public:
   static WrappedMTLDevice *MTLCreateSystemDefaultDevice(MTL::Device *realMTLDevice);
 
   // Serialised MTLDevice APIs
+  WrappedMTLLibrary *CaptureAsyncLibrary(MTL::Library *real, NS::String *source,
+                                        MTL::CompileOptions *options, bool supported);
+  template <typename SerialiserType>
+  bool Serialise_asyncLibrary(SerialiserType &ser, WrappedMTLLibrary *library,
+                              NS::String *source, MTL::CompileOptions *options, bool supported);
+  WrappedMTLRenderPipelineState *CaptureAsyncRenderPipeline(MTL::RenderPipelineState *real,
+      MTL::RenderPipelineDescriptor *descriptor, MTL::PipelineOption options, MetalChunk chunk);
+  WrappedMTLRenderPipelineState *CaptureAsyncTilePipeline(MTL::RenderPipelineState *real,
+      MTL::TileRenderPipelineDescriptor *descriptor, WrappedMTLFunction *tileFunction,
+      MTL::PipelineOption options, bool supported);
+  WrappedMTLRenderPipelineState *CaptureAsyncMeshPipeline(MTL::RenderPipelineState *real,
+      MTL::MeshRenderPipelineDescriptor *descriptor, WrappedMTLFunction *objectFunction,
+      WrappedMTLFunction *meshFunction, WrappedMTLFunction *fragmentFunction,
+      MTL::PipelineOption options, bool supported);
+  WrappedMTLComputePipelineState *CaptureAsyncComputePipeline(MTL::ComputePipelineState *real,
+      WrappedMTLFunction *function, MTL::PipelineOption options, MetalChunk chunk);
+  WrappedMTLComputePipelineState *CaptureAsyncComputeDescriptor(MTL::ComputePipelineState *real,
+      MTL::ComputePipelineDescriptor *descriptor, MTL::PipelineOption options);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLFence *, newFence);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLAccelerationStructure *,
+                                          newAccelerationStructureWithSize, NS::UInteger size);
+  WrappedMTLAccelerationStructure *newAccelerationStructureWithDescriptor(
+      MTL::AccelerationStructureDescriptor *descriptor);
+  WrappedMTLHeap *WrapNewHeap(MTL::Heap *real, NS::UInteger size,
+                              MTL::StorageMode storageMode, MTL::CPUCacheMode cacheMode,
+                              MTL::HazardTrackingMode hazardMode, MTL::HeapType type);
+  template <typename SerialiserType>
+  bool Serialise_newHeap(SerialiserType &ser, WrappedMTLHeap *heap, NS::UInteger size,
+                         MTL::StorageMode storageMode, MTL::CPUCacheMode cacheMode,
+                         MTL::HazardTrackingMode hazardMode, MTL::HeapType type);
+  WrappedMTLRasterizationRateMap *newRasterizationRateMap(
+      MTL::RasterizationRateMapDescriptor *descriptor);
+  WrappedMTLCounterSampleBuffer *newCounterSampleBuffer(
+      MTL::CounterSampleBufferDescriptor *descriptor, NS::Error **error);
+  WrappedMTLDynamicLibrary *newDynamicLibrary(WrappedMTLLibrary *library, NS::Error **error);
+  WrappedMTLDynamicLibrary *newDynamicLibraryWithURL(NS::URL *url, NS::Error **error);
+  WrappedMTLBinaryArchive *newBinaryArchive(MTL::BinaryArchiveDescriptor *descriptor,
+                                           NS::Error **error);
+  WrappedMTLLibrary *newStitchedLibrary(WrappedMTLFunction *function,
+                                       rdcstr graphName, rdcstr functionName,
+                                       uint32_t inputIndex, NS::Error **error);
+  WrappedMTLLibrary *CaptureAsyncStitchedLibrary(MTL::Library *real,
+      WrappedMTLFunction *function, rdcstr graphName, rdcstr functionName,
+      uint32_t inputIndex);
+  template <typename SerialiserType>
+  bool Serialise_newStitchedLibrary(SerialiserType &ser, WrappedMTLLibrary *library,
+                                   WrappedMTLFunction *function, rdcstr graphName,
+                                   rdcstr functionName, uint32_t inputIndex);
+  template <typename SerialiserType>
+  bool Serialise_newBinaryArchive(SerialiserType &ser, WrappedMTLBinaryArchive *archive,
+                                 bytebuf &data);
+  template <typename SerialiserType>
+  bool Serialise_newDynamicLibrary(SerialiserType &ser, WrappedMTLDynamicLibrary *dynamic,
+                                  WrappedMTLLibrary *library, bool supported);
+  template <typename SerialiserType>
+  bool Serialise_newDynamicLibraryWithURL(SerialiserType &ser,
+                                         WrappedMTLDynamicLibrary *dynamic,
+                                         rdcstr origin, rdcstr installName, bytebuf &data);
+  template <typename SerialiserType>
+  bool Serialise_newCounterSampleBuffer(SerialiserType &ser,
+      WrappedMTLCounterSampleBuffer *sampleBuffer, rdcstr counterSetName,
+      uint64_t sampleCount, uint64_t storageMode, bool supported);
+  template <typename SerialiserType>
+  bool Serialise_newRasterizationRateMap(SerialiserType &ser,
+      WrappedMTLRasterizationRateMap *rateMap, MTL::Size screenSize,
+      rdcarray<float> horizontal, rdcarray<float> vertical, bool supported,
+      rdcarray<rdcarray<float>> extraHorizontal = {},
+      rdcarray<rdcarray<float>> extraVertical = {});
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLEvent *, newEvent);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLEvent *, newSharedEvent);
+  WrappedMTLEvent *ImportSharedEventHandle(MTL::SharedEvent *real, WrappedMTLEvent *source);
+  template <typename SerialiserType>
+  bool Serialise_importSharedEventHandle(SerialiserType &ser, WrappedMTLEvent *event,
+                                         WrappedMTLEvent *source);
+  template <typename SerialiserType>
+  bool Serialise_setSharedEventInitialValue(SerialiserType &ser, WrappedMTLEvent *event,
+                                           uint64_t value);
+  WrappedMTLArgumentEncoder *newArgumentEncoderWithArguments(const NS::Array *arguments);
+  template <typename SerialiserType>
+  bool Serialise_newArgumentEncoderWithArguments(SerialiserType &ser,
+      WrappedMTLArgumentEncoder *encoder, rdcarray<uint64_t> descriptors);
+  WrappedMTLArgumentEncoder *newArgumentEncoderWithBufferBinding(MTL::BufferBinding *binding);
+  template <typename SerialiserType>
+  bool Serialise_newArgumentEncoderWithBufferBinding(SerialiserType &ser,
+      WrappedMTLArgumentEncoder *encoder, rdcarray<uint64_t> descriptors,
+      uint64_t encodedLength, uint64_t alignment, bool supported);
+  uint64_t GetReplayEpoch() const { return m_ReplayEpoch; }
+  uint64_t GetCaptureEpoch() const { return m_CaptureEpoch; }
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandQueue *, newCommandQueue);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandQueue *, newCommandQueue,
+                                          NS::UInteger maxCommandBufferCount);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLLibrary *, newDefaultLibrary);
+  WrappedMTLLibrary *newDefaultLibraryWithBundle(NS::Bundle *bundle, NS::Error **error);
+  WrappedMTLLibrary *newLibraryWithFile(NS::String *path, NS::Error **error);
+  WrappedMTLLibrary *newLibraryWithURL(NS::URL *url, NS::Error **error);
+  // dispatch_data_t has different C++/Objective-C++ typedefs; keep the bridge ABI identical.
+  WrappedMTLLibrary *newLibraryWithData(void *data, NS::Error **error);
+  WrappedMTLLibrary *CaptureLibraryBinary(MTL::Library *real, MetalChunk chunk,
+                                         const rdcstr &origin, bytebuf &data);
+  template <typename SerialiserType>
+  bool Serialise_newLibraryBinary(SerialiserType &ser, WrappedMTLLibrary *library,
+                                  rdcstr origin, bytebuf &data);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLLibrary *, newLibraryWithSource,
                                           NS::String *source, MTL::CompileOptions *options,
                                           NS::Error **error);
@@ -90,6 +190,57 @@ public:
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLComputePipelineState *,
                                           newComputePipelineStateWithFunction,
                                           WrappedMTLFunction *computeFunction, NS::Error **error);
+  WrappedMTLRenderPipelineState *newRenderPipelineStateWithDescriptorOptions(
+      MTL::RenderPipelineDescriptor *descriptor, MTL::PipelineOption options,
+      MTL::AutoreleasedRenderPipelineReflection *reflection, NS::Error **error);
+  template <typename SerialiserType>
+  bool Serialise_newRenderPipelineStateWithDescriptorOptions(
+      SerialiserType &ser, WrappedMTLRenderPipelineState *pipeline,
+      RDMTL::RenderPipelineDescriptor &descriptor, MTL::PipelineOption options, bool supported);
+  WrappedMTLRenderPipelineState *newTileRenderPipelineState(
+      MTL::TileRenderPipelineDescriptor *descriptor, WrappedMTLFunction *tileFunction,
+      MTL::PipelineOption options, MTL::AutoreleasedRenderPipelineReflection *reflection,
+      NS::Error **error, bool supported, rdcarray<WrappedMTLFunction *> visibleFunctions,
+      rdcarray<WrappedMTLBinaryArchive *> binaryArchives = {});
+  template <typename SerialiserType>
+  bool Serialise_newTileRenderPipelineState(
+      SerialiserType &ser, WrappedMTLRenderPipelineState *pipeline,
+      WrappedMTLFunction *tileFunction, rdcarray<uint32_t> colorFormats,
+      uint64_t sampleCount, uint64_t maxThreads, bool matchesTileSize,
+      uint32_t options, bool supported, rdcarray<WrappedMTLFunction *> visibleFunctions,
+      rdcarray<WrappedMTLBinaryArchive *> binaryArchives = {});
+  WrappedMTLRenderPipelineState *newMeshRenderPipelineState(
+      MTL::MeshRenderPipelineDescriptor *descriptor, WrappedMTLFunction *objectFunction,
+      WrappedMTLFunction *meshFunction, WrappedMTLFunction *fragmentFunction,
+      MTL::PipelineOption options, MTL::AutoreleasedRenderPipelineReflection *reflection,
+      NS::Error **error, bool supported,
+      rdcarray<WrappedMTLBinaryArchive *> binaryArchives = {});
+  template <typename SerialiserType>
+  bool Serialise_newMeshRenderPipelineState(
+      SerialiserType &ser, WrappedMTLRenderPipelineState *pipeline,
+      WrappedMTLFunction *objectFunction, WrappedMTLFunction *meshFunction,
+      WrappedMTLFunction *fragmentFunction, rdcarray<uint32_t> colorFormats,
+      uint64_t sampleCount, uint64_t maxMeshThreads, uint32_t options, bool supported,
+      uint64_t maxMeshGrid = 0,
+      rdcarray<WrappedMTLBinaryArchive *> binaryArchives = {});
+  template <typename SerialiserType>
+  bool Serialise_newObjectMeshPipelineState(
+      SerialiserType &ser, WrappedMTLRenderPipelineState *pipeline,
+      WrappedMTLFunction *objectFunction, WrappedMTLFunction *meshFunction,
+      WrappedMTLFunction *fragmentFunction, rdcarray<uint32_t> colorFormats,
+      uint64_t sampleCount, uint64_t maxObjectThreads, uint64_t maxMeshThreads,
+      uint64_t payloadLength, uint64_t maxMeshGrid, uint32_t options, bool supported);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(
+      WrappedMTLComputePipelineState *, newComputePipelineStateWithFunctionOptions,
+      WrappedMTLFunction *computeFunction, MTL::PipelineOption options,
+      MTL::AutoreleasedComputePipelineReflection *reflection, NS::Error **error);
+  WrappedMTLComputePipelineState *newComputePipelineStateWithDescriptor(
+      MTL::ComputePipelineDescriptor *descriptor, MTL::PipelineOption options,
+      MTL::AutoreleasedComputePipelineReflection *reflection, NS::Error **error);
+  template <typename SerialiserType>
+  bool Serialise_newComputePipelineStateWithDescriptor(
+      SerialiserType &ser, WrappedMTLComputePipelineState *pipeline,
+      RDMTL::ComputePipelineDescriptor &descriptor, MTL::PipelineOption options, bool supported);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLSamplerState *,
                                           newSamplerStateWithDescriptor,
                                           RDMTL::SamplerDescriptor &descriptor);
@@ -104,7 +255,20 @@ public:
                                               IOSurfaceRef iosurface, NS::UInteger plane);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLTexture *, newTextureWithDescriptor,
                                           RDMTL::TextureDescriptor &descriptor);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLTexture *, newSharedTextureWithDescriptor,
+                                          RDMTL::TextureDescriptor &descriptor);
+  WrappedMTLTexture *WrapNewSharedTextureWithHandle(MTL::Texture *real,
+                                                    WrappedMTLTexture *source);
+  template <typename SerialiserType>
+  bool Serialise_newSharedTextureWithHandle(SerialiserType &ser, WrappedMTLTexture *texture,
+                                            WrappedMTLTexture *source);
   WrappedMTLBuffer *newBufferWithLength(NS::UInteger length, MTL::ResourceOptions options);
+  WrappedMTLBuffer *WrapNewBufferNoCopy(MTL::Buffer *real, const void *pointer,
+                                       NS::UInteger length, MTL::ResourceOptions options);
+  template <typename SerialiserType>
+  bool Serialise_newBufferWithBytesNoCopy(SerialiserType &ser, WrappedMTLBuffer *buffer,
+                                         bytebuf initialData, uint64_t length,
+                                         MTL::ResourceOptions options);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLBuffer *, newBufferWithBytes, const void *pointer,
                                           NS::UInteger length, MTL::ResourceOptions options);
 
@@ -163,9 +327,11 @@ public:
   // IFrameCapturer interface
 
   void CaptureCmdBufCommit(MetalResourceRecord *cbRecord);
+  void CaptureCmdBufCPUWrites(MetalResourceRecord *record);
   void CaptureCmdBufEnqueue(MetalResourceRecord *cbRecord);
 
   void AddFrameCaptureRecordChunk(Chunk *chunk) { m_FrameCaptureRecord->AddChunk(chunk); }
+  void RegisterBufferTextureParent(ResourceId texture, ResourceId buffer);
   // From ResourceManager interface
   bool Prepare_InitialState(WrappedMTLObject *res);
   uint64_t GetSize_InitialState(ResourceId id, const MetalInitialContents &initial);
@@ -202,10 +368,30 @@ public:
   ResourceId GetLastPresentedImage() const { return m_LastPresentedImage; }
   void SetReplayRenderTarget(ResourceId target) { m_ReplayRenderTarget = target; }
   ResourceId GetReplayRenderTarget() const { return m_ReplayRenderTarget; }
-  void SetReplayCommandBuffer(WrappedMTLCommandBuffer *commandBuffer)
+  bool SetReplayCommandBuffer(WrappedMTLCommandBuffer *commandBuffer);
+  bool CanEncodeReplayEvent(WrappedMTLCommandBuffer *buffer) const
   {
-    m_ReplayCommandBuffer = commandBuffer;
-    m_ReplayCommandBufferCommitted = false;
+    return buffer == m_ReplayCommandBuffer && !m_ReplayCommandBufferCommitted &&
+           !m_ReplayRenderCommandEncoder && !m_ReplayComputeCommandEncoder &&
+           !m_ReplayBlitCommandEncoder && !m_ReplayAccelerationStructureCommandEncoder;
+  }
+  bool ReplayCPUBufferUpdate(WrappedMTLBuffer *buffer, uint64_t start, const bytebuf &data);
+  bool RecordReplayBufferInitialContents(ResourceId id, const bytebuf &contents);
+  WrappedMTLRenderCommandEncoder *GetReplayRenderCommandEncoder() const
+  {
+    return m_ReplayRenderCommandEncoder;
+  }
+  WrappedMTLBlitCommandEncoder *GetReplayBlitCommandEncoder() const
+  {
+    return m_ReplayBlitCommandEncoder;
+  }
+  WrappedMTLComputeCommandEncoder *GetReplayComputeCommandEncoder() const
+  {
+    return m_ReplayComputeCommandEncoder;
+  }
+  WrappedMTLAccelerationStructureCommandEncoder *GetReplayAccelerationStructureCommandEncoder() const
+  {
+    return m_ReplayAccelerationStructureCommandEncoder;
   }
   void SetReplayRenderCommandEncoder(WrappedMTLRenderCommandEncoder *encoder)
   {
@@ -214,6 +400,11 @@ public:
   void SetReplayBlitCommandEncoder(WrappedMTLBlitCommandEncoder *encoder)
   {
     m_ReplayBlitCommandEncoder = encoder;
+  }
+  void SetReplayAccelerationStructureCommandEncoder(
+      WrappedMTLAccelerationStructureCommandEncoder *encoder)
+  {
+    m_ReplayAccelerationStructureCommandEncoder = encoder;
   }
   void SetReplayComputeCommandEncoder(WrappedMTLComputeCommandEncoder *encoder)
   {
@@ -252,6 +443,7 @@ private:
   RDResult ContextReplayLog(CaptureState readType, uint32_t endEventID,
                             ReplayLogType replayType);
   void FinishReplayCommands();
+  bool ResetReplayCPUUpdatedBuffers();
   WrappedMTLTexture *Common_NewTexture(RDMTL::TextureDescriptor &descriptor, MetalChunk chunkType,
                                        bool ioSurfaceTexture, IOSurfaceRef iosurface,
                                        NS::UInteger plane);
@@ -260,17 +452,28 @@ private:
                                      MTL::ResourceOptions options);
 
   MetalResourceManager *m_ResourceManager = NULL;
+  uint64_t m_ReplayEpoch = 0;
+  uint64_t m_CaptureEpoch = 0;
   ResourceId m_LastPresentedImage;
   ResourceId m_ReplayRenderTarget;
 
   // Dummy objects used for serialisation replay
   WrappedMTLBuffer *m_DummyBuffer = NULL;
+  WrappedMTLHeap *m_DummyReplayHeap = NULL;
+  WrappedMTLRasterizationRateMap *m_DummyReplayRateMap = NULL;
   WrappedMTLTexture *m_DummyReplayTexture = NULL;
   WrappedMTLCommandBuffer *m_DummyReplayCommandBuffer = NULL;
   WrappedMTLCommandQueue *m_DummyReplayCommandQueue = NULL;
   WrappedMTLLibrary *m_DummyReplayLibrary = NULL;
+  WrappedMTLBinaryArchive *m_DummyReplayBinaryArchive = NULL;
+  WrappedMTLRenderPipelineState *m_DummyReplayRenderPipelineState = NULL;
+  WrappedMTLComputePipelineState *m_DummyReplayComputePipelineState = NULL;
+  WrappedMTLVisibleFunctionTable *m_DummyReplayVisibleFunctionTable = NULL;
+  WrappedMTLIntersectionFunctionTable *m_DummyReplayIntersectionFunctionTable = NULL;
   WrappedMTLRenderCommandEncoder *m_DummyReplayRenderCommandEncoder = NULL;
   WrappedMTLBlitCommandEncoder *m_DummyReplayBlitCommandEncoder = NULL;
+  WrappedMTLAccelerationStructureCommandEncoder *
+      m_DummyReplayAccelerationStructureCommandEncoder = NULL;
   WrappedMTLComputeCommandEncoder *m_DummyReplayComputeCommandEncoder = NULL;
   WrappedMTLArgumentEncoder *m_DummyReplayArgumentEncoder = NULL;
   WrappedMTLIndirectCommandBuffer *m_DummyReplayIndirectCommandBuffer = NULL;
@@ -293,8 +496,24 @@ private:
   WrappedMTLCommandBuffer *m_ReplayCommandBuffer = NULL;
   WrappedMTLRenderCommandEncoder *m_ReplayRenderCommandEncoder = NULL;
   WrappedMTLBlitCommandEncoder *m_ReplayBlitCommandEncoder = NULL;
+  WrappedMTLAccelerationStructureCommandEncoder *m_ReplayAccelerationStructureCommandEncoder = NULL;
   WrappedMTLComputeCommandEncoder *m_ReplayComputeCommandEncoder = NULL;
   bool m_ReplayCommandBufferCommitted = false;
+  struct CPUBufferUpdate
+  {
+    ResourceId buffer;
+    uint64_t offset;
+    bytebuf data;
+  };
+  // Snapshot updates are captured at submission, after the encoded draw chunks. Apply them at
+  // their command buffer's start during event replay, including partial replay before commit.
+  std::map<ResourceId, rdcarray<CPUBufferUpdate>> m_ReplayCPUBufferUpdates;
+  std::map<ResourceId, bytebuf> m_ReplayBufferInitialContents;
+  // Includes unchanged Shared initial states as well as buffers with frame CPU writes.
+  std::set<ResourceId> m_ReplayCPUUpdatedBuffers;
+  Threading::CriticalSection m_BufferTextureParentsLock;
+  std::set<ResourceId> m_BufferTextureParents;
+  std::map<ResourceId, ResourceId> m_BufferTextureParentByView;
   bool m_AppControlledCapture = false;
   SDFile *m_StructuredFile = NULL;
   SDFile *m_StoredStructuredData = NULL;

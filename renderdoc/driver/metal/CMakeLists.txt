@@ -5,6 +5,9 @@ set(sources
     metal_hook.cpp
     metal_hook.h
     metal_device.cpp
+    metal_device_library.cpp
+    metal_device_pipeline.cpp
+    metal_device_async.cpp
     metal_device.h
     metal_device_bridge.mm
     metal_depth_stencil_state.cpp
@@ -21,6 +24,8 @@ set(sources
     metal_function.cpp
     metal_function.h
     metal_function_bridge.mm
+    metal_function_constants.h
+    metal_function_constants.mm
     metal_common.cpp
     metal_common.h
     metal_command_queue.cpp
@@ -32,7 +37,38 @@ set(sources
     metal_render_pipeline_state.cpp
     metal_render_pipeline_state.h
     metal_render_pipeline_state_bridge.mm
+    metal_visible_function_table.cpp
+    metal_visible_function_table.h
+    metal_visible_function_table_bridge.mm
+    metal_acceleration_structure.cpp
+    metal_acceleration_structure.h
+    metal_acceleration_structure_bridge.mm
+    metal_acceleration_structure_command_encoder.cpp
+    metal_acceleration_structure_command_encoder.h
+    metal_acceleration_structure_command_encoder_bridge.mm
     metal_sampler_state.cpp
+    metal_fence.cpp
+    metal_event.cpp
+    metal_event.h
+    metal_event_bridge.mm
+    metal_fence.h
+    metal_fence_bridge.mm
+    metal_heap.cpp
+    metal_heap.h
+    metal_heap_bridge.mm
+    metal_rate_map.cpp
+    metal_rate_map.h
+    metal_rate_map_bridge.mm
+    metal_counter_sample_buffer.cpp
+    metal_counter_sample_buffer.h
+    metal_counter_sample_buffer_bridge.mm
+    metal_dynamic_library.cpp
+    metal_dynamic_library.h
+    metal_dynamic_library_bridge.mm
+    metal_binary_archive.cpp
+    metal_binary_archive.h
+    metal_binary_archive_bridge.mm
+    metal_stitched_library.cpp
     metal_sampler_state.h
     metal_sampler_state_bridge.mm
     metal_indirect_command_buffer.cpp

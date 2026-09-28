@@ -117,7 +117,6 @@
 }
 - (void)reset
 {
-  METAL_NOT_HOOKED();
-  [self.real reset];
+  GetWrapped(self)->reset();
 }
 @end

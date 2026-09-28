@@ -52,6 +52,18 @@ enum MetalResourceType
   eResSamplerState,
   eResIndirectCommandBuffer,
   eResIndirectRenderCommand,
+  eResFence,
+  eResEvent,
+  eResHeap,
+  eResRasterizationRateMap,
+  eResCounterSampleBuffer,
+  eResDynamicLibrary,
+  eResFunctionHandle,
+  eResVisibleFunctionTable,
+  eResIntersectionFunctionTable,
+  eResAccelerationStructure,
+  eResAccelerationStructureCommandEncoder,
+  eResBinaryArchive,
   eResMax
 };
 
@@ -182,6 +194,7 @@ public:
   {
   }
   ~MetalResourceRecord();
+  void DiscardBackgroundBufferMarkers();
   WrappedMTLObject *m_Resource;
   MetalResourceType m_Type;
 

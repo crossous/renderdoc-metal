@@ -23,8 +23,11 @@
  ******************************************************************************/
 
 #include "metal_blit_command_encoder.h"
+#include "metal_fence.h"
 #include "metal_buffer.h"
+#include "metal_indirect_command_buffer.h"
 #include "metal_command_buffer.h"
+#include "metal_counter_sample_buffer.h"
 #include "metal_replay.h"
 #include "metal_texture.h"
 
@@ -50,7 +53,7 @@ static uint64_t TextureSliceCount(MTL::Texture *texture)
 static bool ValidTextureSubresource(WrappedMTLTexture *texture, NS::UInteger slice,
                                     NS::UInteger level)
 {
-  MTL::Texture *real = texture ? Unwrap(texture) : NULL;
+  MTL::Texture *real = texture && texture->m_Type == eResTexture ? Unwrap(texture) : NULL;
   return real != NULL && uint64_t(level) < real->mipmapLevelCount() &&
          uint64_t(slice) < TextureSliceCount(real);
 }
@@ -69,6 +72,69 @@ static bool ValidTextureRegion(WrappedMTLTexture *texture, NS::UInteger slice, N
          uint64_t(origin.x) <= width && uint64_t(size.width) <= width - uint64_t(origin.x) &&
          uint64_t(origin.y) <= height && uint64_t(size.height) <= height - uint64_t(origin.y) &&
          uint64_t(origin.z) <= depth && uint64_t(size.depth) <= depth - uint64_t(origin.z);
+}
+
+// Keep linear transfers bounded before they reach the native driver. Packed, compressed and
+// depth/stencil layouts require separate aspect/block handling and are rejected here.
+static bool ValidLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slice,
+                                    NS::UInteger level, const MTL::Origin &origin,
+                                    const MTL::Size &size, WrappedMTLBuffer *buffer,
+                                    NS::UInteger offset, NS::UInteger rowPitch,
+                                    NS::UInteger imagePitch, MTL::BlitOption options)
+{
+  if(!ValidTextureRegion(texture, slice, level, origin, size) || !buffer ||
+     buffer->m_Type != eResBuffer || !Unwrap(buffer) ||
+     options != MTL::BlitOptionNone || Unwrap(texture)->sampleCount() != 1)
+    return false;
+  const ResourceFormat format = MakeResourceFormat(Unwrap(texture)->pixelFormat());
+  if(format.Special() || format.compType == CompType::Depth || format.compByteWidth == 0 ||
+     format.compCount == 0)
+    return false;
+  const uint64_t pixelBytes = uint64_t(format.compByteWidth) * format.compCount;
+  const uint64_t rowBytes = uint64_t(size.width) * pixelBytes;
+  const uint64_t bufferLength = Unwrap(buffer)->length();
+  if(offset > bufferLength || offset % pixelBytes || rowPitch % pixelBytes ||
+     rowPitch < rowBytes || rowBytes > bufferLength - offset)
+    return false;
+  uint64_t available = bufferLength - offset - rowBytes;
+  if(size.height - 1 > available / rowPitch)
+    return false;
+  available -= (size.height - 1) * rowPitch;
+  if(size.depth > 1 &&
+     (imagePitch == 0 || imagePitch % rowPitch || size.height > imagePitch / rowPitch ||
+      size.depth - 1 > available / imagePitch))
+    return false;
+  return true;
+}
+
+static bool ValidTextureCopyRange(WrappedMTLTexture *source, NS::UInteger sourceSlice,
+                                  NS::UInteger sourceLevel, WrappedMTLTexture *destination,
+                                  NS::UInteger destinationSlice, NS::UInteger destinationLevel,
+                                  NS::UInteger sliceCount, NS::UInteger levelCount)
+{
+  if(!ValidTextureSubresource(source, sourceSlice, sourceLevel) ||
+     !ValidTextureSubresource(destination, destinationSlice, destinationLevel) ||
+     sliceCount == 0 || levelCount == 0)
+    return false;
+  MTL::Texture *src = Unwrap(source), *dst = Unwrap(destination);
+  if(src->pixelFormat() != dst->pixelFormat() || src->textureType() != dst->textureType() ||
+     src->sampleCount() != dst->sampleCount() ||
+     sliceCount > TextureSliceCount(src) - sourceSlice ||
+     sliceCount > TextureSliceCount(dst) - destinationSlice ||
+     levelCount > src->mipmapLevelCount() - sourceLevel ||
+     levelCount > dst->mipmapLevelCount() - destinationLevel)
+    return false;
+  // Bounds above make the interval ends safe from overflow.
+  if(src == dst && sourceSlice < destinationSlice + sliceCount &&
+     destinationSlice < sourceSlice + sliceCount && sourceLevel < destinationLevel + levelCount &&
+     destinationLevel < sourceLevel + levelCount)
+    return false;
+  return RDCMAX(1ULL, uint64_t(src->width()) >> sourceLevel) ==
+             RDCMAX(1ULL, uint64_t(dst->width()) >> destinationLevel) &&
+         RDCMAX(1ULL, uint64_t(src->height()) >> sourceLevel) ==
+             RDCMAX(1ULL, uint64_t(dst->height()) >> destinationLevel) &&
+         RDCMAX(1ULL, uint64_t(src->depth()) >> sourceLevel) ==
+             RDCMAX(1ULL, uint64_t(dst->depth()) >> destinationLevel);
 }
 
 WrappedMTLBlitCommandEncoder::WrappedMTLBlitCommandEncoder(
@@ -318,14 +384,22 @@ bool WrappedMTLBlitCommandEncoder::Serialise_synchronizeTexture(SerialiserType &
 {
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, this);
   SERIALISE_ELEMENT(texture).Important();
-  SERIALISE_ELEMENT(slice);
-  SERIALISE_ELEMENT(level);
+  SERIALISE_ELEMENT(slice).Important();
+  SERIALISE_ELEMENT(level).Important();
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       !Unwrap(BlitCommandEncoder) || !ValidTextureSubresource(texture, slice, level) ||
+       Unwrap(texture)->storageMode() != MTL::StorageModeManaged)
+    {
+      RDCERR("Invalid Metal texture synchronization encoder/subresource");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->synchronizeTexture(Unwrap(texture), slice, level);
   }
   return true;
 }
@@ -346,6 +420,7 @@ void WrappedMTLBlitCommandEncoder::synchronizeTexture(WrappedMTLTexture *texture
     }
     MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
     bufferRecord->AddChunk(chunk);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(texture), eFrameRef_Read);
   }
   else
   {
@@ -443,13 +518,45 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromBuffer(
   SERIALISE_ELEMENT(destinationSlice);
   SERIALISE_ELEMENT(destinationLevel);
   SERIALISE_ELEMENT(destinationOrigin);
-  SERIALISE_ELEMENT(options);
+  if(ser.ChunkMetadata().chunkID ==
+     (uint32_t)MetalChunk::MTLBlitCommandEncoder_copyFromBuffer_toTexture_options)
+  {
+    SERIALISE_ELEMENT(options);
+  }
+  else
+    options = MTL::BlitOptionNone;
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       !ValidLinearTextureCopy(destinationTexture, destinationSlice, destinationLevel,
+                               destinationOrigin, sourceSize, sourceBuffer, sourceOffset,
+                               sourceBytesPerRow, sourceBytesPerImage, options))
+    {
+      RDCERR("Invalid or unsupported Metal buffer-to-texture copy layout");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->copyFromBuffer(
+        Unwrap(sourceBuffer), sourceOffset, sourceBytesPerRow, sourceBytesPerImage, sourceSize,
+        Unwrap(destinationTexture), destinationSlice, destinationLevel, destinationOrigin, options);
+    if(IsLoading(m_State))
+    {
+      AddEvent();
+      ActionDescription action;
+      action.customName = "copyFromBuffer(to texture)";
+      action.flags = ActionFlags::Copy;
+      action.copySource = GetResID(sourceBuffer);
+      action.copyDestination = GetResID(destinationTexture);
+      action.copyDestinationSubresource =
+          Subresource((uint32_t)destinationLevel, (uint32_t)destinationSlice);
+      AddAction(action);
+      m_Device->GetReplay()->AddUsage(action.copySource, ResourceUsage::CopySrc);
+      m_Device->GetReplay()->AddUsage(action.copyDestination, ResourceUsage::CopyDst);
+    }
   }
   return true;
 }
@@ -477,6 +584,8 @@ void WrappedMTLBlitCommandEncoder::copyFromBuffer(
     }
     MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
     bufferRecord->AddChunk(chunk);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(sourceBuffer), eFrameRef_Read);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(destinationTexture), eFrameRef_PartialWrite);
   }
   else
   {
@@ -592,13 +701,45 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromTexture(
   SERIALISE_ELEMENT(destinationOffset);
   SERIALISE_ELEMENT(destinationBytesPerRow);
   SERIALISE_ELEMENT(destinationBytesPerImage);
-  SERIALISE_ELEMENT(options);
+  if(ser.ChunkMetadata().chunkID ==
+     (uint32_t)MetalChunk::MTLBlitCommandEncoder_copyFromTexture_toBuffer_options)
+  {
+    SERIALISE_ELEMENT(options);
+  }
+  else
+    options = MTL::BlitOptionNone;
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       !ValidLinearTextureCopy(sourceTexture, sourceSlice, sourceLevel, sourceOrigin, sourceSize,
+                               destinationBuffer, destinationOffset, destinationBytesPerRow,
+                               destinationBytesPerImage, options))
+    {
+      RDCERR("Invalid or unsupported Metal texture-to-buffer copy layout");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->copyFromTexture(
+        Unwrap(sourceTexture), sourceSlice, sourceLevel, sourceOrigin, sourceSize,
+        Unwrap(destinationBuffer), destinationOffset, destinationBytesPerRow,
+        destinationBytesPerImage, options);
+    if(IsLoading(m_State))
+    {
+      AddEvent();
+      ActionDescription action;
+      action.customName = "copyFromTexture(to buffer)";
+      action.flags = ActionFlags::Copy;
+      action.copySource = GetResID(sourceTexture);
+      action.copySourceSubresource = Subresource((uint32_t)sourceLevel, (uint32_t)sourceSlice);
+      action.copyDestination = GetResID(destinationBuffer);
+      AddAction(action);
+      m_Device->GetReplay()->AddUsage(action.copySource, ResourceUsage::CopySrc);
+      m_Device->GetReplay()->AddUsage(action.copyDestination, ResourceUsage::CopyDst);
+    }
   }
   return true;
 }
@@ -627,6 +768,8 @@ void WrappedMTLBlitCommandEncoder::copyFromTexture(
     }
     MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
     bufferRecord->AddChunk(chunk);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(sourceTexture), eFrameRef_Read);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(destinationBuffer), eFrameRef_PartialWrite);
   }
   else
   {
@@ -645,9 +788,31 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromTexture(SerialiserType &ser
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    MTL::Texture *src = Unwrap(sourceTexture), *dst = Unwrap(destinationTexture);
+    if(!BlitCommandEncoder || !src || !dst ||
+       src->mipmapLevelCount() != dst->mipmapLevelCount() ||
+       TextureSliceCount(src) != TextureSliceCount(dst) ||
+       !ValidTextureCopyRange(sourceTexture, 0, 0, destinationTexture, 0, 0,
+                               TextureSliceCount(src), src->mipmapLevelCount()))
+    {
+      RDCERR("Invalid Metal whole texture copy");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->copyFromTexture(src, dst);
+    if(IsLoading(m_State))
+    {
+      AddEvent();
+      ActionDescription action;
+      action.customName = "copyFromTexture(whole texture)";
+      action.flags = ActionFlags::Copy;
+      action.copySource = GetResID(sourceTexture);
+      action.copyDestination = GetResID(destinationTexture);
+      AddAction(action);
+      m_Device->GetReplay()->AddUsage(action.copySource, ResourceUsage::CopySrc);
+      m_Device->GetReplay()->AddUsage(action.copyDestination, ResourceUsage::CopyDst);
+    }
   }
   return true;
 }
@@ -669,6 +834,8 @@ void WrappedMTLBlitCommandEncoder::copyFromTexture(WrappedMTLTexture *sourceText
     }
     MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
     bufferRecord->AddChunk(chunk);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(sourceTexture), eFrameRef_Read);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(destinationTexture), eFrameRef_PartialWrite);
   }
   else
   {
@@ -694,9 +861,34 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromTexture(
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder ||
+       !ValidTextureCopyRange(sourceTexture, sourceSlice, sourceLevel, destinationTexture,
+                               destinationSlice, destinationLevel, sliceCount, levelCount))
+    {
+      RDCERR("Invalid Metal texture copy slice/mip range");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->copyFromTexture(
+        Unwrap(sourceTexture), sourceSlice, sourceLevel, Unwrap(destinationTexture),
+        destinationSlice, destinationLevel, sliceCount, levelCount);
+    if(IsLoading(m_State))
+    {
+      AddEvent();
+      ActionDescription action;
+      action.customName = StringFormat::Fmt("copyFromTexture(%llu slices, %llu mips)",
+                                            (uint64_t)sliceCount, (uint64_t)levelCount);
+      action.flags = ActionFlags::Copy;
+      action.copySource = GetResID(sourceTexture);
+      action.copyDestination = GetResID(destinationTexture);
+      action.copySourceSubresource = Subresource((uint32_t)sourceLevel, (uint32_t)sourceSlice);
+      action.copyDestinationSubresource =
+          Subresource((uint32_t)destinationLevel, (uint32_t)destinationSlice);
+      AddAction(action);
+      m_Device->GetReplay()->AddUsage(action.copySource, ResourceUsage::CopySrc);
+      m_Device->GetReplay()->AddUsage(action.copyDestination, ResourceUsage::CopyDst);
+    }
   }
   return true;
 }
@@ -725,6 +917,8 @@ void WrappedMTLBlitCommandEncoder::copyFromTexture(WrappedMTLTexture *sourceText
     }
     MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
     bufferRecord->AddChunk(chunk);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(sourceTexture), eFrameRef_Read);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(destinationTexture), eFrameRef_PartialWrite);
   }
   else
   {
@@ -849,82 +1043,74 @@ void WrappedMTLBlitCommandEncoder::fillBuffer(WrappedMTLBuffer *buffer, NS::Rang
 }
 
 template <typename SerialiserType>
-bool WrappedMTLBlitCommandEncoder::Serialise_updateFence(SerialiserType &ser, WrappedMTLFence *fence)
+bool WrappedMTLBlitCommandEncoder::Serialise_updateFence(
+    SerialiserType &ser, WrappedMTLFence *fence)
 {
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, this);
-  // TODO: when WrappedMTLFence exists
-  //  SERIALISE_ELEMENT(fence).Important();
-
+  SERIALISE_ELEMENT(fence).Important();
   SERIALISE_CHECK_READ_ERRORS();
-
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real || !ValidMetalFence(fence))
+    {
+      RDCERR("Invalid Metal blit updateFence resource, stage or dependency");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->updateFence(Unwrap(fence));
+    fence->Updated(m_Device->GetReplayEpoch(), GetResID(BlitCommandEncoder));
   }
-  return false;
+  return true;
 }
 
 void WrappedMTLBlitCommandEncoder::updateFence(WrappedMTLFence *fence)
 {
   SERIALISE_TIME_CALL(Unwrap(this)->updateFence(Unwrap(fence)));
-
-  // TODO: when WrappedMTLFence exists
-  METAL_CAPTURE_NOT_IMPLEMENTED();
   if(IsCaptureMode(m_State))
   {
-    Chunk *chunk = NULL;
-    {
-      CACHE_THREAD_SERIALISER();
-      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_updateFence);
-      Serialise_updateFence(ser, fence);
-      chunk = scope.Get();
-    }
-    MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
-    bufferRecord->AddChunk(chunk);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_updateFence);
+    Serialise_updateFence(ser, fence);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(fence), eFrameRef_Read);
   }
 }
 
 template <typename SerialiserType>
-bool WrappedMTLBlitCommandEncoder::Serialise_waitForFence(SerialiserType &ser, WrappedMTLFence *fence)
+bool WrappedMTLBlitCommandEncoder::Serialise_waitForFence(
+    SerialiserType &ser, WrappedMTLFence *fence)
 {
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, this);
-  // TODO: when WrappedMTLFence exists
-  //  SERIALISE_ELEMENT(fence).Important();
-
+  SERIALISE_ELEMENT(fence).Important();
   SERIALISE_CHECK_READ_ERRORS();
-
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real || !ValidMetalFence(fence) ||
+       !fence->CanWait(m_Device->GetReplayEpoch(), GetResID(BlitCommandEncoder)))
+    {
+      RDCERR("Invalid Metal blit waitForFence resource, stage or dependency");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->waitForFence(Unwrap(fence));
   }
-  return false;
+  return true;
 }
 
 void WrappedMTLBlitCommandEncoder::waitForFence(WrappedMTLFence *fence)
 {
   SERIALISE_TIME_CALL(Unwrap(this)->waitForFence(Unwrap(fence)));
-
-  // TODO: when WrappedMTLFence exists
-  METAL_CAPTURE_NOT_IMPLEMENTED();
   if(IsCaptureMode(m_State))
   {
-    Chunk *chunk = NULL;
-    {
-      CACHE_THREAD_SERIALISER();
-      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_waitForFence);
-      Serialise_waitForFence(ser, fence);
-      chunk = scope.Get();
-    }
-    MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
-    bufferRecord->AddChunk(chunk);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_waitForFence);
+    Serialise_waitForFence(ser, fence);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(fence), eFrameRef_Read);
   }
 }
 
@@ -1036,9 +1222,14 @@ bool WrappedMTLBlitCommandEncoder::Serialise_optimizeContentsForGPUAccess(Serial
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || !ValidTextureSubresource(texture, 0, 0))
+    {
+      RDCERR("Invalid Metal GPU texture optimization resource");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->optimizeContentsForGPUAccess(Unwrap(texture));
   }
   return true;
 }
@@ -1058,10 +1249,7 @@ void WrappedMTLBlitCommandEncoder::optimizeContentsForGPUAccess(WrappedMTLTextur
     }
     MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
     bufferRecord->AddChunk(chunk);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
+    bufferRecord->MarkResourceFrameReferenced(GetResID(texture), eFrameRef_Read);
   }
 }
 
@@ -1078,9 +1266,14 @@ bool WrappedMTLBlitCommandEncoder::Serialise_optimizeContentsForGPUAccess(Serial
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || !ValidTextureSubresource(texture, slice, level))
+    {
+      RDCERR("Invalid Metal GPU texture optimization subresource");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->optimizeContentsForGPUAccess(Unwrap(texture), slice, level);
   }
   return true;
 }
@@ -1103,10 +1296,7 @@ void WrappedMTLBlitCommandEncoder::optimizeContentsForGPUAccess(WrappedMTLTextur
     }
     MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
     bufferRecord->AddChunk(chunk);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
+    bufferRecord->MarkResourceFrameReferenced(GetResID(texture), eFrameRef_Read);
   }
 }
 
@@ -1119,9 +1309,14 @@ bool WrappedMTLBlitCommandEncoder::Serialise_optimizeContentsForCPUAccess(Serial
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || !ValidTextureSubresource(texture, 0, 0))
+    {
+      RDCERR("Invalid Metal CPU texture optimization resource");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->optimizeContentsForCPUAccess(Unwrap(texture));
   }
   return true;
 }
@@ -1141,10 +1336,7 @@ void WrappedMTLBlitCommandEncoder::optimizeContentsForCPUAccess(WrappedMTLTextur
     }
     MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
     bufferRecord->AddChunk(chunk);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
+    bufferRecord->MarkResourceFrameReferenced(GetResID(texture), eFrameRef_Read);
   }
 }
 
@@ -1161,9 +1353,14 @@ bool WrappedMTLBlitCommandEncoder::Serialise_optimizeContentsForCPUAccess(Serial
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || !ValidTextureSubresource(texture, slice, level))
+    {
+      RDCERR("Invalid Metal CPU texture optimization subresource");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->optimizeContentsForCPUAccess(Unwrap(texture), slice, level);
   }
   return true;
 }
@@ -1179,17 +1376,21 @@ void WrappedMTLBlitCommandEncoder::optimizeContentsForCPUAccess(WrappedMTLTextur
     Chunk *chunk = NULL;
     {
       CACHE_THREAD_SERIALISER();
-      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_optimizeContentsForCPUAccess);
+      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_optimizeContentsForCPUAccess_slice_level);
       Serialise_optimizeContentsForCPUAccess(ser, texture, slice, level);
       chunk = scope.Get();
     }
     MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
     bufferRecord->AddChunk(chunk);
+    bufferRecord->MarkResourceFrameReferenced(GetResID(texture), eFrameRef_Read);
   }
-  else
-  {
-    // TODO: implement RD MTL replay
-  }
+}
+
+static bool ValidICBRange(WrappedMTLIndirectCommandBuffer *buffer, const NS::Range &range)
+{
+  return buffer && buffer->m_Type == eResIndirectCommandBuffer && Unwrap(buffer) &&
+         buffer->SupportedDescriptor() && range.location <= buffer->Count() &&
+         range.length <= buffer->Count() - range.location;
 }
 
 template <typename SerialiserType>
@@ -1197,40 +1398,40 @@ bool WrappedMTLBlitCommandEncoder::Serialise_resetCommandsInBuffer(
     SerialiserType &ser, WrappedMTLIndirectCommandBuffer *buffer, NS::Range &range)
 {
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, this);
-  // TODO: when WrappedMTLIndirectCommandBuffer exists
-  //  SERIALISE_ELEMENT(buffer).Important();
-
+  SERIALISE_ELEMENT(buffer).Important();
+  SERIALISE_ELEMENT(range).Important();
   SERIALISE_CHECK_READ_ERRORS();
-
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       !Unwrap(BlitCommandEncoder) || !ValidICBRange(buffer, range) || !buffer->PrepareReplay())
+    {
+      RDCERR("Invalid Metal GPU ICB reset range, resource or encoder");
+      return false;
+    }
+    if(range.length)
+      Unwrap(BlitCommandEncoder)->resetCommandsInBuffer(Unwrap(buffer), range);
+    for(NS::UInteger i = range.location; i < range.location + range.length; ++i)
+      buffer->Draw(i) = MetalIndirectDraw();
   }
-  return false;
+  return true;
 }
 
 void WrappedMTLBlitCommandEncoder::resetCommandsInBuffer(WrappedMTLIndirectCommandBuffer *buffer,
                                                          NS::Range &range)
 {
   SERIALISE_TIME_CALL(Unwrap(this)->resetCommandsInBuffer(Unwrap(buffer), range));
-
-  // TODO: when WrappedMTLIndirectCommandBuffer exists
-  METAL_CAPTURE_NOT_IMPLEMENTED();
   if(IsCaptureMode(m_State))
   {
-    Chunk *chunk = NULL;
-    {
-      CACHE_THREAD_SERIALISER();
-      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_resetCommandsInBuffer);
-      Serialise_resetCommandsInBuffer(ser, buffer, range);
-      chunk = scope.Get();
-    }
-    MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
-    bufferRecord->AddChunk(chunk);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    buffer->CaptureReplayDependency(record);
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_resetCommandsInBuffer);
+    Serialise_resetCommandsInBuffer(ser, buffer, range);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(buffer), eFrameRef_ReadBeforeWrite);
+    if(range.length) buffer->MarkGPUWrite();
   }
 }
 
@@ -1240,19 +1441,37 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyIndirectCommandBuffer(
     WrappedMTLIndirectCommandBuffer *destination, NS::UInteger destinationIndex)
 {
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, this);
-  // TODO: when WrappedMTLIndirectCommandBuffer exists
-  //  SERIALISE_ELEMENT(source).Important();
-  SERIALISE_ELEMENT(sourceRange);
-  //  SERIALISE_ELEMENT(destination).Important();
-  SERIALISE_ELEMENT(destinationIndex);
-
+  SERIALISE_ELEMENT(source).Important();
+  SERIALISE_ELEMENT(sourceRange).Important();
+  SERIALISE_ELEMENT(destination).Important();
+  SERIALISE_ELEMENT(destinationIndex).Important();
   SERIALISE_CHECK_READ_ERRORS();
-
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    const NS::Range target = NS::Range::Make(destinationIndex, sourceRange.length);
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       !Unwrap(BlitCommandEncoder) || !ValidICBRange(source, sourceRange) ||
+       !ValidICBRange(destination, target) ||
+       source->CommandTypes() != destination->CommandTypes() ||
+       source->InheritPipelineState() != destination->InheritPipelineState() ||
+       source->InheritBuffers() != destination->InheritBuffers() ||
+       source->MaxVertexBufferBindCount() != destination->MaxVertexBufferBindCount() ||
+       (source == destination && sourceRange.length &&
+        sourceRange.location < destinationIndex + sourceRange.length &&
+        destinationIndex < sourceRange.location + sourceRange.length) ||
+       !source->PrepareReplay() || !destination->PrepareReplay())
+    {
+      RDCERR("Invalid/unsupported Metal ICB copy range, descriptors, overlap or encoder");
+      return false;
+    }
+    if(sourceRange.length)
+      Unwrap(BlitCommandEncoder)->copyIndirectCommandBuffer(
+          Unwrap(source), sourceRange, Unwrap(destination), destinationIndex);
+    for(NS::UInteger i = 0; i < sourceRange.length; ++i)
+      destination->Draw(destinationIndex + i) = source->Draw(sourceRange.location + i);
   }
-  return false;
+  return true;
 }
 
 void WrappedMTLBlitCommandEncoder::copyIndirectCommandBuffer(
@@ -1261,24 +1480,18 @@ void WrappedMTLBlitCommandEncoder::copyIndirectCommandBuffer(
 {
   SERIALISE_TIME_CALL(Unwrap(this)->copyIndirectCommandBuffer(
       Unwrap(source), sourceRange, Unwrap(destination), destinationIndex));
-
-  // TODO: when WrappedMTLIndirectCommandBuffer exists
-  METAL_CAPTURE_NOT_IMPLEMENTED();
   if(IsCaptureMode(m_State))
   {
-    Chunk *chunk = NULL;
-    {
-      CACHE_THREAD_SERIALISER();
-      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_copyIndirectCommandBuffer);
-      Serialise_copyIndirectCommandBuffer(ser, source, sourceRange, destination, destinationIndex);
-      chunk = scope.Get();
-    }
-    MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
-    bufferRecord->AddChunk(chunk);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    source->CaptureReplayDependency(record);
+    destination->CaptureReplayDependency(record);
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_copyIndirectCommandBuffer);
+    Serialise_copyIndirectCommandBuffer(ser, source, sourceRange, destination, destinationIndex);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(source), eFrameRef_Read);
+    record->MarkResourceFrameReferenced(GetResID(destination), eFrameRef_ReadBeforeWrite);
+    if(sourceRange.length) destination->MarkGPUWrite();
   }
 }
 
@@ -1286,18 +1499,25 @@ template <typename SerialiserType>
 bool WrappedMTLBlitCommandEncoder::Serialise_optimizeIndirectCommandBuffer(
     SerialiserType &ser, WrappedMTLIndirectCommandBuffer *indirectCommandBuffer, NS::Range &range)
 {
-  // TODO: when WrappedMTLIndirectCommandBuffer exists
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, this);
-  //  SERIALISE_ELEMENT(indirectCommandBuffer).Important();
-  SERIALISE_ELEMENT(range);
-
+  SERIALISE_ELEMENT(indirectCommandBuffer).Important();
+  SERIALISE_ELEMENT(range).Important();
   SERIALISE_CHECK_READ_ERRORS();
-
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       !Unwrap(BlitCommandEncoder) || !ValidICBRange(indirectCommandBuffer, range) ||
+       !indirectCommandBuffer->PrepareReplay() ||
+       !indirectCommandBuffer->RegisterOptimization(GetResID(BlitCommandEncoder->m_CommandBuffer), range))
+    {
+      RDCERR("Invalid Metal ICB optimization range, overlap, resource or encoder");
+      return false;
+    }
+    if(range.length)
+      Unwrap(BlitCommandEncoder)->optimizeIndirectCommandBuffer(Unwrap(indirectCommandBuffer), range);
   }
-  return false;
+  return true;
 }
 
 void WrappedMTLBlitCommandEncoder::optimizeIndirectCommandBuffer(
@@ -1305,24 +1525,15 @@ void WrappedMTLBlitCommandEncoder::optimizeIndirectCommandBuffer(
 {
   SERIALISE_TIME_CALL(
       Unwrap(this)->optimizeIndirectCommandBuffer(Unwrap(indirectCommandBuffer), range));
-
-  // TODO: when WrappedMTLIndirectCommandBuffer exists
-  METAL_CAPTURE_NOT_IMPLEMENTED();
   if(IsCaptureMode(m_State))
   {
-    Chunk *chunk = NULL;
-    {
-      CACHE_THREAD_SERIALISER();
-      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_optimizeIndirectCommandBuffer);
-      Serialise_optimizeIndirectCommandBuffer(ser, indirectCommandBuffer, range);
-      chunk = scope.Get();
-    }
-    MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
-    bufferRecord->AddChunk(chunk);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    indirectCommandBuffer->CaptureReplayDependency(record);
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_optimizeIndirectCommandBuffer);
+    Serialise_optimizeIndirectCommandBuffer(ser, indirectCommandBuffer, range);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(indirectCommandBuffer), eFrameRef_Read);
   }
 }
 
@@ -1376,20 +1587,49 @@ bool WrappedMTLBlitCommandEncoder::Serialise_resolveCounters(
     SerialiserType &ser, WrappedMTLCounterSampleBuffer *sampleBuffer, NS::Range &range,
     WrappedMTLBuffer *destinationBuffer, NS::UInteger destinationOffset)
 {
-  // TODO: when WrappedMTLCounterSampleBuffer exists
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, this);
-  //  SERIALISE_ELEMENT(sampleBuffer).Important();
+  SERIALISE_ELEMENT(sampleBuffer).Important();
   SERIALISE_ELEMENT(range);
   SERIALISE_ELEMENT(destinationBuffer).Important();
   SERIALISE_ELEMENT(destinationOffset);
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real || !sampleBuffer ||
+       sampleBuffer->m_Type != eResCounterSampleBuffer || !sampleBuffer->m_Real ||
+       !destinationBuffer || destinationBuffer->m_Type != eResBuffer ||
+       !destinationBuffer->m_Real || !range.length ||
+       range.location > Unwrap(sampleBuffer)->sampleCount() ||
+       range.length > Unwrap(sampleBuffer)->sampleCount() - range.location ||
+       range.length > UINT64_MAX / sizeof(uint64_t) ||
+       destinationOffset % sizeof(uint64_t) ||
+       !ValidBufferRange(destinationBuffer, destinationOffset,
+                         range.length * sizeof(uint64_t)))
+    {
+      RDCERR("Invalid Metal stage-boundary counter resolve identity or range");
+      return false;
+    }
+    Unwrap(BlitCommandEncoder)->resolveCounters(Unwrap(sampleBuffer), range,
+                                                Unwrap(destinationBuffer), destinationOffset);
+    if(IsLoading(m_State))
+    {
+      AddEvent();
+      ActionDescription action;
+      action.customName = StringFormat::Fmt("resolveCounters(%llu samples at %llu)",
+                                            uint64_t(range.length), uint64_t(range.location));
+      action.flags = ActionFlags::Copy;
+      action.copySource = GetResID(sampleBuffer);
+      action.copyDestination = GetResID(destinationBuffer);
+      AddAction(action);
+      m_Device->GetReplay()->AddUsage(action.copySource, ResourceUsage::CopySrc);
+      m_Device->GetReplay()->AddUsage(action.copyDestination, ResourceUsage::CopyDst);
+    }
   }
-  return false;
+  return true;
 }
 
 void WrappedMTLBlitCommandEncoder::resolveCounters(WrappedMTLCounterSampleBuffer *sampleBuffer,
@@ -1400,23 +1640,15 @@ void WrappedMTLBlitCommandEncoder::resolveCounters(WrappedMTLCounterSampleBuffer
   SERIALISE_TIME_CALL(Unwrap(this)->resolveCounters(Unwrap(sampleBuffer), range,
                                                     Unwrap(destinationBuffer), destinationOffset));
 
-  // TODO: when WrappedMTLCounterSampleBuffer exists
-  METAL_CAPTURE_NOT_IMPLEMENTED();
   if(IsCaptureMode(m_State))
   {
-    Chunk *chunk = NULL;
-    {
-      CACHE_THREAD_SERIALISER();
-      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_resolveCounters);
-      Serialise_resolveCounters(ser, sampleBuffer, range, destinationBuffer, destinationOffset);
-      chunk = scope.Get();
-    }
-    MetalResourceRecord *bufferRecord = GetRecord(m_CommandBuffer);
-    bufferRecord->AddChunk(chunk);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLBlitCommandEncoder_resolveCounters);
+    Serialise_resolveCounters(ser, sampleBuffer, range, destinationBuffer, destinationOffset);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(sampleBuffer), eFrameRef_Read);
+    record->MarkResourceFrameReferenced(GetResID(destinationBuffer), eFrameRef_PartialWrite);
   }
 }
 

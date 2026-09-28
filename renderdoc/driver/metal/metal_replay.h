@@ -51,17 +51,33 @@ public:
 
   void AddBuffer(ResourceId id, uint64_t length);
   void AddTexture(ResourceId id, MTL::Texture *texture, bool swapBuffer);
+  void RegisterTextureViewSource(ResourceId id);
+  bool SnapshotTextureViewSources();
+  bool ResetTextureViewSources();
   void AddShaderLibrary(ResourceId id, const rdcstr &source);
   void AddShader(ResourceId id, ResourceId library, MTL::Function *function,
                  const rdcstr &entryPoint);
   void AddRenderPipeline(ResourceId id, const RDMTL::RenderPipelineDescriptor &descriptor,
                          MTL::RenderPipelineReflection *reflection);
+  void AddTilePipeline(ResourceId id, ResourceId function,
+                       MTL::RenderPipelineReflection *reflection);
+  bool IsTilePipeline(ResourceId id) const { return m_TilePipelines.count(id) != 0; }
+  void AddMeshPipeline(ResourceId id, ResourceId meshFunction, ResourceId fragmentFunction,
+                       uint32_t sampleCount, MTL::RenderPipelineReflection *reflection);
+  bool IsMeshPipeline(ResourceId id) const { return m_MeshPipelines.count(id) != 0; }
   void AddComputePipeline(ResourceId id, ResourceId function,
-                          MTL::ComputePipelineReflection *reflection);
+                          MTL::ComputePipelineReflection *reflection,
+                          MTL::ComputePipelineState *pipeline, bool threadExecutionMultiple = false);
   void BeginComputePass();
   void SetComputePipeline(ResourceId id);
   void SetComputeTexture(uint32_t index, ResourceId id);
   void BindComputeSampler(uint32_t index, ResourceId id);
+  bool ValidateComputeBufferBindings() const;
+  bool ValidateComputeThreadgroup(const MTL::Size &threads, const MTL::Size *grid = NULL) const;
+  void SetComputeThreadgroupMemory(uint32_t index, uint64_t length);
+  void BindComputeBytes(uint32_t index, uint64_t length);
+  bool SetComputeBufferOffset(uint32_t index, uint64_t offset);
+  void SetSamplerLOD(ShaderStage stage, uint32_t index, float minimum, float maximum);
   ResourceId GetComputeTexture(uint32_t index) const;
   ResourceId GetComputeTextureForAccess(bool write) const;
   void BindComputeBuffer(uint32_t index, ResourceId id, uint64_t offset);
@@ -75,21 +91,35 @@ public:
     return m_CurrentRenderPassDescriptor;
   }
   void EndRenderPass();
+  void SetRenderPassStoreAction(uint32_t attachment, MTL::StoreAction action);
+  void SetRenderPassStoreOptions(uint32_t attachment, MTL::StoreActionOptions options);
   void BindRenderPipeline(ResourceId id);
+  uint64_t GetVertexLayoutStride(ResourceId pipeline, uint32_t slot) const;
   bool IsVertexStorageBufferSlot(uint32_t index) const;
   bool IsVertexInputBufferSlot(uint32_t index) const;
   void BindDepthStencilState(ResourceId id);
   void SetStencilReferenceValue(uint32_t referenceValue);
   void SetStencilReferenceValues(uint32_t frontReferenceValue, uint32_t backReferenceValue);
   void BindVertexBuffer(uint32_t index, ResourceId id, uint64_t offset);
+  void SetVertexBufferOffset(uint32_t index, uint64_t offset);
+  void SetVertexBufferStride(uint32_t index, uint32_t stride);
   void BindFragmentBuffer(uint32_t index, ResourceId id, uint64_t offset);
   void SetFragmentBufferOffset(uint32_t index, uint64_t offset);
+  bool IsFragmentBufferOffsetValid(uint32_t index, uint64_t offset) const;
   void BindFragmentTexture(uint32_t index, ResourceId id);
   void BindFragmentSampler(uint32_t index, ResourceId id);
   void BindVertexTexture(uint32_t index, ResourceId id);
   void BindVertexSampler(uint32_t index, ResourceId id);
-  void SetArgumentBufferTexture(ResourceId argumentBuffer, uint32_t index, ResourceId texture);
-  void SetArgumentBufferSampler(ResourceId argumentBuffer, uint32_t index, ResourceId sampler);
+  bool RegisterArgumentBuffer(WrappedMTLArgumentEncoder *encoder, ResourceId buffer, uint64_t offset);
+  void SetArgumentBufferTexture(ResourceId argumentBuffer, uint64_t offset, uint32_t index,
+                                 ResourceId texture);
+  void SetArgumentBufferSampler(ResourceId argumentBuffer, uint64_t offset, uint32_t index,
+                                 ResourceId sampler);
+  void SetArgumentBufferMember(ResourceId argumentBuffer, uint64_t offset, uint32_t index,
+                                ResourceId buffer, uint64_t bufferOffset);
+  rdcarray<ResourceId> GetArgumentBuffers() const;
+  bool RestoreArgumentBufferResources(ResourceId id);
+  bool ValidateArgumentBufferBindings() const;
   void BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType indexType,
                        uint64_t indexCount = 0);
   void SetIndirectBuffer(ResourceId id, uint64_t offset, uint64_t size);
@@ -319,6 +349,7 @@ private:
   std::map<ResourceId, size_t> m_ResourceIdx;
   rdcarray<BufferDescription> m_Buffers;
   rdcarray<TextureDescription> m_Textures;
+  std::map<ResourceId, rdcarray<bytebuf>> m_TextureViewSourceInitial;
   std::map<ResourceId, rdcstr> m_LibrarySources;
   std::map<ResourceId, ShaderReflection> m_Shaders;
 
@@ -343,13 +374,35 @@ private:
     rdcarray<RDMTL::RenderPipelineColorAttachmentDescriptor> colorAttachments;
   };
   std::map<ResourceId, RenderPipelineInfo> m_RenderPipelines;
+  std::map<ResourceId, ResourceId> m_TilePipelines;
+  std::map<ResourceId, ResourceId> m_MeshPipelines;
   std::map<ResourceId, ResourceId> m_ComputePipelines;
+  std::map<ResourceId, std::map<uint32_t, rdcpair<uint64_t, uint64_t>>> m_ComputeBufferMinimums;
+  std::map<ResourceId, rdcarray<uint32_t>> m_ComputeRequiredTextures, m_ComputeRequiredSamplers;
+  std::map<ResourceId, std::map<uint32_t, uint64_t>> m_ComputeThreadgroupMinimums;
+  // Static threadgroup memory and maximum total threads for each native pipeline.
+  std::map<ResourceId, rdcpair<uint64_t, uint64_t>> m_ComputeThreadgroupLimits;
+  std::map<ResourceId, uint64_t> m_ComputeThreadExecutionMultiples;
+  std::map<uint32_t, uint64_t> m_CurrentComputeInlineBytes, m_CurrentComputeThreadgroupMemory;
   std::map<ResourceId, RDMTL::DepthStencilDescriptor> m_DepthStencilStates;
   std::map<ResourceId, RDMTL::SamplerDescriptor> m_SamplerStates;
-  std::map<ResourceId, MetalPipe::ArgumentBuffer> m_ArgumentBuffers;
+  struct ArgumentPacket
+  {
+    WrappedMTLArgumentEncoder *encoder = NULL;
+    MetalPipe::ArgumentBuffer binding;
+    rdcarray<MetalPipe::BufferBinding> buffers;
+  };
+  std::map<rdcpair<ResourceId, uint64_t>, ArgumentPacket> m_ArgumentBuffers;
+  // Resource id in an argument struct is not a direct shader binding slot.
+  std::map<ResourceId, std::map<uint32_t, rdcstr>> m_ShaderArgumentSlots;
   MetalPipe::State m_CurrentPipelineState;
   RDMTL::RenderPassDescriptor m_CurrentRenderPassDescriptor;
   std::map<uint32_t, MetalPipe::State> m_EventPipelineStates;
+  // Per-binding overrides are event state, not a mutation of the immutable sampler object.
+  typedef std::map<uint32_t, rdcpair<float, float>> SamplerLODOverrides;
+  SamplerLODOverrides m_CurrentSamplerLOD, m_SelectedSamplerLOD;
+  rdcarray<uint32_t> m_CurrentVertexAttributeStrides;
+  std::map<uint32_t, SamplerLODOverrides> m_EventSamplerLOD;
   MetalPipe::State *m_MetalPipelineState = NULL;
 
   MTL::CommandQueue *m_OutputQueue = NULL;

@@ -5,11 +5,176 @@
 
 ## 当前待验
 
-无。用户已确认 T32/T33 的新版 Event Browser 摘要；此前参数、CS、
-资源和画面等项目也已确认。T32/T33、PHASE33/34 与 BATCH33-34 已关闭。
-后续 action 名称一致性工作见 `ACTION_NAME_ALIGNMENT.md`；尚未实施，
-因此当前不产生新的人工 L4 待验项。T31 GUI 导出入口此前由用户明确免除
-本轮复验，不记作 GUI 实测。
+按用户要求，本轮没有启动 qrenderdoc 或使用 Computer Use。T34–T69、T71–T132、T135–T153、T156–T157、T159–T312 和 T10 marker
+增量已完成计划内终端自动验证，但以下 GUI L4 尚未执行；统一验收与最新库版本见
+`QA_CONSOLIDATED.md`。旧 batch QA 文档保留细节，总单为最新入口。用户计划重置后集中QA。
+
+| 批次 / 功能 | 状态 | 最终构建与 capture | 待验重点 |
+| --- | --- | --- | --- |
+| BATCH311–312 / tile/mesh pipeline archive 依赖 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t311_capture.rdc` SHA前缀`96acccaa0e49`、`t312_capture.rdc` `2beb183fccd6`；库/app`2f88058307f5…` | 对照T309/T310，tile/mesh pipeline 的binaryArchives各有同一archive且options4，资源图archive→pipeline；GPU tile三阶段/mesh间接draw及正反向seek按T74/T89。 |
+| BATCH310 / archive 添加 mesh 函数 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t310_capture.rdc` SHA前缀`ee79cc878d8b`；库/app`fecbaa45dd8a…` | chunk1383先于mesh pipeline创建，mesh/fragment→archive资源关系；执行中的write_grid compute pipeline用archive options4；GPU间接mesh draw、像素和seek按T89。mesh pipeline自身archive依赖不在本批承诺内。 |
+| BATCH309 / archive 添加 tile 函数 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t309_capture.rdc` SHA前缀`32025e6fed64`；库/app`13f127004ba0…` | chunk1382先于tile pipeline创建，tile kernel→archive资源关系；普通draw pipeline使用archive options4；三次tile dispatch输出和seek按T74。tile pipeline自身的archive依赖不在本批承诺内。 |
+| BATCH308 / archive 添加单节点 stitched library | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t308_capture.rdc` SHA前缀`15e67b9c276c`；库/app`7c43ac13093f…` | chunk1381先于pipeline创建，源visible函数→archive资源关系；与T305–307对照32个uint、中心像素和seek。本例不声称stitched函数经GPU函数表执行。 |
+| BATCH307 / archive 添加 visible 函数 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t307_capture.rdc` SHA前缀`348f4169bb2b`；库/app`0a62ea89993e…` | chunk1380先于pipeline创建，来源library→archive资源关系；与T305/306对照32个uint、中心像素和事件seek。此项不声称visible函数已在GPU函数表调用。 |
+| BATCH305–306 / 空 Binary Archive 的函数变更 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t305_capture.rdc` SHA前缀`12b0c5a7ce8e`、`t306_capture.rdc` `cf5b600b3e24`；库/app`1e0165e982e7…` | 空archive创建、chunk1378/1379按序添加compute/render函数、三个函数→archive→两个pipeline资源链；options4，32个uint为17–48，中心像素及事件seek；T306异步对照。 |
+| BATCH304 / 异步单节点 Stitched Library | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t304_capture.rdc` SHA前缀`3602ebde29d3`；库/app`a4547b2ebb75…` | 对照T303，异步chunk1377、同一函数→library→pipeline资源链、32个float 2…64与中心像素、事件seek。 |
+| BATCH303 / 单节点 Stitched Library | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t303_capture.rdc` SHA前缀`a4df65b1fb4b`；库/app`a4547b2ebb75…` | chunk1020中函数13→stitched library14→visible函数15→compute pipeline；graph名`stitched_scale`，32个float为2…64、中心像素约`(0.2,0.7,0.3)`；事件seek。 |
+| BATCH302 / Binary Archive 异步 pipeline | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t302_capture.rdc` SHA前缀`b93bf5da8a68`；库/app`b297a988af63…` | 与T301同次对照：异步compute/render chunk 1269/1266，同一archive资源依赖、options4，32个`i+17`值和中心像素、事件seek。 |
+| BATCH301 / Binary Archive 导入与 pipeline 依赖 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t301_capture.rdc` SHA前缀`2780f4d81854`；库/app`b297a988af63…` | 资源列表中的Binary Archive；compute/render descriptor均引用同一资源，archive-miss选项4；dispatch后32个`i+17`值、中心像素约`(0.2,0.7,0.3)`；事件seek。普通compute/render变更另见T305–306。 |
+| BATCH299–300 / 多实例复用两个 BLAS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t299/300_capture.rdc` SHA前缀`6f84e5d6111d` / `60ae66ccaa14`；库/app`ac97012d33b5…` | `buildRepeatedDistinctInstances`两个不同子资源、count3/5及重复索引0/1；三/五次ray逐个命中，事件seek与资源身份。 |
+| BATCH298 / 同一 BLAS 的八实例 TLAS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t298_capture.rdc` SHA前缀 `00ed80a5d7cc`；库/app `e67638f19213…` | `buildInstances.count=8`、单一BLAS子资源、八次 ray 从 `7/9/11/13/15/17/19/21` 依次变为1；事件 seek、资源身份及反向恢复。65536只是安全上限，非GPU正例。 |
+| BATCH294–297 / 三四个不同 BLAS 的 TLAS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t294…297_capture.rdc` SHA 前缀 `cd5fe6dca0a5` / `9b90bc5d9f36` / `861b6c858532` / `d5518fdcc044`；库/app `bdc80ef81a6…` | `buildMultipleDistinctInstances.children` 的 3/4 个有序不同资源、实例描述符 AS 索引0…N−1、三/四次 ray 均命中；T296 descriptor 分配、T297 TLAS 压缩复制；事件 seek 与资源身份。 |
+| BATCH290–293 / 三四实例 TLAS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t290…293_capture.rdc` SHA 前缀 `abff92866814` / `3a2a5078c0e9` / `dbf056a75a44` / `11c90bf3dad0`；库/app `986a0d98b8f8…` | `buildInstances` count3/4、三个或四个 GPU ray 命中；T292 descriptor 分配、T293 TLAS 压缩复制；事件 seek 与资源身份。 |
+| BATCH284–289 / 双三角形 indexed refit | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t284…289_capture.rdc` SHA 前缀见 [批次记录](BATCH284-289.md)；库/app `2c2bc09e0e18…` | triangleCount2、UInt16/UInt32、T286 独立目标+压缩、T287 换索引、T288 换顶点、T289 同时换两类 buffer；ray 1→0、事件 seek 和资源身份。 |
+| BATCH281–283 / indexed refit UInt32/Float4 偏移 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t281…283_capture.rdc` SHA 前缀 `a7c620268d97` / `900a0ca02260` / `896f8016e693`；库/app `2c2bc09e0e18…` | T281 UInt32 indexOffset8、T282 Float4 vertexOffset16、T283 两者加 descriptor 分配；build/refit 参数一致，ray 1→0 与事件 seek。 |
+| BATCH272–280 / indexed refit 参数扩展 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t272…280_capture.rdc` SHA 前缀见 [批次记录](BATCH272-280.md)；库/app `2c2bc09e0e18…` | 核对 Float4/stride16、noDuplicate、scratchOffset256、indexOffset2、vertexOffset36、descriptor+vertexOffset、tableOffset1、opaque 切换和 T280 七参数组合；build/refit 参数保持一致，ray 1→0 与事件 seek。 |
+| BATCH266–271 / indexed triangle AS refit | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t266…271_capture.rdc` SHA 前缀 `7aecbaaa6b8c` / `25f25b5c78fc` / `927906e9703c` / `3d93bf83cc3d` / `6d163a9977b2` / `9926b78a401c`；库/app `cf971d35cd45…` | `buildRefittableIndexedTriangle`→`refitIndexedTriangle`，核对 UInt16/UInt32、T268 换 index buffer、T269 独立目标、T270 compact、T271 descriptor 分配；ray 1→0 与事件 seek。 |
+| BATCH261–265 / refit 切换几何 buffer | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t261…265_capture.rdc` SHA 前缀 `403be1965785` / `2994416908dc` / `eeeb2695c029` / `d1bd3761dfa6` / `549b1eb65aae`；库/app `c94ea0b15648…` | build 与 refit 的 box/vertex 资源 ID 应不同；T261 box、T262 默认 triangle、T263 Float4、T264 noDuplicate、T265 独立目标。核对字段、资源跳转、事件 seek 与 ray 变化。 |
+| BATCH259–260 / refitted box AS 复制与再次 refit | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t259/260_capture.rdc` SHA 前缀 `aaaf47ca1353` / `93026056f190`；库/app `cbfb8ec0daff…` | T259 refit→copy→ray；T260 copied AS 再 refit→ray。检查两次 refit、copy action、资源身份、事件 seek 和 `1/1/0→0/1/0→0/1/0→1/1/0`。 |
+| BATCH256–258 / bounding-box AS refit | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t256…258_capture.rdc` SHA 前缀 `1c0ce0b6ad6f` / `c1061c97ba04` / `2b7628bba8b`；库/app `cbfb8ec0daff…` | build→refit，T256 原位，T257 box/scratch 偏移、表槽1及 noDuplicate，T258 独立目标；核对资源身份、字段、事件 seek 和 ray `1/1/0→0/1/0`。 |
+| BATCH251–255 / 格式化 triangle refit | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t251…255_capture.rdc` SHA 前缀 `14c1cd5b07a3` / `806c279a77dd` / `952a939e3f1b` / `17017c2fc35f` / `a5b5b33feb6d`；库/app `2668361301ba…` | `buildRefittableFormattedTriangle`→`refitFormattedTriangle`：T251 Float3，T252 Float4，T253 descriptor+独立目标，T254 noDuplicate+scratchOffset256，T255 refit后压缩复制；ray 1→0，核对格式字段、源/目标身份和 seek。 |
+| BATCH248–250 / indexed triangle 顶点格式与步长 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t248…250_capture.rdc` SHA 前缀 `11ff5c001b2d` / `af195241374c` / `c956c89a3989`；库/app `e9d06ac87d24…` | `buildIndexedFormattedTriangle`：T248 Float4/UInt16，T249 Float4/UInt32 加 vertex/index/scratch 偏移16/8/256及descriptor分配，T250 Float3/UInt16 加禁止重复交点调用；核对字段、资源身份、ray `1,0,1` 与 seek。 |
+| BATCH244–247 / triangle 顶点格式与步长 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t244…247_capture.rdc` SHA 前缀 `74415587bcf2` / `7e775e034509` / `09292d535f79` / `ce712cfa0d7f`；库/app `21a036a49317…` | `buildFormattedTriangle`：T244 Float3/stride16，T245 Float4/stride16，T246 vertexOffset16/scratchOffset256，T247 Float4 加禁止重复交点调用；核对字段、AS→TLAS 资源身份、ray `1,0,1`、事件 seek。 |
+| BATCH240–243 / refit 禁止重复交点调用 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t240…243_capture.rdc` SHA 前缀 `57ca8102c0f3` / `1875abd63868` / `c3aab50c2212` / `53698f1b9e5a`；库/app `61fe88a3591a…` | `buildRefittableTriangleNoDuplicate`→`refitTriangleNoDuplicate`；T240 原位、T241 descriptor+独立目标、T242 scratchOffset256、T243 refit 后压缩复制。GPU ray build=1/refit=0，检查资源身份、事件顺序和 seek。 |
+| BATCH237–239 / triangle 禁止重复交点调用 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t237…239_capture.rdc` SHA 前缀 `39c04471ce92` / `586f10a6e265` / `6aebf01c4a99`；库/app `103f584d33e5…` | `buildTriangleNoDuplicate`：非 indexed、UInt16 indexed、UInt32 indexed+48/8/256 三偏移和 descriptor 分配；表槽1、compute ray `1,0,1`、render ray `1`；字段、事件、资源身份和 seek。此场景不证明去重上限。 |
+| BATCH234–236 / box 禁止重复交点调用 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t234…236_capture.rdc` SHA 前缀 `016b90163910` / `e9abb40b380c` / `9901236e8a09`；库/app `0a4547ec4347…` | `buildBoundingBoxNoDuplicate`：T234 基本、T235 boxOffset48/scratchOffset256/tableOffset1、T236 opaque；GPU callback counter 均为2，ray 分别 `1,1,0` / `1,1,0` / `0,0,0`。此场景不能区分允许重复的默认值与禁止重复的行为上限；重点看字段保真与事件/资源身份。 |
+| BATCH231–233 / triangle 表偏移 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t231…233_capture.rdc` SHA 前缀 `66c70d9ffdd5` / `ae2948bfc7ab` / `f99aaf786a1d`；库/app `08d484d3b59f…` | `buildTriangleTableOffset.tableOffset=1`，交点函数位于表槽1；T233 另有 UInt32 和 48/8/256 三偏移及 descriptor 分配；dispatch 后 ray `1,0,1`、render ray `1` |
+| BATCH227–230 / indexed triangle 组合偏移 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t227…230_capture.rdc` SHA 前缀 `1d861889320a` / `6305ce8ae637` / `306a61d47e18` / `d4882f84b346`；库/app `96ad1c3c78a3…` | `buildIndexedTriangleExtended`：T227/228 顶点48/索引8/scratch256，T228 UInt32+descriptor分配；T229 仅顶点48，T230 仅scratch256；ray `1,0,1`、render ray `1` |
+| BATCH226 / UInt32 indexed 偏移 + descriptor 分配 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t226_capture.rdc` SHA 前缀 `2019936bbe7f`；库/app `99941fffb20b…` | `buildIndexedTriangleOffset.indexType=UInt32/indexOffset=8/opaque=true`；BLAS 经 descriptor 分配；ray `1,0,1`、render ray `1` |
+| BATCH225 / indexed triangle 索引偏移 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t225_capture.rdc` SHA 前缀 `11b4a39d7352`；库/app `99941fffb20b…` | `buildIndexedTriangleOffset.indexOffset=8`、opaque=true；索引 buffer 前缀无效，实际三角形从 offset8 读；ray `1,0,1`、render ray `1`，事件回退 |
+| BATCH223–224 / opaque box ray | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t223/224_capture.rdc` SHA 前缀 `678fd2ae45a1` / `b66c7ca05986`；库/app `1e37a4f471f9…` | box build 的 opaque=true；T224 还叠加 tableOffset1、boxOffset48/scratchOffset256；dispatch 后 uint `0,0,0`，与 T218–222 的 `1,1,0` 对照 |
+| BATCH221–222 / box 几何 table offset | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t221/222_capture.rdc` SHA 前缀 `fc1ad4daaf88` / `84dee8cfbef0`；库/app `44cc7a5efb3f…` | 交点函数表槽1、box build 的 tableOffset1；T222 与box/scratch偏移组合；dispatch后uint `1,1,0` |
+| BATCH218–220 / box ray 与 compute 交点函数表 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t218…220_capture.rdc` SHA 前缀 `ca4ec2cfe01a` / `3afdf3e0be8c` / `4aa223e6b279`；库/app `d26ccf06016a…` | 双盒 stride32 GPU ray `1/1/0`；T219 boxOffset48/scratchOffset256；T220 compute 表 range 绑定，事件跳转与资源身份 |
+| BATCH216–217 / URL 动态库 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t216/217_capture.rdc` SHA 前缀 `371207066173` / `d93d2c7e4a8f`；库/app `8d98d33c39c0…` | URL 动态库字节嵌入、原路径不存在仍可回放；T217 与普通库双依赖，compute 值 3/6、draw 中央红色 |
+| BATCH213–215 / box AS stride32 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t213…215_capture.rdc` SHA 前缀 `c448d192a774` / `0a4be5cb25a4` / `30ddba848395`；库/app `cffc4b0d117…` | stride32 单盒/双盒、双盒加 boxOffset48/scratchOffset256；GPU compacted size1280；内部第二盒射线几何尚未证明 |
+| BATCH209–212 / box AS 偏移 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t209…212_capture.rdc` SHA 前缀 `6e0720aede63` / `b8a3683c2828` / `d985008c577b` / `804b35b122cf`；库/app `920be51b84d8…` | boxOffset48、scratchOffset256、组合及 descriptor 分配；GPU compacted size1280，事件/资源回退；不要求 box 几何预览 |
+| BATCH204–208 / refit扩展 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t204…208_capture.rdc` SHA 前缀 `a482ea1c7ab3` / `344835a4e0dd` / `fd80bfc0a01f` / `c9c8c7e4f056` / `02e8403ac813`；库/app `56c3811f7405…` | scratchOffset256、独立refit目标、组合、独立目标压缩后ray及512-byte紧凑refit scratch；ray 1→0 |
+| BATCH202–203 / refit descriptor 分配 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t202/203_capture.rdc` SHA `973fada30a67…` / `9075fbb89809…`；库/app `a7c43e2e37fa…` | 单/双三角形 refit descriptor 分配 size2048，之后refit→压缩size1792→目标ray，命中1→0 |
+| BATCH200–201 / refit 后压缩ray | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t200/201_capture.rdc` SHA `6433b65790d2…` / `f88dec560f6e…`；库/app `45b447817a59…` | 单/双三角形原位refit后GPU size1792→跨CB压缩copy→目标ray，build命中1、refit后未命中0 |
+| BATCH196–199 / TLAS复制和压缩后ray | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t196/197/198/199_capture.rdc` SHA `76fd780faa53…` / `68954d273dd3…` / `ca18e1a89989…` / `6fa0a4e4e523…`；库/app `a08d2768c106…` | T196普通复制TLAS后ray 0/1；T197单实例压缩TLAS后ray 0/1；T198/T199同BLAS/异BLAS双实例压缩后ray 1/0/1，压缩size1536 |
+| BATCH194–195 / indexed与多三角形压缩 BLAS ray | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t194/195_capture.rdc` SHA `9fb66545a41d…` / `9b1251e08dd8…`；库/app `2e33d8225d00…` | UInt16 indexed / 双非indexed三角形分别经GPU size1280→跨CB压缩copy→TLAS build→ray，结果0/1 |
+| BATCH192–193 / 复制后 BLAS ray | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t192/193_capture.rdc` SHA `efafce7ba185…` / `8cd542cb4230…`；库/app `2e33d8225d00…` | T192 build→普通copy→以目标BLAS构建TLAS并ray；T193 GPU size1280→跨CB压缩copy→目标BLAS构建TLAS并ray；两者结果0/1 |
+| BATCH189–191 / AS 压缩复制扩展 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t189/190/191_capture.rdc` SHA `5d2641a26749…` / `249264392fe8…` / `8f65ddb5925d…`；库/app `f8fa07f7fd24…` | box / 双非 indexed 三角形 / indexed 三角形分别 build→GPU size读回→跨CB压缩copy；目标 size1280、写回1280；不要求目标ray绑定 |
+| BATCH186–188 / TLAS descriptor 分配 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t186/187/188_capture.rdc` SHA `5e69883ab2a8…` / `dd2ac6c2e8b2…` / `4134493f0c66…`；当前库/app `b9b786586f9d…` | TLAS 经 descriptor 分配 size1792，随后单实例/同BLAS双实例/异BLAS双实例 build；核对实例关系及原有 ray 输出；heap布局查询无需GUI |
+| BATCH183–185 / AS 绑定清空 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t183/184/185_capture.rdc` SHA `821c608d220b…` / `d270206e78a0…` / `4346f2a70218…`；库/app `54ed11b8cce6…` | 计算+片元/顶点/tile 分别先绑定 TLAS、执行 ray、再设零资源清空；确认事件顺序与原有画面不变 |
+| BATCH182 / T182 多 indexed triangle descriptor AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t182_capture.rdc` SHA `014076f1de47…`；库/app `1a8c4816af5a…` | `buildIndexedTriangle.triangleCount=2`、六UInt16索引、72字节顶点buffer；GPU compacted1280，须核对count与索引字段 |
+| BATCH181 / T181 多三角形 descriptor AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t181_capture.rdc` SHA `1ffbca9bdc9b…`；库/app `44a338d15489…` | `buildNonOpaqueTriangle.triangleCount=2`、72字节顶点buffer；AS size1536/compacted1280 与单三角形相同，须看count字段 |
+| BATCH180 / T180 多 box descriptor AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t180_capture.rdc` SHA `dcb164b33c4e…`；库/app `ba68ff520274…` | `buildBoundingBox.boxCount=3`、72字节box buffer；AS size1536/compacted1280 与1/2 box相同，须看count字段 |
+| BATCH179 / T179 双 box descriptor AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t179_capture.rdc` SHA `c65cfc84faf9…`；库/app `cb8f903f05ff…` | descriptor 分配 box AS，`buildBoundingBox` 的 boxCount2；size1536/compacted1280 与单 box 相同，须核对 chunk 数量字段 |
+| BATCH178 / T178 box descriptor AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t178_capture.rdc` SHA `b8c37cb4c5a7…`；库/app `9e5c56446ded…` | `newAccelerationStructureWithDescriptor` 分配 box AS，随后 `buildBoundingBox`、compacted size1280；write→build→write seek |
+| BATCH176–177 / T176–T177 AS 双偏移 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t176/177_capture.rdc` SHA `0d18e6a1d3cd…` / `f1a68a4f1bea…`；库/app `1bb6f06a68b5…` | 第二BLAS build 同时 vertexOffset16、scratchOffset256；T176 size分配、T177 descriptor分配，Shared均`1→7→1`、中央绿色 |
+| BATCH175 / T175 scratch buffer 偏移 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t175_capture.rdc` SHA `22fd0ff433ef…`；库/app `1bb6f06a68b5…` | 第二BLAS `buildOpaqueTriangle` scratchOffset256、Shared`1→7→1`、中央绿色；未对齐/越界负例仅终端验 |
+| BATCH174 / T174 偏移顶点 descriptor AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t174_capture.rdc` SHA `ed91b6c2ad4b…`；库/app `8a9f713e6364…` | 第二BLAS经 descriptor 分配，随后 `buildOpaqueTriangle` vertexOffset16；Shared`1→7→1`、中央绿色 |
+| BATCH173 / T173 静态三角形顶点偏移 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t173_capture.rdc` SHA `a52f95b7871e…`；库/app `b5c8dff22b37…` | 第二BLAS `buildOpaqueTriangle` 的 vertexOffset16，前缀16字节为干扰数据；Shared`1→7→1`、中央绿色 |
+| BATCH171–172 / T171–T172 UInt32 indexed 对照 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t171/172_capture.rdc` SHA `7dadf0fbcb2b…` / `e6052b8de72c…`；库/app `73a801b87e7b…` | T171 opaque descriptor+build命中Shared1绿；T172非opaque旧build被reject为Shared0红；两份共用UInt32索引语义 |
+| BATCH170 / T170 indexed 非 opaque 反向对照 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t170_capture.rdc` SHA `d843c33ff562…`；库/app `73a801b87e7b…` | 第二BLAS旧 indexed chunk、fragment reject 生效，Shared`0→7→0`、中央红色；与T167/T169相反 |
+| BATCH169 / T169 indexed opaque descriptor AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t169_capture.rdc` SHA `ea73a885eaaa…`；库/app `73a801b87e7b…` | 第二BLAS由 indexed opaque descriptor 分配并随后 build；Shared`1→7→1`、中央绿色，分配chunk只存容量 |
+| BATCH168 / T168 UInt32 indexed opaque 三角形 AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t168_capture.rdc` SHA `fdba55218a1d…`；库/app `9a7f700ace5c…` | T167 的 UInt32 对照，第二BLAS显式 indexed opaque build、Shared`1→7→1`、中央绿色 |
+| BATCH167 / T167 indexed opaque 三角形 AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t167_capture.rdc` SHA `198c95ce8dbf…`；库/app `9a7f700ace5c…` | 第二BLAS显式 UInt16 indexed opaque build；fragment自定义reject被绕过，Shared`1→7→1`、中央绿色，与T148非opaque相反 |
+| BATCH166 / T166 opaque descriptor 分配 AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t166_capture.rdc` SHA `a540260cce00…`；库/app `a0d4076aeb32…` | 第二BLAS经 descriptor 分配，随后 `buildOpaqueTriangle`；fragment自定义reject仍被绕过，Shared`1→7→1`、中央绿色 |
+| BATCH165 / T165 显式opaque三角形AS | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t165_capture.rdc` SHA `ae98acfea13e…`；库/app `19ae3d8f9332…` | 第二BLAS的opaque build，fragment自定义reject链仍命中；Shared`1→7→1`、中央绿色，与T148相反 |
+| BATCH164 / T164 默认descriptor AS encoder | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t164_capture.rdc` SHA `581fdf7ca5f9…`；库/app `0ace9b0c4581…` | 两个descriptor AS pass构建BLAS/TLAS，compute输出末→首→末`0,1→0,9→0,1`；无counter attachment |
+| BATCH163 / T163 函数表显式residency | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t163_capture.rdc` SHA `b0c5269d639b…`；库/app `917ed5804329…` | render `useResource(Read, Fragment)`声明嵌套表；交点结果Shared`1→7→1`、中央绿色，错误encoder畸形输入已终端干净拒绝 |
+| BATCH161–162 / T161–T162 IFT嵌套visible table | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t161/162_capture.rdc` SHA `997d1dcf918a…` / `6d9ff50d3ba4…`；库/app `1ad5d34e7b80…` | fragment表slot2中visible table参数slot1/range`(1,1)`，buffer参数slot0；Shared末→前→末`1→7→1`，中央绿色；零值反向对照仅终端验 |
+| BATCH159–160 / T159–T160 IFT buffer参数 | 原生/定向终端通过；panic后全量暂停，待人工L4 | `t159/160_capture.rdc` SHA `c0ae4c26d4ca…` / `dba038596c62…`；库/app `d9498312a666…` | fragment表slot2中buffer参数slot0/range`(0,1)`，Shared末→前→末`1→7→1`，中央绿色；零值反向对照仅终端验 |
+| BATCH156–157 / T156–T157 opaque-triangle表快捷更新 | 定向终端通过，06:26 GPU panic后全量暂停，待人工L4 | `t156/157_capture.rdc` SHA `96ef002c3c03…` / `61dc07c81b38…`；库/app `e291aae57542…` | fragment slot2表的单槽/range `(0,1)`更新；与T148红色/Shared0相反，应为绿色/Shared1，末→前→末`1→7→1` |
+| BATCH148–153 / T148–T153 Intersection Function Table | 修正shader签名后重录，定向终端通过；新capture尚无全量，待人工L4 | `t148–153_capture.rdc` SHA依次`1843e61a594d…`、`91a1118b4d74…`、`c500b52ab6d4…`、`7531603f7cfa…`、`937d11fab706…`、`6673610202f8…`；库/app `d9498312a666…` | 三阶段单槽/range slot2表绑定；compute为`1,0,1`，渲染阶段Shared末→前→末`0→7→0`；fragment/vertex红色，tile为dispatch |
+| BATCH146–147 / T146–T147 Vertex/Tile TLAS射线 | 全量终端自动通过，待人工L4；阶段开放 | `t146/147_capture.rdc` SHA `abeaf2f81566…` / `10073db853eb…`；库/app `2140c924a230…` | vertex与tile各绑定TLAS slot0，Shared输出末→前→末均为`1→7→1`；T146中央绿色，T147为tile dispatch而非普通draw |
+| BATCH145 / T145 Fragment TLAS射线 | 全量终端自动通过，待人工L4；阶段开放 | `t145_capture.rdc` SHA `78a3802c5057…`；库/app `a624ff54d9b8…` | TLAS绑定fragment slot0，绘制中央绿色；Shared输出末→前→末为`1→7→1`，与T144两个BLAS引用关系一致 |
+| BATCH144 / T144 不同BLAS双实例 | 全量终端自动通过，待人工L4；阶段开放 | `t144_capture.rdc` SHA `3afa4d1f0c9a…`；库/app `42099b733d9f…` | 两套BLAS、实例索引0/1、x=-2/+2变换；三条GPU ray从x=-2/+2/+3返回`1,0,1`，末→首→中→末检查Shared输出 |
+| BATCH143 / T143 同BLAS两个TLAS实例 | 全量终端自动通过，待人工L4；阶段开放 | `t143_capture.rdc` SHA `0a41991b814b…`；库/app `c028455d3a89…` | x=-2/+2两实例、128-byte描述符、三条ray hit/miss/hit；输出末→首→中→末`1,0,1`→`1,9,11`→`1,0,11`→`1,0,1` |
+| BATCH142 / T142 单实例TLAS与ray-query | 全量终端自动通过，待人工L4；阶段开放 | `t142_capture.rdc` SHA `54d563c23e9b…`；同上库 | BLAS1536→TLAS1792，单实例平移x=2；绑定TLAS的两次ray dispatch，输出末→首→末`0,1`→`0,9`→`0,1`；不要求AS内部几何可视化 |
+| BATCH141 / T141 底层AS原位refit与ray-query | 终端自动通过，待人工L4；阶段开放 | `t141_capture.rdc` SHA `0ca68274fce…`；库/app `9f1860586102…` | refittable build→首ray dispatch→GPU blit顶点→refit→次ray dispatch；输出buffer末→首→末为`1,0`→`1,9`→`1,0`；不要求AS内部可视化 |
+| BATCH140 / T140 压缩AS copy | 终端自动通过，待人工L4；阶段开放 | `t140_capture.rdc` SHA `ea999aadd79c…`；库/app `2458b8caf470…` | 源1536→目标1280 bytes，build→源尺寸write→compact copy→目标write；Shared尺寸/输出均1280，末→copy→末seek；不要求射线着色器可视化 |
+| BATCH139 / T139 等容量AS copy | 终端自动通过，待人工L4；阶段开放 | `t139_capture.rdc` SHA `18bdace6e72a…`；同上库 | 两个1536-byte AS，build源→copy目标→write目标，1280→0→1280 seek；不要求内部几何可视化或压缩分配 |
+| BATCH136–138 / T136–T138 AS扩展 | 终端自动通过，待人工L4；阶段开放 | `t136/137/138_capture.rdc` SHA `8348a71bee6b…` / `d3e4b90600db…` / `e10385ed0664…`；同上库 | UInt16索引三角形、bounding box与descriptor创建；同AS身份、index/box资源、1280→0→1280 seek；不要求完整光追 |
+| BATCH135 / T135 静态三角形AS build | 终端自动通过，待人工L4；阶段开放 | `t135_capture.rdc` SHA `0acbe500d4aa…`；同上库 | AS资源size1536、begin/build/write/end事件及同一资源ID、Shared输出8字节1280的write→build→write seek；不要求AS内部可视化或完整ray tracing |
+| BATCH131–132 / T131–T132 Heap aliasable安全子集 | 终端自动通过，待人工L4；阶段开放 | `t131/132_capture.rdc` SHA `49579bc8afd7…` / `686a80808ce7…`；库/app `d4f73865b86c…` | Heap→子buffer/texture关系、尾部`makeAliasable`调用、既有数据/画面与seek；**不**测试重叠复用，T133为预期拒绝且不打开 |
+| BATCH128–130 / T128–T130 Tile Visible Table | 终端自动通过，待人工L4；阶段开放 | `t128/129/130_capture.rdc` SHA `d8593f07a9e0…` / `96b50761c01b…` / `e2704199df7c…`；库/app `cf2a2ccc430e…` | Tile PSO→linked visible函数→handle/table，单槽/范围绑定，异步描述符快照，三次tile计数、最终像素和seek；不要求intersection table |
+| BATCH124–127 / T124–T127 Compute Visible Table | 终端自动通过，待人工L4；阶段开放 | `t124/125/126/127_capture.rdc` SHA `ccbff8491538…` / `b07cf63d6c69…` / `3c47723d8b24…` / `0200b2db3881…`；同上库 | Compute直接和argument-buffer间接表绑定，单槽/范围更新，516-byte写入、draw与seek；核对资源父子链接 |
+| BATCH119–123 / T119–T123 Render Visible Table | 终端自动通过，待人工L4；阶段开放 | `t119/120/121/122/123_capture.rdc` SHA `bbf65de21056…` / `4e27d1884a94…` / `0d9fa4321400…` / `8f1561df2b59…` / `3d670a81bb2d…`；同上库 | Fragment/Vertex直接链接、handle/table、单槽/范围绑定、红/绿GPU画面与seek |
+| BATCH118 / T118 一层嵌套ArgumentEncoder | 定向自动通过，待人工L4；阶段开放 | `t118_capture.rdc` SHA `e3fc631efe28…`；库/app `84df606e5379…` | 父/子encoder及内层buffer资源链接、texture四象限和seek；Pipeline State暂不展示嵌套树 |
+| BATCH116–117 / T117 Placement Heap Texture | 定向自动通过，待人工L4；阶段开放 | `t117_capture.rdc` SHA `3051cc3039d7…`；库/app `8dab14641eb8…` | Heap→Private 1×1 texture，offset128，三次clear/sample及事件seek；不要求alias |
+| BATCH116–117 / T116 Placement Heap Buffer | 定向自动通过，待人工L4；阶段开放 | `t116_capture.rdc` SHA `9ab0c4160699…`；同上库 | Heap→Private 516-byte buffer，offset768，fill/compute/copy/fragment数据与画面seek；不要求alias |
+| BATCH112–115 / T115 异步Vertex预加载 | 定向自动通过，待人工L4；阶段开放 | `t115_capture.rdc` SHA `1ebdda69de37…`；库/app `5043305f5061…` | 异步render vertex调用动态函数，预加载资源ID、buffer3与红色draw/seek |
+| BATCH112–115 / T114 异步Compute预加载 | 定向自动通过，待人工L4；阶段开放 | `t114_capture.rdc` SHA `91400f1a0218…`；同上库 | 异步compute descriptor预加载资源ID、buffer3与红色draw/seek |
+| BATCH112–115 / T113 异步Render Options预加载 | 定向自动通过，待人工L4；阶段开放 | `t113_capture.rdc` SHA `123dfe302042…`；同上库 | options/reflection callback路径的fragment预加载、buffer3与红色draw/seek |
+| BATCH112–115 / T112 异步Render Fragment预加载 | 定向自动通过，待人工L4；阶段开放 | `t112_capture.rdc` SHA `26f406abdcec…`；同上库 | fragment动态函数预加载、buffer3与红色draw/seek；离线不运行应用回调 |
+| BATCH110–111 / T111 异步可执行库 | 定向自动通过，待人工L4；阶段开放 | `t111_capture.rdc` SHA `3a9dcd1eccd8…`；库/app `2082ea672c61…` | 异步executable源含动态库依赖，GPU buffer3、红色draw与seek；离线不运行应用回调 |
+| BATCH110–111 / T110 异步动态源码库 | 定向自动通过，待人工L4；阶段开放 | `t110_capture.rdc` SHA `791e88f7e8e6…`；同上库 | 异步dynamic source→dynamic library→executable依赖，buffer3、红色draw与seek |
+| BATCH106–109 / T109 Render options preload | 定向自动通过，待人工L4；阶段开放 | `t109_capture.rdc` SHA `5c2186bd7f02…`；库/app `4c5ee0e420c6…` | options/reflection render pipeline的fragment预加载动态库，GPU buffer3、红色draw和seek |
+| BATCH106–109 / T108 Vertex preload | 定向自动通过，待人工L4；阶段开放 | `t108_capture.rdc` SHA `07b7eef99a4f…`；同上库 | vertex函数调用动态库，vertex预加载资源链接、buffer3、红色draw和seek |
+| BATCH106–109 / T107 Fragment preload | 定向自动通过，待人工L4；阶段开放 | `t107_capture.rdc` SHA `b67564bf9344…`；同上库 | fragment函数调用动态库，fragment预加载资源链接、buffer3、红色draw和seek |
+| BATCH106–109 / T106 Compute preload | 定向自动通过，待人工L4；阶段开放 | `t106_capture.rdc` SHA `86823865a8b3…`；同上库 | compute descriptor预加载动态库资源、buffer3、红色draw和seek |
+| BATCH104–105 / T105 双动态库链接 | 定向自动通过，待人工L4；阶段开放 | `t105_capture.rdc` SHA `7520798eaddd…`；库/app `7d2400de2ed2…` | 两份动态source/library依赖、一个compute+draw，buffer值6、中心红色与前后seek；不依赖应用原临时路径 |
+| BATCH104–105 / T104 动态库链接 | 定向自动通过，待人工L4；阶段开放 | `t104_capture.rdc` SHA `22147d810218…`；同上库 | 一份动态source/library和可执行library依赖、buffer值3、中心红色与前后seek |
+| BATCH103 / T103 Counter非零范围 | 全量自动通过，待人工L4；阶段开放 | `t103_capture.rdc` SHA `a38e39c760c4…`；库/app `30a8ca932d9f…` | 8槽indices2–5、resolve range(2,4)到offset16，四个递增timestamp与未写区域零值 |
+| BATCH102 / T102 BufferBinding encoder | 全量自动通过，待人工L4；阶段开放 | `t102_capture.rdc` SHA `b9df0c466069…`；库/app `30a8ca932d9f…` | reflection binding创建，texture id0/sampler id1、长度16对齐8；左右packet及像素、前后seek |
+| BATCH101 / T101 Stage-boundary counter | 全量自动通过，待人工L4；阶段开放 | `t101_capture.rdc` SHA `394b6a8f960b…`；库/app `77b615b94015…` | VS/FS pass四阶段索引0–3、sampleBuffer身份、resolve Copy与目标buffer四个递增timestamp；数值不要求固定 |
+| BATCH100 / T100 异步Mesh+Rate Map | 全量自动通过，待人工L4；阶段开放 | `t100_capture.rdc` SHA `6997b8195353…`；库/app `d349808b9692…` | 异步pipeline快照含mesh grid上限2，第二层光栅与blit，x100绿/x175黑；应用callback不重放 |
+| BATCH99 / T99 Rate Map第二层 | 全量自动通过，待人工L4；阶段开放 | `t99_capture.rdc` SHA `161abbbbaeb2…`；库/app `d349808b9692…` | 两mesh组分别写slice0/1，slice1水平半速率、blit到drawable，x100绿/x175黑；检查maxMeshGrid=2与seek |
+| BATCH98 / T98 双层Rate Map数组pass | 定向自动通过，待人工L4；阶段开放 | `t98_capture.rdc` SHA `1e6e084fd2fe…`；库/app `d5ddec74b502…` | 2层map绑定2-slice array target，mesh绘制slice0、blit到drawable绿色中心；不宣称slice1已光栅 |
+| BATCH95–97 / T95–T97 Rate map | 全量自动通过，待人工L4；阶段开放 | `t95/96/97_capture.rdc` SHA `b4aa8a2f99ef…` / `9bfcb4bddea0…` / `1cab41975a47…`；库/app `d93f1c816b54…` | T95单层all-1 map与pass引用，T96水平0.5使物理三角形收缩，T97双层descriptor与参数buffer；T97不宣称array-target双层渲染 |
+| BATCH93–94 / T93–T94 Object输入网格 | 全量自动通过，待人工L4；阶段开放 | `t93/94_capture.rdc` SHA `0b4476799c01…` / `28f1ccb2592a…`；库/app `3612c349a613…` | T93两个object threadgroup、T94 64×1×1输入线程网格各自产生紫红三角形，不能把输入object网格当作单个输出mesh网格上限 |
+| BATCH91–92 / T91–T92 多线程Object | 定向自动通过，待人工L4；阶段开放 | `t91/92_capture.rdc` SHA `3ea72dbf14f6…` / `e18b6eb53bb5…`；库/app `dd543ab096a7…` | 一次object四线程的直接threadgroups与threads-grid各自产生紫红三角形；T92事件网格4×1×1，前后seek |
+| BATCH88–90 / T88–T90 Mesh间接绘制 | 全量自动通过，待人工L4；阶段开放 | `t88/89/90_capture.rdc` SHA `81a4e8f91479…` / `67f3eb8a6005…` / `8ca736e3c39f…`；库/app `d74b63d4a264…` | 三份capture各一次`drawMeshThreadgroups(indirect)`与绿色T88/T89、紫红T90三角形；T89前有compute写Private参数；事件网格显示未知是正确的，不要求推断CPU值 |
+| BATCH87 / T87 异步Object/Mesh | 定向自动通过，待人工L4；阶段开放 | `t87_capture.rdc` SHA `f6b5c2a71ac9…`；库/app `1e9b10c9196a…` | 异步三函数pipeline、调用时BGRA8/function快照、一次MeshDispatch与中心像素；离线不执行应用回调 |
+| BATCH86 / T86 Object动态内存 | 定向自动通过，待人工L4；阶段开放 | `t86_capture.rdc` SHA `6b70534fc597…`；库/app `fbc12b54dfb3…` | 三次threadgroup memory长度16/32/48、三个MeshDispatch及像素/回退；内存值本身由自动测试验证 |
+| BATCH85 / T85 Object纹理/采样器 | 定向自动通过，待人工L4；阶段开放 | `t85_capture.rdc` SHA `e3bf1eee74e6…`；库/app `6091de8a8265…` | 六种texture/sampler、采样后payload使三角形到x≈120/250/370及事件回退 |
+| BATCH84 / T84 Object buffer/bytes | 定向自动通过，待人工L4；阶段开放 | `t84_capture.rdc` SHA `d29d5e86c1a9…`；库/app `aef27dba4f8d…` | 四种object buffer/bytes API、三次MeshDispatch及x≈80/220/360逐事件像素和回退 |
+| BATCH83 / T83 Object/Mesh pipeline | 定向自动通过，待人工L4；阶段开放 | `t83_capture.rdc` SHA `e7e52fa73e7d…`；库/app `77fd1d77b4cf…` | 三函数身份、payload16、setObjectBuffer引用、一次MeshDispatch及中心RGB约179/51/102；不要求object专用UI |
+| BATCH82 / T82 异步Mesh pipeline | 定向自动通过，待人工L4；阶段开放 | `t82_capture.rdc` SHA `5c89deaf9996…`；库/app `8d09e99f81c5…` | 异步创建API与BGRA8/mesh函数调用时快照、一次MeshDispatch及中心像素；离线不调用应用回调 |
+| BATCH81 / T81 Mesh thread-grid | 定向自动通过，待人工L4；阶段开放 | `t81_capture.rdc` SHA `e6126828325b…`；库/app `2eea4b68f328…` | 一次drawMeshThreads，32×1×1线程网格、MeshDispatch、中心绿色三角形；不要求普通VS面板 |
+| BATCH80 / T80 Mesh纹理/采样器 | 定向自动通过，待人工L4；阶段开放 | `t80_capture.rdc` SHA `28d188275e44…`；库/app `54f1bbde30f5…` | 六种绑定、采样后左/中/右各平移约70像素及seek；不要求mesh专用UI |
+| BATCH79 / T79 Mesh绑定 | 定向自动通过，待人工L4；阶段开放 | `t79_capture.rdc` SHA `28f4ba76c665…`；库/app `4fc7b5c759ba…` | 3次MeshDispatch左/中/右绿色三角形、4种buffer/bytes API、前后seek；不要求虚构VS/mesh专用UI |
+| BATCH78 / T78 Mesh pipeline | 定向自动通过，待人工L4；阶段开放 | `t78_capture.rdc` SHA `160f902aef23…`；库/app `dfe3ec542c36…` | 一个同步mesh pipeline、一次MeshDispatch、三角形中心绿色/背景黑色与资源链接；不要求虚构VS/mesh专用UI |
+| BATCH77 / T77 异步Tile pipeline | 定向自动通过，待人工L4；阶段开放 | `t77_capture.rdc` SHA `0470cd9f7ecf…`；库/app `173fadcf7c8a…` | 一个异步tile pipeline创建入口、BGRA8/function/options快照、三条dispatch与buffer/draw回退；离线不执行回调 |
+| BATCH76 / T76 Tile动态内存 | 定向自动通过，待人工L4；阶段开放 | `t76_capture.rdc` SHA `1ca3f463afa1…`；库/app `8af6f90b645b…` | 四次threadgroup memory绑定含offset16与零长度清除、三条dispatch、buffer三个计数和seek |
+| BATCH75 / T75 Tile纹理/采样器 | 集中自动通过，待人工L4；阶段开放 | `t75_capture.rdc` SHA `647f1bb524cb…`；同上库 | 六种绑定、纹理红通道2/255、三阶段buffer为T74两倍、最终draw与seek |
+| BATCH74 / T74 Tile shader | 集中自动通过，待人工L4；阶段开放 | `t74_capture.rdc` SHA `921596de7c36…`；库/app `e74885bf9e09…` | 一个tile pipeline、三条tile dispatch的25×19等实际网格与16×16线程组、12-byte buffer的三段GPU计数和后续draw红色；末→首→中→末seek；Tile专用Pipeline State面板尚未建模，不要求显示为VS/FS |
+| BATCH73 / T73 Render heap residency | 集中自动通过，待人工L4；阶段开放 | `t73_capture.rdc` SHA `2bff846250a6…`；库/app `57efba093c53…` | 四种useHeap(s)与同一Heap资源链接、三个draw颜色`10/20/30`→`40/50/60`→`70/80/90`和末→首→中→末seek；T70负例不可打开 |
+| BATCH71–72 / T71 Heap buffer | 集中自动通过，待人工L4；阶段开放 | `t71_capture.rdc` SHA `5d4f73a88a97…`；库/app `c36b553dcd14…` | 自动Private Heap父子资源、516-byte buffer计算结果/fragment绑定与T39一致、事件回退；placement/alias不要求 |
+| BATCH71–72 / T72 Heap texture | 集中自动通过，待人工L4；阶段开放 | `t72_capture.rdc` SHA `958442028c01…`；同上库 | Heap父子资源、1×1 Private纹理三次GPU clear/sample，RGB`10/20/30`→`40/50/60`→`70/80/90`及回退；T70负例不可打开 |
+| BATCH69 / T69 shared-event handle别名 | 集中自动通过，待人工L4；阶段开放 | `t69_capture.rdc` SHA `3ac0d738542d…`；库/app `22c244afc13a…` | 导入event为第二资源但共享GPU时间线；两个draw灰度10→80、两queue依赖与后→前→后seek |
+| BATCH67–68 / T67 patch draw重载 | 集中自动通过，待人工L4；阶段开放 | `t67_capture.rdc` SHA `93f02f45b77b…`；库/app `f8b8b15d458…` | 三个draw依次红绿蓝；直接indexed的3控制点/1实例，两个间接draw参数显示未知但画面正确，前后seek |
+| BATCH67–68 / T68 同进程shared handle | 集中自动通过，待人工L4；阶段开放 | `t68_capture.rdc` SHA `05ea59ff1f1f…`；同上库 | 源纹理handle导出与导入资源父子关系；同一导入纹理两阶段采样RGB`20/40/60`→`70/90/110`及回退；跨进程handle不支持 |
+| BATCH66 / T66 直接patch细分 | 集中自动通过，待人工L4；阶段开放 | `t66_capture.rdc` SHA `29473c46466a…`；库/app `d098a04a1a7b…`，GUI executable未变 | 一个 `drawPatches` 子事件、factor buffer资源链接、scale值1、中心像素RGB约`64/128/191`、draw与clear间回退；间接/索引patch尚未接通 |
+| BATCH65 / T65 SharedEvent初值/GPU同步 | 集中自动通过，待人工L4；阶段开放 | `t65_capture.rdc` SHA `1b78708a1d3e…`；库/app `d69fa7da1f8…`，GUI executable未变 | 初值100、三次wait/两次signal跨队列身份与值；两draw灰度10→80及回退。后续CPU赋值仍明确拒绝；同进程handle导入另见T69 |
+| BATCH63–64 / T63 动态顶点 stride | 集中自动通过，待人工L4；阶段开放 | `t63_capture.rdc` SHA `9d88a151f271…`；库/app `8772ed87e268…`，GUI executable未变 | 四次draw的不同顶点来源、offset/stride、RGB与末→首→中→末回退；单视图amplification API参数 |
+| BATCH63–64 / T64 descriptor-backed shared texture | 集中自动通过，待人工L4；阶段开放 | `t64_capture.rdc` SHA `10400b736950…`；同上库 | Private 1×1创建chunk、三次GPU clear后同一FS texture采样、RGB与事件回退；shared handle不在范围内 |
+| BATCH62 / T62 purgeable状态 | 集中自动通过，待人工L4；阶段开放 | `t62_capture.rdc` SHA `88d2fbc35494…`；库/app `e11191df7a77…`，GUI executable未变 | 两资源的KeepCurrent/NonVolatile调用、同一draw绑定与RGB`15/26/37`；设备只读查询无需新增UI项 |
+| BATCH61 / T61 no-copy buffer | 集中自动通过，待人工L4；阶段开放 | `t61_capture.rdc` SHA `adad0c224323…`；库/app `0f7f42e63b34…`，GUI `fe8bcf852b68…` | 创建chunk、FS offset256、三提交像素/数据回退；抓取回调延迟另见BATCH61 |
+| BATCH60 / T60 Device ArgumentEncoder | 集中自动通过，待人工L4；阶段开放 | `t60_capture.rdc` SHA `847db07d39f5…`；最新库/app见上行 | 创建chunk、两packet的FS texture/sampler成员与左右画面回退；详见总单 |
+| BATCH58–59 / T58 纹理view | 集中自动通过，待人工L4；阶段开放 | `t58_capture.rdc` SHA `c88c79833879…`；最新库/app见上行 | 三种view资源父子链接、subset/swizzle、三阶段九draw画面与回退；详见总单 |
+| BATCH58–59 / T59 buffer-backed纹理 | 集中自动通过，待人工L4；阶段开放 | `t59_capture.rdc` SHA `0a9c40b8edef…`；同上构建 | 父buffer/子texture链接，初值→CPU更新→GPU写三阶段画面与回退；padding已自动核对 |
+| BATCH57 / T57 Argument数据 | 集中自动通过，待人工L4；阶段开放 | `t57_capture.rdc` SHA `c852c41b973c…`；库 `8e84e249d684…`、GUI `fe8bcf852b68…` | FS buffer成员id0/2/3、资源链接/offset、两packet及四draw画面/数据回退；详见总单 |
+| BATCH54–56 / T54 indexed短重载 | 自动通过，待人工L4；阶段开放 | `t54_capture.rdc` SHA `7fa91d16ce14…`；库 `71cf518d1e5b…` | 两实例、bases0、index offset4与vertex offsets8/24、Mesh/资源/红蓝回退；legacy blit已自动验不另加UI打开项 |
+| BATCH54–56 / T55 Function创建 | 自动通过，待人工L4；阶段开放 | 更新`t55_capture.rdc` SHA `6be475171749…`；最新库见首行 | 四shader/PSO身份、特化初始化、548-byte结果与回退；新增两intersection function链接，不要求重演callback或新增常量面板 |
+| BATCH54–56 / T56 Argument数组 | 自动通过，待人工L4；阶段开放 | `t56_capture.rdc` SHA `9cb0d420ac9c…`；同上库 | textures id2/3、samplers id6/7、数组名称/资源链接、混合四象限/回退；仅本波收窄范围 |
+| BATCH53 / T53 ICB operations | 自动通过，待人工 L4；阶段开放 | `t53_capture.rdc` SHA `6ad98408529a…`；库 `a5dcf57234590…` | GPU reset/copy/optimize、单命令 reset、空命令与有效 draw、复制状态、四阶段画面及初值回退 |
+| BATCH51–52 / T51 async creation | 自动通过，待人工 L4；阶段开放 | `t51_capture.rdc` SHA `e0fc940f6ce0…`；库 `8dbbe2d60146…` | 六种异步初始化、五pipeline/shader链接、buffer/左右半屏回退；原生回调/错误/反射已自动核对，离线不执行block |
+| BATCH51–52 / T52 Event synchronization | 自动通过，待人工 L4；阶段开放 | `t52_capture.rdc` SHA `e0116d679d5f…`；同上库 | 两Event/三提交、六signal/wait的资源与值、buffer/画面回退；不要求SharedEvent或并行时间线 |
+| BATCH50 / T50 texture CPU readback | 自动通过，待人工 L4；阶段开放 | `t50_capture.rdc` SHA `f56406953e8d…`；库 `a648ce05f576…` | 四次getBytes、三次Managed同步、独立资源保留、CPU派生参数回退；离线不复写应用指针，不要求3D viewer |
+| BATCH49 / T49 command buffer handlers | 自动通过，待人工 L4；阶段开放 | `t49_capture.rdc` SHA `82771996ea03…`；库 `1cd92c21c774…` | 八条scheduled/completed注册、两command buffer身份、CPU参数/计算结果回退；离线不执行应用block |
+| BATCH48 / T48 binary libraries | 自动通过，待人工 L4；阶段开放 | `t48_capture.rdc` SHA `f71eaf76384b…`；库 `6df633b629eb…` | 五种加载初始化、binary shader反射/资源链接、首末dispatch回退；无原始MSL属预期 |
+| BATCH47 / T47 pipeline creation variants | 自动通过，待人工 L4；阶段开放 | `t47_capture.rdc` SHA `a28eef0f401b…`；库 `16c921313c2f…` | 六pipeline、options/descriptor初始化记录、CS/VS/FS资源、事件回退及左右半屏 |
+| BATCH45-46 / T44 fences | 自动通过，待人工 L4；阶段开放 | `t44_capture.rdc` SHA `caa028676f68…` | Blit/Compute/Render同步链、fence身份、GPU数据与事件回退 |
+| BATCH45-46 / T45 atTime + buffer markers | 自动通过，待人工 L4；阶段开放 | `t45_capture.rdc` SHA `9e71f6b21883…` | time=1.25、Present输出、marker范围/移除及172-byte独立buffer |
+| BATCH45-46 / T46 minimum duration + buffer markers | 自动通过，待人工 L4；阶段开放 | `t46_capture.rdc` SHA `7b1fbea45e1f…` | duration=0.001、Present变体与输出，仅做相对T45差异 |
+| BATCH43-44 / T42 compute resource/barrier | 自动通过，待人工 L4；阶段开放 | `t42_capture.rdc` SHA `25c6e7349f22…` | single/batch声明、scope/resource barrier、markers、计算链与事件回退 |
+| BATCH43-44 / T43 render resource/barrier | 自动通过，待人工 L4；阶段开放 | `t43_capture.rdc` SHA `7139504e2357…`；GUI `3cc9c3b63507…` | batch/stage声明、跨draw依赖、VS Storage Buffers可写条目、资源保留 |
+| BATCH41-42 / T40 compute inline/offset/threadgroup | 自动通过，待人工 L4；阶段开放 | `t40_capture.rdc` SHA `73a3398cec48…` | inline 参数、真实buffer offset、threadgroup memory，五次reduction与事件回退 |
+| BATCH41-42 / T41 blit descriptor/optimization | 自动通过，待人工 L4；阶段开放 | `t41_capture.rdc` SHA `35745dc5f7ab…` | descriptor、四条hint参数、13×7 hint-only纹理，原copy结果不变 |
+| BATCH39-40 / T38 sampler LOD | 自动通过，待人工 L4；阶段开放 | `t38_capture.rdc` SHA `92d869806241…` | VS/FS/CS clamp 参数与有效 sampler 描述、覆盖/清空、黄黑蓝画面和compute三色 |
+| BATCH39-40 / T39 private buffer readback | 自动通过，待人工 L4；阶段开放 | `t39_capture.rdc` SHA `0d552603e709…` | 516-byte Private GPU buffer 内容、局部读回、事件前后跳转 |
+| BATCH35-37 / T34 render inline/batch binding | 自动通过，待人工 GUI L4；阶段开放 | qrenderdoc app；`t34_capture.rdc` SHA `e6ee77deb50a…`；库见上方 | 五项 state 调用/API 参数、VS/FS buffer offsets、inline slot 不残留旧资源、最终像素与状态栏 |
+| BATCH35-37 / T35 command 创建变体 | 自动通过，待人工 GUI L4；阶段开放 | 同一 app；`t35_capture.rdc` SHA `7fbed8c95df6…` | 两个 compute pass/dispatch、Concurrent/Serial、`waitUntilScheduled`、output offsets 0/4；首dispatch `17,0`、次dispatch `17,17`并回退（BATCH57修正初值）、clear与状态栏 |
+| BATCH35-37/38 / T36 render 动态状态 | 自动通过，待人工 GUI L4；阶段开放 | 同一 app；`t36_capture.rdc` SHA `436b3262fef5…` | 原六项状态和五项 marker，新增 visibility/store/options/barrier；counter 55488、EndPass store 摘要、RS、中心/角落输出；未建模专用字段不要求显示 |
+| BATCH38 / T37 blit transfer | 自动通过，待人工 GUI L4；阶段开放 | 同一 app；`t37_capture.rdc` SHA `f87cbbc8ca00…` | 六个 copy 的参数/资源、buffer padding、slice/mip、前后 seek、最终纯色 |
+| BATCH38 / T10 marker 增量 | 自动通过，待最短 GUI 复验；原 T10 已验结论保留 | 同一 app；独立 `t10_debug_capture.rdc` SHA `2d4a8d609bae…` | 三条 blit marker API 与字符串，原画面不变；不要求新增分组层级 |
+
+T32/T33 及此前批次的 GUI 已验状态不变。T31 GUI 导出入口此前由用户明确免除
+复验，不记作 GUI 实测。action 名称后续工作见 `ACTION_NAME_ALIGNMENT.md`。
 
 ## BATCH33-34 验收归档
 
@@ -86,4 +251,5 @@
 
 本表记录结果而非替代验收单。T28/T29 的正式 captures 与验收步骤见
 `QA_BATCH29-30.md`；T30/T31 的正式 captures 与验收记录见 `QA_BATCH31-32.md`。
-当前无人工 GUI L4 待验项；T30–T33 所在批次均已关闭。
+T30–T33 所在批次均已关闭；当前 T34–T69 和 T10 marker 待人工 GUI L4，见
+`QA_CONSOLIDATED.md`。

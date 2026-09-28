@@ -52,6 +52,12 @@ public:
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLIndirectRenderCommand *, indirectRenderCommand,
                                           NS::UInteger index);
   DECLARE_FUNCTION_SERIALISED(void, reset, NS::Range range);
+  bool PrepareReplay();
+  bool RegisterOptimization(ResourceId commandBuffer, const NS::Range &range);
+  void CaptureReplayDependency(MetalResourceRecord *commandBufferRecord);
+  void MarkGPUWrite();
+  template <typename SerialiserType>
+  bool Serialise_unavailableInitialContents(SerialiserType &ser);
   NS::UInteger Count() const { return m_Count; }
   void SetCount(NS::UInteger count) { m_Count = count; m_Draws.resize(count); }
   NS::UInteger MaxVertexBufferBindCount() const { return m_MaxVertexBufferBindCount; }
@@ -77,6 +83,11 @@ private:
   bool m_InheritPipelineState = false;
   bool m_InheritBuffers = false;
   rdcarray<MetalIndirectDraw> m_Draws;
+  rdcarray<MetalIndirectDraw> m_ReplayInitialDraws;
+  uint64_t m_ReplayEpoch = 0;
+  rdcarray<rdcpair<ResourceId, NS::Range>> m_Optimizations;
+  bool m_CaptureGPUWritten = false;
+  uint64_t m_CaptureGPUWriteEpoch = 0;
 };
 
 class WrappedMTLIndirectRenderCommand : public WrappedMTLObject
@@ -91,6 +102,7 @@ public:
   }
   DECLARE_FUNCTION_SERIALISED(void, setRenderPipelineState,
                               WrappedMTLRenderPipelineState *pipeline);
+  DECLARE_FUNCTION_SERIALISED(void, reset);
   DECLARE_FUNCTION_SERIALISED(void, setVertexBuffer, WrappedMTLBuffer *buffer,
                               NS::UInteger offset, NS::UInteger slot);
   DECLARE_FUNCTION_SERIALISED(void, drawPrimitives, MTL::PrimitiveType primitive,

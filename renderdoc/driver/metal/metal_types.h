@@ -35,6 +35,8 @@ const uint32_t MAX_VERTEX_SHADER_ATTRIBUTES = 31;
 const uint32_t MAX_RENDER_PASS_SAMPLE_BUFFER_ATTACHMENTS = 4;
 const uint32_t MAX_COMPUTE_PASS_BUFFER_ATTACHMENTS = 31;
 const uint32_t MAX_COMPUTE_PASS_SAMPLE_BUFFER_ATTACHMENTS = 4;
+const uint32_t MAX_BLIT_PASS_SAMPLE_BUFFER_ATTACHMENTS = 4;
+const uint32_t MAX_ACCELERATION_STRUCTURE_PASS_SAMPLE_BUFFER_ATTACHMENTS = 4;
 
 // Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.1.sdk/System/Library/Frameworks/Metal.framework/Headers/MTLCounters.h
 #ifndef MTLCounterDontSample
@@ -49,12 +51,24 @@ const uint32_t MAX_COMPUTE_PASS_SAMPLE_BUFFER_ATTACHMENTS = 4;
   FUNC(DepthStencilState);               \
   FUNC(Function);                        \
   FUNC(Library);                         \
+  FUNC(DynamicLibrary);                  \
+  FUNC(BinaryArchive);                   \
+  FUNC(FunctionHandle);                  \
+  FUNC(VisibleFunctionTable);            \
+  FUNC(IntersectionFunctionTable);       \
+  FUNC(AccelerationStructure);            \
+  FUNC(AccelerationStructureCommandEncoder); \
   FUNC(RenderPipelineState);             \
   FUNC(ComputePipelineState);            \
   FUNC(ArgumentEncoder);                 \
   FUNC(IndirectCommandBuffer);           \
   FUNC(IndirectRenderCommand);           \
   FUNC(SamplerState);                    \
+  FUNC(Fence);                           \
+  FUNC(Event);                           \
+  FUNC(Heap);                            \
+  FUNC(RasterizationRateMap);            \
+  FUNC(CounterSampleBuffer);             \
   FUNC(Texture);                         \
   FUNC(RenderCommandEncoder);            \
   FUNC(BlitCommandEncoder);               \
@@ -89,9 +103,7 @@ METALCPP_WRAPPED_PROTOCOLS(DECLARE_OBJC_HELPERS)
 #undef DECLARE_OBJC_HELPERS
 
 // TODO: Wrapped types that need implementing
-#define METALCPP_UNIMPLEMENTED_WRAPPED_PROTOCOLS(FUNC) \
-  FUNC(Fence);                                         \
-  FUNC(CounterSampleBuffer);
+#define METALCPP_UNIMPLEMENTED_WRAPPED_PROTOCOLS(FUNC)
 
 #define DECLARE_UNIMPLEMENTED_WRAPPED_CPP_HELPERS(CPPTYPE) \
   class WrappedMTL##CPPTYPE;                               \
@@ -193,6 +205,9 @@ void DoSerialise(SerialiserType &ser, NS::Range &el);
 
 namespace RDMTL
 {
+// Preserve native calls when an application supplies a non-proxy function, while the capture
+// serializer separately marks that linked function graph unsupported for portable replay.
+MTL::LinkedFunctions *MetalNativeLinkedFunctions(MTL::LinkedFunctions *functions);
 // MTLSamplerDescriptor : based on the interface defined in
 // Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.2.sdk/System/Library/Frameworks/Metal.framework/Headers/MTLSampler.h
 struct SamplerDescriptor
@@ -424,11 +439,9 @@ struct RenderPipelineDescriptor
   rdcarray<PipelineBufferDescriptor> vertexBuffers;
   rdcarray<PipelineBufferDescriptor> fragmentBuffers;
   bool supportIndirectCommandBuffers = false;
-  // TODO: when WrappedMTLBinaryArchive exists
-  // rdcarray<WrappedMTLBinaryArchive*> binaryArchives;
-  // TODO: when WrappedMTLDynamicLibrary exists
-  // rdcarray<WrappedMTLDynamicLibrary*> vertexPreloadedLibraries;
-  // rdcarray<WrappedMTLDynamicLibrary*> fragmentPreloadedLibraries;
+  rdcarray<WrappedMTLBinaryArchive *> binaryArchives;
+  rdcarray<WrappedMTLDynamicLibrary *> vertexPreloadedLibraries;
+  rdcarray<WrappedMTLDynamicLibrary *> fragmentPreloadedLibraries;
   LinkedFunctions vertexLinkedFunctions;
   LinkedFunctions fragmentLinkedFunctions;
   bool supportAddingVertexBinaryFunctions = false;
@@ -509,8 +522,8 @@ struct RenderPassSampleBufferAttachmentDescriptor
   RenderPassSampleBufferAttachmentDescriptor() = default;
   RenderPassSampleBufferAttachmentDescriptor(MTL::RenderPassSampleBufferAttachmentDescriptor *objc);
   void CopyTo(MTL::RenderPassSampleBufferAttachmentDescriptor *objc);
-  // TODO: when WrappedMTLCounterSampleBuffer exists
-  // WrappedMTLCounterSampleBuffer *sampleBuffer = NULL;
+  WrappedMTLCounterSampleBuffer *sampleBuffer = NULL;
+  ResourceId sampleBufferId;
   NS::UInteger startOfVertexSampleIndex = MTLCounterDontSample;
   NS::UInteger endOfVertexSampleIndex = MTLCounterDontSample;
   NS::UInteger startOfFragmentSampleIndex = MTLCounterDontSample;
@@ -537,8 +550,8 @@ struct RenderPassDescriptor
   NS::UInteger renderTargetWidth = 0;
   NS::UInteger renderTargetHeight = 0;
   rdcarray<MTL::SamplePosition> samplePositions;
-  // TODO: when WrappedRasterizationRateMap exists
-  // WrappedRasterizationRateMap *rasterizationRateMap = NULL;
+  WrappedMTLRasterizationRateMap *rasterizationRateMap = NULL;
+  ResourceId rasterizationRateMapId;
   rdcarray<RenderPassSampleBufferAttachmentDescriptor> sampleBufferAttachments;
 };
 
@@ -572,14 +585,12 @@ struct ComputePipelineDescriptor
   StageInputOutputDescriptor stageInputDescriptor;
   rdcarray<RDMTL::PipelineBufferDescriptor> buffers;
   bool supportIndirectCommandBuffers = false;
-  // TODO: when WrappedMTLDynamicLibrary exists
-  // rdcarray<WrappedMTLDynamicLibrary*> preloadedLibraries;
+  rdcarray<WrappedMTLDynamicLibrary *> preloadedLibraries;
   // Deprecated
   // rdcarray<WrappedMTLDynamicLibrary*> insertLibraries;
   RDMTL::LinkedFunctions linkedFunctions;
   bool supportAddingBinaryFunctions = false;
-  // TODO: when WrappedMTLBinaryArchive exists
-  // rdcarray<WrappedMTLBinaryArchive*> binaryArchives;
+  rdcarray<WrappedMTLBinaryArchive *> binaryArchives;
 };
 
 // MTLComputePassDescriptor : based on the interface defined in

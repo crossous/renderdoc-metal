@@ -35,6 +35,13 @@ public:
                          WrappedMTLDevice *wrappedMTLDevice);
 
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer *, commandBuffer);
+  WrappedMTLCommandBuffer *commandBufferWithDescriptor(MTL::CommandBufferDescriptor *descriptor);
+  template <typename SerialiserType>
+  bool Serialise_commandBufferWithDescriptor(SerialiserType &ser,
+                                             WrappedMTLCommandBuffer *buffer,
+                                             bool retainedReferences, uint64_t errorOptions);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer *,
+                                          commandBufferWithUnretainedReferences);
 
   enum
   {
@@ -42,4 +49,5 @@ public:
   };
 
 private:
+  bool ReplayCommandBuffer(ResourceId id, MTL::CommandBuffer *real);
 };

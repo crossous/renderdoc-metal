@@ -37,6 +37,16 @@
 #include "metal_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
+#include "metal_fence.h"
+#include "metal_event.h"
+#include "metal_heap.h"
+#include "metal_rate_map.h"
+#include "metal_counter_sample_buffer.h"
+#include "metal_dynamic_library.h"
+#include "metal_binary_archive.h"
+#include "metal_visible_function_table.h"
+#include "metal_acceleration_structure.h"
+#include "metal_acceleration_structure_command_encoder.h"
 #include "metal_indirect_command_buffer.h"
 #include "metal_texture.h"
 
@@ -67,6 +77,23 @@ MetalResourceRecord::~MetalResourceRecord()
     SAFE_DELETE(cmdInfo);
   else if(m_Type == eResBuffer)
     SAFE_DELETE(bufInfo);
+}
+
+void MetalResourceRecord::DiscardBackgroundBufferMarkers()
+{
+  // removeAllDebugMarkers supersedes earlier background annotations, not buffer creation/data.
+  LockChunks();
+  for(size_t i = m_Chunks.size(); i > 0; --i)
+  {
+    const MetalChunk type = m_Chunks[i - 1].chunk->GetChunkType<MetalChunk>();
+    if(type == MetalChunk::MTLBuffer_addDebugMarker ||
+       type == MetalChunk::MTLBuffer_removeAllDebugMarkers)
+    {
+      m_Chunks[i - 1].chunk->Delete(m_Chunks[i - 1].fromAllocator != 0);
+      m_Chunks.erase(i - 1);
+    }
+  }
+  UnlockChunks();
 }
 
 void WrappedMTLObject::AddEvent()

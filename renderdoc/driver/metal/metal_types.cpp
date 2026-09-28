@@ -31,6 +31,11 @@
 #include "metal_compute_command_encoder.h"
 #include "metal_compute_pipeline_state.h"
 #include "metal_device.h"
+#include "metal_dynamic_library.h"
+#include "metal_binary_archive.h"
+#include "metal_visible_function_table.h"
+#include "metal_acceleration_structure.h"
+#include "metal_acceleration_structure_command_encoder.h"
 #include "metal_depth_stencil_state.h"
 #include "metal_function.h"
 #include "metal_library.h"
@@ -38,7 +43,12 @@
 #include "metal_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
+#include "metal_fence.h"
+#include "metal_event.h"
 #include "metal_indirect_command_buffer.h"
+#include "metal_heap.h"
+#include "metal_rate_map.h"
+#include "metal_counter_sample_buffer.h"
 #include "metal_resources.h"
 #include "metal_texture.h"
 
@@ -65,6 +75,20 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
       RDCFATAL("'%s' objc != m_ObjcBridge %p != %p", className, objc, &wrappedCPP->m_ObjcBridge); \
     }                                                                                             \
     MTL::CPPTYPE *real = (MTL::CPPTYPE *)wrappedCPP->m_Real;                                      \
+    if(WrappedMTL##CPPTYPE::TypeEnum == eResLibrary ||                                          \
+       WrappedMTL##CPPTYPE::TypeEnum == eResFunction ||                                        \
+       WrappedMTL##CPPTYPE::TypeEnum == eResRenderPipelineState ||                             \
+       WrappedMTL##CPPTYPE::TypeEnum == eResVisibleFunctionTable ||                            \
+       WrappedMTL##CPPTYPE::TypeEnum == eResIntersectionFunctionTable ||                       \
+       WrappedMTL##CPPTYPE::TypeEnum == eResAccelerationStructure ||                            \
+       WrappedMTL##CPPTYPE::TypeEnum == eResComputePipelineState ||                            \
+       WrappedMTL##CPPTYPE::TypeEnum == eResEvent)                                             \
+    {                                                                                         \
+      /* These new* objects transfer their native +1 to the independently owned proxy. */      \
+      /* Do not leave a retaining association pointing at a proxy the app can release. */      \
+      wrappedCPP->m_OwnsReal = true;                                                           \
+      return;                                                                                 \
+    }                                                                                         \
     if(real)                                                                                      \
     {                                                                                             \
       objc_setAssociatedObject((id)real, objc, objc, OBJC_ASSOCIATION_RETAIN);                    \
@@ -73,9 +97,14 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
   }                                                                                               \
   void DeallocateObjCBridge(WrappedMTL##CPPTYPE *wrappedCPP)                                      \
   {                                                                                               \
+    NS::Object *ownedReal = wrappedCPP->m_OwnsReal ? (NS::Object *)wrappedCPP->m_Real : NULL;    \
+    if(ownedReal)                                                                             \
+      objc_destructInstance((id)wrappedCPP);                                                  \
     wrappedCPP->m_ObjcBridge = NULL;                                                              \
     wrappedCPP->m_Real = NULL;                                                                    \
     wrappedCPP->GetResourceManager()->ReleaseWrappedResource(wrappedCPP);                         \
+    if(ownedReal)                                                                             \
+      ownedReal->release();                                                                   \
   }
 
 METALCPP_WRAPPED_PROTOCOLS(DEFINE_OBJC_HELPERS)
@@ -489,12 +518,20 @@ void StageInputOutputDescriptor::CopyTo(MTL::StageInputOutputDescriptor *objc)
 
 LinkedFunctions::LinkedFunctions(MTL::LinkedFunctions *objc)
 {
-  GETWRAPPEDNSARRAY(Function, functions);
-  GETWRAPPEDNSARRAY(Function, binaryFunctions);
+  auto captureArray = [](NS::Array *source, rdcarray<WrappedMTLFunction *> &destination) {
+    destination.resize(source ? source->count() : 0);
+    for(size_t i = 0; i < destination.size(); i++)
+    {
+      MTL::Function *function = source->object<MTL::Function>(i);
+      destination[i] = MetalFunctionIsWrapped(function) ? GetWrapped(function) : NULL;
+    }
+  };
+  captureArray(objc ? objc->functions() : NULL, functions);
+  captureArray(objc ? objc->binaryFunctions() : NULL, binaryFunctions);
   {
-    NS::Dictionary *objcGroups = objc->groups();
-    NS::Array *keys = objcGroups->keyEnumerator()->allObjects();
-    size_t countKeys = keys->count();
+    NS::Dictionary *objcGroups = objc ? objc->groups() : NULL;
+    NS::Array *keys = objcGroups ? objcGroups->keyEnumerator()->allObjects() : NULL;
+    size_t countKeys = keys ? keys->count() : 0;
 
     groups.resize(countKeys);
     for(size_t i = 0; i < countKeys; ++i)
@@ -505,14 +542,49 @@ LinkedFunctions::LinkedFunctions(MTL::LinkedFunctions *objc)
 
       FunctionGroup &funcGroup = groups[i];
       funcGroup.callsite.assign(key->utf8String());
-      funcGroup.functions.resize(countFuncs);
-      for(size_t j = 0; j < countFuncs; ++j)
-      {
-        funcGroup.functions[j] = GetWrapped((MTL::Function *)funcs->object(j));
-      }
+      captureArray(funcs, funcGroup.functions);
     }
   }
-  GETWRAPPEDNSARRAY(Function, privateFunctions);
+  captureArray(objc ? objc->privateFunctions() : NULL, privateFunctions);
+}
+
+static NS::Array *MetalNativeFunctionArray(NS::Array *source)
+{
+  if(!source) return NULL;
+  rdcarray<NS::Object *> native;
+  native.reserve(source->count());
+  for(NS::UInteger i = 0; i < source->count(); i++)
+  {
+    MTL::Function *function = source->object<MTL::Function>(i);
+    native.push_back((NS::Object *)(MetalFunctionIsWrapped(function)
+                                       ? Unwrap(GetWrapped(function)) : function));
+  }
+  return NS::Array::array(native.data(), native.size());
+}
+
+MTL::LinkedFunctions *MetalNativeLinkedFunctions(MTL::LinkedFunctions *functions)
+{
+  MTL::LinkedFunctions *native = functions ? functions->copy() :
+      MTL::LinkedFunctions::alloc()->init();
+  if(!functions) return native;
+  native->setFunctions(MetalNativeFunctionArray(functions->functions()));
+  native->setBinaryFunctions(MetalNativeFunctionArray(functions->binaryFunctions()));
+  native->setPrivateFunctions(MetalNativeFunctionArray(functions->privateFunctions()));
+  NS::Dictionary *groups = functions->groups();
+  NS::Array *keys = groups ? groups->keyEnumerator()->allObjects() : NULL;
+  if(keys && keys->count())
+  {
+    rdcarray<NS::Object *> values, keyObjects;
+    values.reserve(keys->count());
+    keyObjects.reserve(keys->count());
+    for(NS::UInteger i = 0; i < keys->count(); i++)
+    {
+      keyObjects.push_back(keys->object(i));
+      values.push_back(MetalNativeFunctionArray((NS::Array *)groups->object(keys->object(i))));
+    }
+    native->setGroups(NS::Dictionary::dictionary(values.data(), keyObjects.data(), keys->count()));
+  }
+  return native;
 }
 
 void LinkedFunctions::CopyTo(MTL::LinkedFunctions *objc)
@@ -579,11 +651,26 @@ RenderPipelineDescriptor::RenderPipelineDescriptor(MTL::RenderPipelineDescriptor
                ValidData);
   GETOBJCARRAY(PipelineBufferDescriptor, MAX_RENDER_PASS_BUFFER_ATTACHMENTS, fragmentBuffers,
                ValidData);
-  // TODO: when WrappedMTLBinaryArchive exists
-  // GETWRAPPEDNSARRAY(BinaryArchive, binaryArchives);
-  // TODO: when WrappedMTLDynamicLibrary exists
-  // GETWRAPPEDNSARRAY(DynamicLibrary, vertexPreloadedLibraries);
-  // GETWRAPPEDNSARRAY(DynamicLibrary, fragmentPreloadedLibraries);
+  NS::Array *archives = objc->binaryArchives();
+  for(NS::UInteger i = 0; archives && i < archives->count(); i++)
+  {
+    MTL::BinaryArchive *archive = archives->object<MTL::BinaryArchive>(i);
+    binaryArchives.push_back(MetalBinaryArchiveIsWrapped(archive) ? GetWrapped(archive) : NULL);
+  }
+  NS::Array *vertexPreloaded = objc->vertexPreloadedLibraries();
+  for(NS::UInteger i = 0; vertexPreloaded && i < vertexPreloaded->count(); i++)
+  {
+    MTL::DynamicLibrary *library = vertexPreloaded->object<MTL::DynamicLibrary>(i);
+    if(MetalDynamicLibraryIsWrapped(library))
+      vertexPreloadedLibraries.push_back(GetWrapped(library));
+  }
+  NS::Array *fragmentPreloaded = objc->fragmentPreloadedLibraries();
+  for(NS::UInteger i = 0; fragmentPreloaded && i < fragmentPreloaded->count(); i++)
+  {
+    MTL::DynamicLibrary *library = fragmentPreloaded->object<MTL::DynamicLibrary>(i);
+    if(MetalDynamicLibraryIsWrapped(library))
+      fragmentPreloadedLibraries.push_back(GetWrapped(library));
+  }
 }
 
 RenderPipelineDescriptor::operator MTL::RenderPipelineDescriptor *()
@@ -616,13 +703,11 @@ RenderPipelineDescriptor::operator MTL::RenderPipelineDescriptor *()
   COPYTOOBJCARRAY(PipelineBufferDescriptor, vertexBuffers);
   COPYTOOBJCARRAY(PipelineBufferDescriptor, fragmentBuffers);
   objc->setSupportIndirectCommandBuffers(supportIndirectCommandBuffers);
-  // TODO: when WrappedMTLBinaryArchive exists
-  // objc->setBinaryArchives(CreateUnwrappedNSArray<MTL::BinaryArchive *>(binaryArchives));
-  // TODO: when WrappedMTLDynamicLibrary exists
-  // objc->setVertexPreloadedLibraries(CreateUnwrappedNSArray<MTL::DynamicLibrary
-  // *>(vertexPreloadedLibraries));
-  // objc->setFragmentPreloadedLibraries(CreateUnwrappedNSArray<MTL::DynamicLibrary
-  // *>(fragmentPreloadedLibraries));
+  objc->setBinaryArchives(CreateUnwrappedNSArray<MTL::BinaryArchive *>(binaryArchives));
+  objc->setVertexPreloadedLibraries(
+      CreateUnwrappedNSArray<MTL::DynamicLibrary *>(vertexPreloadedLibraries));
+  objc->setFragmentPreloadedLibraries(
+      CreateUnwrappedNSArray<MTL::DynamicLibrary *>(fragmentPreloadedLibraries));
   vertexLinkedFunctions.CopyTo(objc->vertexLinkedFunctions());
   fragmentLinkedFunctions.CopyTo(objc->fragmentLinkedFunctions());
   objc->setSupportAddingVertexBinaryFunctions(supportAddingVertexBinaryFunctions);
@@ -764,8 +849,8 @@ rdcstr RenderPassOpString(const RenderPassDescriptor &descriptor, bool store)
 
 RenderPassSampleBufferAttachmentDescriptor::RenderPassSampleBufferAttachmentDescriptor(
     MTL::RenderPassSampleBufferAttachmentDescriptor *objc)
-    :    // TODO: when WrappedMTLCounterSampleBuffer exists
-         // sampleBuffer(GetWrapped(objc->sampleBuffer())),
+    : sampleBuffer(GetWrapped(objc->sampleBuffer())),
+      sampleBufferId(GetResID(sampleBuffer)),
       startOfVertexSampleIndex(objc->startOfVertexSampleIndex()),
       endOfVertexSampleIndex(objc->endOfVertexSampleIndex()),
       startOfFragmentSampleIndex(objc->startOfFragmentSampleIndex()),
@@ -776,8 +861,7 @@ RenderPassSampleBufferAttachmentDescriptor::RenderPassSampleBufferAttachmentDesc
 void RenderPassSampleBufferAttachmentDescriptor::CopyTo(
     MTL::RenderPassSampleBufferAttachmentDescriptor *objc)
 {
-  // TODO: when WrappedMTLCounterSampleBuffer exists
-  // objc->setSampleBuffer(Unwrap(sampleBuffer));
+  objc->setSampleBuffer(Unwrap(sampleBuffer));
   objc->setStartOfVertexSampleIndex(startOfVertexSampleIndex);
   objc->setEndOfVertexSampleIndex(endOfVertexSampleIndex);
   objc->setStartOfFragmentSampleIndex(startOfFragmentSampleIndex);
@@ -795,9 +879,9 @@ RenderPassDescriptor::RenderPassDescriptor(MTL::RenderPassDescriptor *objc)
       tileHeight(objc->tileHeight()),
       defaultRasterSampleCount(objc->defaultRasterSampleCount()),
       renderTargetWidth(objc->renderTargetWidth()),
-      renderTargetHeight(objc->renderTargetHeight())
-// TODO: when WrappedRasterizationRateMap exists
-// rasterizationRateMap(objc->rasterizationRateMap())
+      renderTargetHeight(objc->renderTargetHeight()),
+      rasterizationRateMap(GetWrapped(objc->rasterizationRateMap())),
+      rasterizationRateMapId(GetResID(rasterizationRateMap))
 {
   GETOBJCARRAY(RenderPassColorAttachmentDescriptor, MAX_RENDER_PASS_COLOR_ATTACHMENTS,
                colorAttachments, ValidData);
@@ -827,8 +911,7 @@ RenderPassDescriptor::operator MTL::RenderPassDescriptor *()
   objc->setRenderTargetWidth(renderTargetWidth);
   objc->setRenderTargetHeight(renderTargetHeight);
   objc->setSamplePositions(samplePositions.data(), samplePositions.count());
-  // TODO: when WrappedRasterizationRateMap exists
-  // objc->setRasterizationRateMap(Unwrap(rasterizationRateMap));
+  objc->setRasterizationRateMap(Unwrap(rasterizationRateMap));
   COPYTOOBJCARRAY(RenderPassSampleBufferAttachmentDescriptor, sampleBufferAttachments);
   return objc;
 }
@@ -863,13 +946,22 @@ ComputePipelineDescriptor::ComputePipelineDescriptor(MTL::ComputePipelineDescrip
   if(objc->label())
     label.assign(objc->label()->utf8String());
   GETOBJCARRAY(PipelineBufferDescriptor, MAX_COMPUTE_PASS_BUFFER_ATTACHMENTS, buffers, ValidData);
-  // TODO: when WrappedMTLDynamicLibrary exists
-  // GETWRAPPEDNSARRAY(DynamicLibrary, preloadedLibraries)
+  NS::Array *preloaded = objc->preloadedLibraries();
+  for(NS::UInteger i = 0; preloaded && i < preloaded->count(); i++)
+  {
+    MTL::DynamicLibrary *library = preloaded->object<MTL::DynamicLibrary>(i);
+    if(MetalDynamicLibraryIsWrapped(library))
+      preloadedLibraries.push_back(GetWrapped(library));
+  }
   // Deprecated
   // GETWRAPPEDNSARRAY(DynamicLibrary, insertLibraries)
   // GETWRAPPEDNSARRAY(DynamicLibrary, linkedFunctions)
-  // TODO: when WrappedMTLBinaryArchive exists
-  // GETWRAPPEDNSARRAY(BinaryArchive, binaryArchives);
+  NS::Array *archives = objc->binaryArchives();
+  for(NS::UInteger i = 0; archives && i < archives->count(); i++)
+  {
+    MTL::BinaryArchive *archive = archives->object<MTL::BinaryArchive>(i);
+    binaryArchives.push_back(MetalBinaryArchiveIsWrapped(archive) ? GetWrapped(archive) : NULL);
+  }
 }
 
 ComputePipelineDescriptor::operator MTL::ComputePipelineDescriptor *()
@@ -888,14 +980,11 @@ ComputePipelineDescriptor::operator MTL::ComputePipelineDescriptor *()
   linkedFunctions.CopyTo(objc->linkedFunctions());
   objc->setSupportAddingBinaryFunctions(supportAddingBinaryFunctions);
   COPYTOOBJCARRAY(PipelineBufferDescriptor, buffers);
-  // TODO: when WrappedMTLDynamicLibrary exists
-  // objc->setPreloadedLibraries(CreateUnwrappedNSArray<MTL::DynamicLibrary *>(preloadedLibraries));
+  objc->setPreloadedLibraries(CreateUnwrappedNSArray<MTL::DynamicLibrary *>(preloadedLibraries));
   // Deprecated
   // objc->setInsertLibraries(CreateUnwrappedNSArray<MTL::DynamicLibrary *>(insertLibraries));
   // objc->setLinkedFunctions(CreateUnwrappedNSArray<MTL::DynamicLibrary *>(linkedFunctions));
-  // TODO: when WrappedMTLBinaryArchive exists
-  // objc->setBinaryArchives(CreateUnwrappedNSArray<MTL::BinaryArchive *>(binaryArchives));
-  // GETWRAPPEDNSARRAY(BinaryArchive, binaryArchives);
+  objc->setBinaryArchives(CreateUnwrappedNSArray<MTL::BinaryArchive *>(binaryArchives));
   return objc;
 }
 

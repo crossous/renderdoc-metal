@@ -32,23 +32,58 @@
 class WrappedMTLCommandBuffer : public WrappedMTLObject
 {
 public:
+  DECLARE_FUNCTION_SERIALISED(void, encodeEvent, WrappedMTLEvent *event, uint64_t value, bool signal);
+  void CaptureEvent(WrappedMTLEvent *event, uint64_t value, bool signal);
   WrappedMTLCommandBuffer(MTL::CommandBuffer *realMTLCommandBuffer, ResourceId objId,
                           WrappedMTLDevice *wrappedMTLDevice);
 
   void SetCommandQueue(WrappedMTLCommandQueue *commandQueue) { m_CommandQueue = commandQueue; }
   WrappedMTLCommandQueue *GetCommandQueue() { return m_CommandQueue; }
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLBlitCommandEncoder *, blitCommandEncoder);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder *,
+                                          accelerationStructureCommandEncoder);
+  WrappedMTLAccelerationStructureCommandEncoder *accelerationStructureCommandEncoderWithDescriptor(
+      MTL::AccelerationStructurePassDescriptor *descriptor);
+  template <typename SerialiserType>
+  bool Serialise_accelerationStructureCommandEncoderWithDescriptor(
+      SerialiserType &ser, WrappedMTLAccelerationStructureCommandEncoder *encoder,
+      bool hasSampleBuffers);
+  WrappedMTLBlitCommandEncoder *blitCommandEncoderWithDescriptor(MTL::BlitPassDescriptor *descriptor);
+  template <typename SerialiserType>
+  bool Serialise_blitCommandEncoderWithDescriptor(SerialiserType &ser,
+                                                   WrappedMTLBlitCommandEncoder *encoder,
+                                                   bool hasSampleBuffers);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLComputeCommandEncoder *,
                                           computeCommandEncoder);
+  WrappedMTLComputeCommandEncoder *computeCommandEncoderWithDescriptor(
+      MTL::ComputePassDescriptor *descriptor);
+  template <typename SerialiserType>
+  bool Serialise_computeCommandEncoderWithDescriptor(
+      SerialiserType &ser, WrappedMTLComputeCommandEncoder *encoder,
+      MTL::DispatchType dispatchType);
+  DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLComputeCommandEncoder *,
+                                          computeCommandEncoder, MTL::DispatchType dispatchType);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLRenderCommandEncoder *,
                                           renderCommandEncoderWithDescriptor,
                                           RDMTL::RenderPassDescriptor &descriptor);
   void presentDrawable(MTL::Drawable *drawable);
+  void presentDrawable(MTL::Drawable *drawable, double time, bool minimumDuration);
+  template <typename SerialiserType>
+  bool Serialise_presentDrawableTimed(SerialiserType &ser, WrappedMTLTexture *presentedImage,
+                                     double time, bool minimumDuration);
   template <typename SerialiserType>
   bool Serialise_presentDrawable(SerialiserType &ser, WrappedMTLTexture *presentedImage);
+  void CapturePresent(MTL::Drawable *drawable, MetalChunk chunk, double time);
   DECLARE_FUNCTION_SERIALISED(void, commit);
   DECLARE_FUNCTION_SERIALISED(void, enqueue);
+  DECLARE_FUNCTION_SERIALISED(void, pushDebugGroup, NS::String *string);
+  DECLARE_FUNCTION_SERIALISED(void, popDebugGroup);
+  DECLARE_FUNCTION_SERIALISED(void, waitUntilScheduled);
   DECLARE_FUNCTION_SERIALISED(void, waitUntilCompleted);
+  // Native blocks remain in the ObjC bridge. Only their registration is serialised.
+  void CaptureHandlerRegistration(bool completed);
+  template <typename SerialiserType>
+  bool Serialise_handlerRegistration(SerialiserType &ser);
 
   enum
   {
@@ -56,5 +91,7 @@ public:
   };
 
 private:
+  bool ReplayBlitCommandEncoder(ResourceId id, MTL::BlitCommandEncoder *realEncoder);
+  bool ReplayComputeCommandEncoder(ResourceId id, MTL::ComputeCommandEncoder *realEncoder);
   WrappedMTLCommandQueue *m_CommandQueue;
 };

@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 
 def run(*args, success=True):
     result = subprocess.run(args, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT)
-    if (result.returncode == 0) != success:
+                            stderr=subprocess.STDOUT, timeout=30)
+    if result.returncode < 0 or (result.returncode == 0) != success:
         raise RuntimeError(f"unexpected result: {args}\n{result.stdout}")
     return result.stdout
 
@@ -43,7 +43,6 @@ def main():
             ("marker-past-index", "1240", 0, "location", "4"),
             ("marker-zero-length", "1240", 0, "length", "0"),
             ("draw-past-index", "1184", 1, "location", "4"),
-            ("draw-missing-command", "1184", 1, "location", "3"),
             ("draw-zero-length", "1184", 1, "length", "0"),
             ("draw-two-commands", "1184", 0, "length", "2"),
             ("second-missing-pipeline", "1237", 2, "pipeline", "999999"),
@@ -63,7 +62,16 @@ def main():
                          success=False)
             if not re.search(r"failed|invalid|Couldn't load", output, re.I):
                 raise RuntimeError(f"missing diagnostic for {name}: {output}")
-    print(f"T22 invalid multi-command ICB captures rejected: {len(cases)} cases")
+        # Slot 3 is unencoded: PHASE53 represents it as an empty command, not an invalid draw.
+        variant = copy.deepcopy(tree)
+        set_field(variant, "1184", 1, "location", "3")
+        xml_path = path / "empty-command.zip.xml"
+        variant.write(xml_path, encoding="unicode", xml_declaration=True)
+        shutil.copyfile(str(original)[:-4], str(xml_path)[:-4])
+        capture = path / "empty-command.rdc"
+        run(args.renderdoccmd, "convert", "-f", xml_path, "-o", capture, "-c", "rdc")
+        run(args.renderdoccmd, "replay", "--loops", "3", capture)
+    print(f"T22 invalid multi-command ICB captures rejected: {len(cases)} cases; empty-command variant passed")
 
 
 if __name__ == "__main__":

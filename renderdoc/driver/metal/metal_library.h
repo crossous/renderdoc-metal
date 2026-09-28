@@ -25,15 +25,25 @@
 #pragma once
 
 #include "metal_common.h"
+#include "metal_function_constants.h"
 
 class WrappedMTLLibrary : public WrappedMTLObject
 {
 public:
   WrappedMTLLibrary(MTL::Library *realMTLLibrary, ResourceId objId,
                     WrappedMTLDevice *wrappedMTLDevice);
+  ~WrappedMTLLibrary();
+  rdcstr m_DynamicInstallPath;
+  rdcstr m_DynamicInstallDirectory;
 
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLFunction *, newFunctionWithName,
                                           NS::String *functionName);
+  WrappedMTLFunction *CaptureFunction(MTL::Function *function,
+                                      const MetalFunctionSnapshot &snapshot, MetalChunk chunk,
+                                      bool borrowed);
+  template <typename SerialiserType>
+  bool Serialise_newSpecializedFunction(SerialiserType &ser, WrappedMTLFunction *function,
+                                         MetalFunctionSnapshot snapshot);
 
   enum
   {

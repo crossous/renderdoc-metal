@@ -26,6 +26,7 @@
 #include "core/core.h"
 #include "hooks/hooks.h"
 #include "metal_device.h"
+#include "metal_function_constants.h"
 #include "metal_dispatch_table_bridge.h"
 #include "metal_types_bridge.h"
 
@@ -85,6 +86,7 @@ extern void AppleRegisterRealSymbol(const char *functionName, void *address);
 
 void MetalHook::RegisterGlobalHookedMetalFunctions()
 {
+  RegisterMetalFunctionConstantHooks();
 #define METAL_FUNC(func)                                     \
   AppleRegisterRealSymbol(STRINGIZE(func), (void *)&::func); \
   LibraryHooks::RegisterFunctionHook(                        \

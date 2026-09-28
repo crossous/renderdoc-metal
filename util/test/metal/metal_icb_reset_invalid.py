@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 
 def run(*args, success=True):
     result = subprocess.run(args, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT)
-    if (result.returncode == 0) != success:
+                            stderr=subprocess.STDOUT, timeout=30)
+    if result.returncode < 0 or (result.returncode == 0) != success:
         raise RuntimeError(f"unexpected result: {args}\n{result.stdout}")
     return result.stdout
 
@@ -43,7 +43,6 @@ def main():
             ("reset-past-index", "1242", 0, "location", "3"),
             ("reset-zero-length", "1242", 0, "length", "0"),
             ("reset-missing-icb", "1242", 0, "IndirectCommandBuffer", "999999"),
-            ("reset-leaves-empty-command", "1242", 0, "length", "2"),
             ("replacement-missing-pipeline", "1237", 3, "pipeline", "999999"),
             ("replacement-missing-buffer", "1238", 3, "buffer", "999999"),
             ("replacement-past-offset", "1238", 3, "offset", "104"),
@@ -60,7 +59,17 @@ def main():
                          success=False)
             if not re.search(r"failed|invalid|Couldn't load", output, re.I):
                 raise RuntimeError(f"missing diagnostic for {name}: {output}")
-    print(f"T24 invalid reset/re-encode ICB captures rejected: {len(cases)} cases")
+        # An unencoded/reset command is a valid no-op, not an invalid draw. Keep testing the
+        # formerly rejected input as a positive replay case after PHASE53 enabled empty commands.
+        variant = copy.deepcopy(tree)
+        set_field(variant, "1242", 0, "length", "2")
+        xml_path = path / "reset-leaves-empty-command.zip.xml"
+        variant.write(xml_path, encoding="unicode", xml_declaration=True)
+        shutil.copyfile(str(original)[:-4], str(xml_path)[:-4])
+        capture = path / "reset-leaves-empty-command.rdc"
+        run(args.renderdoccmd, "convert", "-f", xml_path, "-o", capture, "-c", "rdc")
+        run(args.renderdoccmd, "replay", "--loops", "3", capture)
+    print(f"T24 invalid reset/re-encode ICB captures rejected: {len(cases)} cases; empty-command variant passed")
 
 
 if __name__ == "__main__":

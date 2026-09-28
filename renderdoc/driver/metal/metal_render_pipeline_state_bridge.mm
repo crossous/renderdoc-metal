@@ -23,6 +23,8 @@
  ******************************************************************************/
 
 #include "metal_render_pipeline_state.h"
+#include "metal_function.h"
+#include "metal_visible_function_table.h"
 #include "metal_types_bridge.h"
 
 // Bridge for MTLRenderPipelineState
@@ -150,8 +152,16 @@
                                                        stage:(MTLRenderStages)stage
     API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real functionHandleWithFunction:function stage:stage];
+  if(function && (![function isKindOfClass:[ObjCBridgeMTLFunction class]] ||
+                  (function.functionType != MTLFunctionTypeVisible &&
+                   function.functionType != MTLFunctionTypeIntersection)))
+  {
+    RDCERR("Unsupported or unwrapped Metal render function handle");
+    return nil;
+  }
+  return id<MTLFunctionHandle>(GetWrapped(self)->functionHandle(
+      function ? GetWrapped((ObjCBridgeMTLFunction *)function) : NULL,
+      (MTL::RenderStages)stage));
 }
 
 - (nullable id<MTLVisibleFunctionTable>)newVisibleFunctionTableWithDescriptor:
@@ -159,8 +169,13 @@
                                                                         stage:(MTLRenderStages)stage
     API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newVisibleFunctionTableWithDescriptor:descriptor stage:stage];
+  if(!descriptor || descriptor.functionCount == 0 || descriptor.functionCount > 32)
+  {
+    RDCERR("Unsupported Metal visible-function-table size");
+    return nil;
+  }
+  return id<MTLVisibleFunctionTable>(GetWrapped(self)->newVisibleFunctionTable(
+      (uint32_t)descriptor.functionCount, (MTL::RenderStages)stage));
 }
 
 - (nullable id<MTLIntersectionFunctionTable>)
@@ -168,8 +183,15 @@
                                          stage:(MTLRenderStages)stage
     API_AVAILABLE(macos(12.0), ios(15.0))
 {
-  METAL_NOT_HOOKED();
-  return [self.real newIntersectionFunctionTableWithDescriptor:descriptor stage:stage];
+  if(!descriptor || descriptor.functionCount == 0 || descriptor.functionCount > 32 ||
+     (stage != MTLRenderStageFragment && stage != MTLRenderStageVertex &&
+      stage != MTLRenderStageTile))
+  {
+    RDCERR("Unsupported Metal intersection-function-table descriptor");
+    return nil;
+  }
+  return id<MTLIntersectionFunctionTable>(GetWrapped(self)->newIntersectionFunctionTable(
+      (uint32_t)descriptor.functionCount, (MTL::RenderStages)stage));
 }
 
 - (nullable id<MTLRenderPipelineState>)

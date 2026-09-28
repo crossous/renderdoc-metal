@@ -26,17 +26,40 @@
 
 #include "metal_common.h"
 
+
 class WrappedMTLTexture : public WrappedMTLObject
 {
 public:
   WrappedMTLTexture(MTL::Texture *realMTLTexture, ResourceId objId,
                     WrappedMTLDevice *wrappedMTLDevice);
 
+  void makeAliasable();
+  template <typename SerialiserType>
+  bool Serialise_makeAliasable(SerialiserType &ser);
+
+  DECLARE_FUNCTION_SERIALISED(MTL::PurgeableState, setPurgeableState, MTL::PurgeableState state);
+  DECLARE_FUNCTION_SERIALISED(void, newSharedTextureHandle);
+
+  DECLARE_FUNCTION_SERIALISED(void, getBytes, void *pixelBytes, NS::UInteger bytesPerRow,
+                              MTL::Region &region, NS::UInteger level);
+  DECLARE_FUNCTION_SERIALISED(void, getBytes, void *pixelBytes, NS::UInteger bytesPerRow,
+                              NS::UInteger bytesPerImage, MTL::Region &region,
+                              NS::UInteger level, NS::UInteger slice);
+
   DECLARE_FUNCTION_SERIALISED(void, replaceRegion, MTL::Region &region, NS::UInteger level,
                               const void *pixelBytes, NS::UInteger bytesPerRow);
   DECLARE_FUNCTION_SERIALISED(void, replaceRegion, MTL::Region &region, NS::UInteger level,
                               NS::UInteger slice, const void *pixelBytes,
                               NS::UInteger bytesPerRow, NS::UInteger bytesPerImage);
+
+  WrappedMTLTexture *newTextureView(MTL::PixelFormat format, MTL::TextureType type,
+                                    NS::Range levels, NS::Range slices,
+                                    MTL::TextureSwizzleChannels swizzle, uint32_t variant);
+  template <typename SerialiserType>
+  bool Serialise_newTextureView(SerialiserType &ser, WrappedMTLTexture *view,
+                                MTL::PixelFormat format, MTL::TextureType type,
+                                NS::Range levels, NS::Range slices,
+                                MTL::TextureSwizzleChannels swizzle, uint32_t variant);
 
   enum
   {

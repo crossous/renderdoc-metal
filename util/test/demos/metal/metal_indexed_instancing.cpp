@@ -134,6 +134,7 @@ fragment float4 fs_main(VSOut input [[stage_in]]) { return input.colour; }
     }
 
     bool validationFailed = false;
+    const bool shortOverload = !GetEnvVar("RENDERDOC_METAL_INDEXED_SHORT").empty();
     const bool validateNative = GetEnvVar("RENDERDOC_METAL_CAPTURE_PATH").empty();
     while(Running())
     {
@@ -150,10 +151,14 @@ fragment float4 fs_main(VSOut input [[stage_in]]) { return input.colour; }
           MakeBackbufferRenderPass(drawable, MTL::ClearColor::Make(0.025, 0.035, 0.055, 1.0));
       MTL::RenderCommandEncoder *render = commandBuffer->renderCommandEncoder(pass);
       render->setRenderPipelineState(pipeline);
-      render->setVertexBuffer(positionBuffer, 0, 0);
-      render->setVertexBuffer(instanceBuffer, 0, 1);
-      render->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle, 3, MTL::IndexTypeUInt16,
-                                    indexBuffer, 2 * sizeof(uint16_t), 2, 1, 1);
+      render->setVertexBuffer(positionBuffer, shortOverload ? sizeof(Position) : 0, 0);
+      render->setVertexBuffer(instanceBuffer, shortOverload ? sizeof(Instance) : 0, 1);
+      if(shortOverload)
+        render->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle, 3, MTL::IndexTypeUInt16,
+                                      indexBuffer, 2 * sizeof(uint16_t), 2);
+      else
+        render->drawIndexedPrimitives(MTL::PrimitiveTypeTriangle, 3, MTL::IndexTypeUInt16,
+                                      indexBuffer, 2 * sizeof(uint16_t), 2, 1, 1);
       render->endEncoding();
 
       MTL::Buffer *readback = NULL;

@@ -71,6 +71,38 @@ MetalFX、任意第三方应用注入或完整 capture 产品化为目标。为�
 - [BATCH33-34.md](BATCH33-34.md)：已关闭的 T32/T33 compute 间接 dispatch 批次。
 - [PHASE33.md](PHASE33.md)：已完成的 T32 CPU 参数 compute 间接 dispatch。
 - [PHASE34.md](PHASE34.md)：已完成的 T33 GPU 生成参数 compute 间接 dispatch。
+- [BATCH35-37.md](BATCH35-37.md)：T34–T36 render 绑定、命令创建与动态状态批次；自动通过，GUI L4 待验。
+- [PHASE35.md](PHASE35.md)：T34 render inline bytes 与 buffer batch binding。
+- [PHASE36.md](PHASE36.md)：T35 command queue/buffer/compute encoder 创建变体。
+- [PHASE37.md](PHASE37.md)：T36 render 动态状态。
+- [BATCH38.md](BATCH38.md)：T36 visibility/store/barrier、T37 blit transfer、T10 marker 与 D32S8 API。
+- [PHASE38.md](PHASE38.md)：T37 pitched buffer/texture 和 whole/ranged texture copy。
+- [BATCH39-40.md](BATCH39-40.md)：T38 sampler LOD、T39 Private buffer readback 和 compute buffer-output。
+- [PHASE39.md](PHASE39.md)：六项 VS/FS/CS sampler LOD 入口与有效事件状态。
+- [PHASE40.md](PHASE40.md)：Private GPU buffer staging readback。
+- [BATCH41-42.md](BATCH41-42.md)：T40 compute inline/offset/threadgroup，T41 blit descriptor/optimization。
+- [PHASE41.md](PHASE41.md)：Compute inline bytes、buffer offset 与动态threadgroup memory。
+- [PHASE42.md](PHASE42.md)：Blit descriptor 与texture optimization、hint-only资源保留。
+- [BATCH43-44.md](BATCH43-44.md)：Compute/Render资源声明、barrier与vertex写buffer，终端联合验证。
+- [PHASE43.md](PHASE43.md)：T42 Compute resource/barrier/marker七个入口。
+- [PHASE44.md](PHASE44.md)：T43 Render staged声明/barrier及vertex RW descriptors。
+- [BATCH45-46.md](BATCH45-46.md)：Fence同步、定时present、buffer debug marker及终端联合验证。
+- [PHASE45.md](PHASE45.md)：T44 Fence创建、Blit/Compute/Render update/wait。
+- [PHASE46.md](PHASE46.md)：T45/T46 两种present调度参数和buffer annotations。
+- [BATCH47.md](BATCH47.md)：T47 三个同步pipeline入口及完整终端回归。
+- [PHASE47.md](PHASE47.md)：Pipeline options/reflection、compute descriptor与线程组约束。
+- [BATCH48.md](BATCH48.md)：四种预编译library加载、离线回放与源码路径兼容检查。
+- [PHASE48.md](PHASE48.md)：Binary library嵌入、失败返回值及library/function提前释放。
+- [BATCH49.md](BATCH49.md)：两种command buffer回调、CPU更新回退修复与联合自动回归。
+- [PHASE49.md](PHASE49.md)：回调包装/生命周期、提交前快照及shared CPU更新部分replay。
+- [BATCH50.md](BATCH50.md)：纹理CPU读取/Managed同步、176类异常与51份联合回归。
+- [PHASE50.md](PHASE50.md)：两种getBytes元数据、pitch/子资源验证与读回后GPU依赖。
+- [BATCH51-52.md](BATCH51-52.md)：六种异步创建与Event同步，bridge降至149，53份联合回归。
+- [PHASE51.md](PHASE51.md)：异步Library/PSO回调包装、descriptor快照与资源生命周期。
+- [PHASE52.md](PHASE52.md)：Event创建/signal/wait、epoch重建、跨提交数据依赖与回退。
+- [BATCH53.md](BATCH53.md)：ICB GPU操作/单命令reset、初值恢复、194新异常与54份联合回归。
+- [PHASE53.md](PHASE53.md)：Shared render ICB范围、copy/reset/optimize、空命令及未知初值拒绝。
+- [QA_CONSOLIDATED.md](QA_CONSOLIDATED.md)：当前所有未验功能的集中 GUI QA 总入口。
 - [ACTION_NAME_ALIGNMENT.md](ACTION_NAME_ALIGNMENT.md)：跨 API action 名称审查与后续对齐计划。
 - [REAL_WORLD_CAPTURE_ROADMAP.md](REAL_WORLD_CAPTURE_ROADMAP.md)：UE/Unity、Nanite、光追、mesh shading 与本机/M4 的路线评估。
 - [STATUS.md](STATUS.md)：当前状态、最近验证结果、阻塞项和下一步。
@@ -81,22 +113,27 @@ MetalFX、任意第三方应用注入或完整 capture 产品化为目标。为�
 - [QA_BATCH29-30.md](QA_BATCH29-30.md)：最终 T28/T29 正式 captures 的合并 GUI 验收单。
 - [QA_BATCH31-32.md](QA_BATCH31-32.md)：T30/T31 正式 captures 的合并 GUI 验收单。
 - [QA_BATCH33-34.md](QA_BATCH33-34.md)：T32/T33 正式 captures 的合并 GUI 验收单。
+- [QA_BATCH35-37.md](QA_BATCH35-37.md)：T34/T35/T36 的后续一次性 GUI 验收单。
+- [QA_BATCH38.md](QA_BATCH38.md)：T36 增量、T37 和 T10 marker 的后续 GUI 验收单。
 - [HANDOFF_HISTORY.md](HANDOFF_HISTORY.md)：按需追查的历史阶段交接证据。
 - [DECISIONS.md](DECISIONS.md)：关键架构与范围决策。
 
 ## 当前状态
 
-T00-T33 的 Native/Capture/RDC inspect/Replay/UI 纵向切片已关闭。
-`BATCH33-34.md` 的 T32 CPU 参数与 T33 GPU 生成参数 compute 间接 dispatch
-已完成最终联合自动验证和用户 GUI L4，含 Event Browser 实际执行数量摘要。
-PHASE33、PHASE34 和 BATCH33-34 已关闭。跨 API action 名称审查见
+T00–T33 的 Native/Capture/RDC inspect/Replay/UI 纵向切片已关闭。此后按功能族持续
+扩展；实时进度、原始 bridge/旧 chunk 计数、最终终端回归和明确未支持项只维护在
+[`STATUS.md`](STATUS.md)顶部，避免在本索引重复易过期的数字。T34以后尚未人工验收的
+功能继续保留在[`QA_PENDING.md`](QA_PENDING.md)，集中 GUI 操作入口为
+[`QA_CONSOLIDATED.md`](QA_CONSOLIDATED.md)。按用户要求，当前开发阶段不运行
+GUI/Computer Use，不把终端通过误记为 UI 关闭。
+跨 API action 名称审查见
 `ACTION_NAME_ALIGNMENT.md`，部分 Metal 名称待后续显示一致性工作处理。
-接手时只读本入口、`STATUS.md` 当前批次与最新检查点、下一 BATCH/两份 PHASE 和
-`HANDOFF.md`、`QA_GUIDE.md` 验证规则及 `QA_PENDING.md` 待验清单；`PLAN.md` 与历史文档
+接手时先读本入口、`STATUS.md` 顶部、当前 BATCH、`QA_PENDING.md`，再按需读
+`HANDOFF.md`、`QA_GUIDE.md` 验证规则和`PLAN.md`；历史文档
 按需查阅。正式 captures 与本机构建仍保留在各自的忽略目录。
 从 BATCH29-30 起，agent 完成终端可判定的 QA；最终 GUI 交互由用户按合并的验收单
 一次完成。未收到用户明确反馈的功能会持续列在 `QA_PENDING.md`，以后每次结果都会提示；
-下一功能可以继续开发，未验批次不会被标为关闭。当前没有人工待验项。
+下一功能可以继续开发，未验批次不会被标为关闭。
 
 ## 初始基线结论（2026-09-20）
 

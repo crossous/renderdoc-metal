@@ -1,5 +1,289 @@
 # Agent 交接规范
 
+临时交给公司 Codex API 时，请先看[2026-09-28 交接单](COMPANY_CODEX_API_HANDOFF_2026-09-28.md)。
+当前接手请先看 [STATUS 顶部](STATUS.md)、[BATCH301](BATCH301.md)、
+[BATCH302](BATCH302.md)、[BATCH303](BATCH303.md)、[BATCH304](BATCH304.md)、
+[BATCH305–306](BATCH305-306.md)、[BATCH307](BATCH307.md)、[BATCH308](BATCH308.md)、
+[BATCH309](BATCH309.md)、[BATCH310](BATCH310.md)、
+[BATCH311–312](BATCH311-312.md)及
+[黑盒验收门槛](BLACKBOX_GATE.md)。最新已接通空 Binary Archive 的
+compute/render/单个visible函数/单节点stitched library/tile/mesh函数添加，
+并修正旧格式兼容读取；T311/T312 进一步接通同步tile/mesh pipeline
+archive-miss依赖。T301–T312 原生/捕获/API/CLI、本族315例畸形输入和32份
+定向回归通过。当前库/app `2f88058307f5…`，GUI待验274份，原始
+bridge/chunk 宏匹配59/15（含新功能的防御性拒绝及定义，不等于未实现 API 数）。06:26 IOGPU panic
+仍未归因，本轮没有新增；继续避免长时全量GPU压力回归及GUI/Computer Use。
+下一项优先依据真实应用普通帧阻塞，或为当前硬件可验证的剩余资源族
+先做原生能力探针；不要仅为降低宏数字删除守卫。
+
+## 当前执行规则：2026-09-26 节奏调整
+
+用户要求加快连续开发。以 [PLAN.md 的当前推进节奏](PLAN.md#当前推进节奏功能族连续开发定向验证集中回归)
+为准，取代本文件下方旧的逐PHASE/逐小批完整收尾与全索引同步要求；历史证据不变。
+先读STATUS顶部短检查点、PLAN当前节奏、活跃BATCH和QA_PENDING当前表；不通读本文件历史。
+每波连续2–3功能族，本族闭环+受影响旧T及时测；最迟第3族后、QA交付前集中回归，
+风险无法局部界定则提前。快速入口 `test_metal_replay_targeted_macos.sh` 不代表全量通过。
+日常只更新短STATUS/一份BATCH增量及必要QA短行，详细QA在集中关口合并；不自动启动GUI。
+中断时必须保留族数、已跑/欠跑检查及日志、首个未完成项，不能因chat结束把全量欠项抹掉。
+“定向通过”“集中通过”“用户L4通过”分别记录；未验阶段不关闭。以下为历史交接证据。
+
+## 2026-09-26 最新：BATCH53 自动通过，148 bridge / 87 chunk 剩余
+
+继续终端开发、禁止 Computer Use/GUI 的要求不变。本批单命令 reset 减少1 bridge，
+blit ICB reset/copy/optimize 消除3旧chunk1224–1226；后三项bridge原本已转发。
+追加1270 CPU命令reset、1271不可重建初值诊断，Max1272，资源类型枚举未改。
+
+ICB replay 每个epoch首次使用时原地恢复CPU初值，不能替换native ICB造成command wrapper
+悬空；OnlyDraw延续WithoutDraw。GPU copy/reset更新shadow，保留pipeline/两个vertex
+buffers/indexed参数；空命令有SetMarker子项，不伪造draw。优化范围按CB/epoch记录，
+同提交重叠在Metal前拒绝，零长度不编码。所有范围采用减法检查以防溢出。
+
+边界：CPU初始化Shared render ICB；非Shared在创建阶段拒绝。capture epoch/GPU改写标记
+检测跨capture边界不可恢复的内容，插入1271让离线明确失败。完整CPU reset可清理未知
+标志；保守地不允许仅靠帧内GPU覆盖绕过。不能删诊断chunk来静默接受错误初值。
+现有CPU编辑仍按初始化record保存，不支持任意帧内CPU重编码/提交交错、GPU shader
+生成或compute ICB。通用initial contents和其他wrapper所有权缺口仍在。
+
+最终一键 `test_metal_capture_batch53_macos.sh`：54 API/CLI、1330异常、540 lifecycle，
+growth2,228,224bytes；26份API验证层。新194异常+3合法变体，旧70 ICB异常加入总脚本；
+T22/T24两个空命令从负例改为三轮正例。六旧脚本加30秒超时/禁止信号退出，修复旧T26
+缺失render pipeline调用native时崩溃。T53 native/capture各12帧；另真实帧前GPU内容
+变体各3帧正确、离线明确拒绝（不计入54/1330）。正式T01–T52未重录。
+
+仅replay设LAST_TEST=53；日志 `/tmp/metal-batch53-final.log`；库/app `a5dcf57234590…`，
+T53 `6ad98408529a…`，GUI executable未改。完整hash/功能和测试范围见BATCH53/PHASE53。
+无GUI/Computer Use、无提交，用户UE路线与旧修改保留。下一chat先读QA_PENDING及
+QA_CONSOLIDATED：**T34–T53与T10 marker共21份**待人工；PHASE35–53和对应batch仍开放。
+下一编号T54/PHASE54。以下为历史检查点，不代表当前剩余计数。
+
+## 2026-09-26 最新：BATCH51–52 自动通过，149 bridge / 90 chunk 剩余
+
+用户本轮要求 bridge 降到 150 内，已从 158 降至 149。T51 六异步创建入口追加
+chunk1264–1269（Max1270）；T52 newEvent/signal/wait 接通旧1032/1062/1063，旧未处理
+chunk93→90。资源类型 eResEvent 追加在 Fence 后，eResMax20。
+
+异步桥接继续调用原生 API，完成时包装结果并登记父依赖，再传 error/reflection 给应用。
+source/descriptor 调用时复制、native function 解包，快照不受后续修改/释放影响。结果
+借用引用需 retain，回调后释放临时 proxy；PSO/Event 使用独立 native 所有权。Library/
+Function 沿用 BATCH48 策略，其他 wrapper 生命周期并未普遍修复。Async source 非 nil
+compile options 标为 unsupported；离线不执行 blocks、不还原 callback 调度。
+共享 source serializer 增加 device/ID 验证，同时补 WrappedMTLDevice eResDevice 类型。
+
+Event 每个新 replay epoch 懒创建新 native 对象，避免信号值从后来事件泄漏到回退；
+先完成旧提交，OnlyDraw 延续 WithoutDraw epoch。只接受当前未提交/无 encoder 的 CB、
+递增 signal、wait≤此前捕获 signal。双队列三提交已测，但 replay 仍串行，future-signal
+wait、外部/帧前状态及 SharedEvent 未支持；不要直接放宽检查而引入 GPU 死锁。
+
+最终一键 `test_metal_capture_batch51_52_macos.sh`：53 API/CLI、1066 异常、530 lifecycle，
+growth1,736,704bytes；18 份 API 验证层。两 fixture 各 native/capture12 帧，T51 七个
+completion（含失败）及五 PSO，T52 每进程72次同步。新增104+122异常，四个合法变体。
+正式 T01–T50 未重录；另三份 source 新录兼容全部通过。仅 replay 设 LAST_TEST=52。
+日志 `/tmp/metal-batch51-52-final.log`；库/app `8dbbe2d60146…`，T51/T52
+`e0fc940f6ce0…` / `e0116d679d5f…`。完整 hash/测试范围见 BATCH51-52。
+
+无 GUI/Computer Use、无提交，保留用户 UE 路线和全部旧修改。下一 chat 先读 QA_PENDING/
+QA_CONSOLIDATED，**T34–T52 及 T10 marker 共20份**待集中人工；PHASE35–52 与相应 batch
+仍开放。下一编号 T53/PHASE53。后续继续选择可终端验证的完整功能切片，不仅去掉标记；
+通用 initial contents、其他 wrapper 所有权、views/高级资源等仍有缺口。以下为历史检查点。
+
+## 2026-09-26 最新：BATCH50 自动通过，158 bridge / 93 chunk剩余
+
+T50新增两getBytes捕获元数据/帧资源引用，旧chunk1072/1073；原生CPU内容仍透传，离线
+不保存/重放CPU指针和输出payload。synchronizeTexture旧chunk1205真正编码回放，校验
+Managed、当前blit encoder和mip/slice；共享纹理同步原生验证层会拒绝，已补负例。
+无新chunk，Max1264。synchronizeResource旧空回放尚未处理。
+
+Fixture包含Managed二维/mip/数组、Shared二维及3D两层、仅同步引用纹理；四次CPU读
+逐字节检查padding/哨兵，结果写入68-byte Shared参数由第二command buffer绘制。
+API核对2D像素、资源保留、参数43/79/113/151/152和回退零值、RGBA43/79/113/255。
+3D原生/capture读回已验证，但Replay API/GUI 3D显示未扩展；格式/pitch支持边界见PHASE50。
+
+最终一键`test_metal_capture_batch50_macos.sh`通过：51 API/CLI、840异常、510lifecycle，
+growth999,424bytes；16份API验证层。T50新增176异常+2合法metadata变体。日志
+`/tmp/metal-batch50-final.log`；仅重放LAST_TEST=50。正式T01–T49未重录。
+库/app `a648ce05f576…`，T50 `f56406953e8d…`，GUI executable未改，完整hash见BATCH50。
+
+无GUI/Computer Use、无提交，保留全部原有dirty修改与用户UE路线。下次先读QA_PENDING/
+QA_CONSOLIDATED，**T34–T50及T10 marker共18份**待集中人工；PHASE35–50开放。
+下一编号T51/PHASE51。普通wrapper所有权、通用InitialContents、views/高级资源仍有缺口；
+继续选择能终端形成闭环的切片，不以清除标记代替支持。以下为历史检查点。
+
+## 2026-09-26 最新：BATCH49 自动通过，160 bridge / 96 chunk剩余
+
+新增T49 scheduled/completed handler两入口、旧chunk1049/1054。Native block正常复制/调用，
+回传包装command buffer，桥接闭包保留proxy；序列化仅注册身份，离线不执行应用block。
+fixture每帧八回调，验证身份/状态/次数/闭包释放，以及两个GPU提交之间的CPU参数依赖。
+
+发现并修复旧CPU快照竞态/回退：快照移到native commit前；shared更新用bytebuf安全读取，
+校验range/type/payload/owner；首次加载预扫描CPU更新buffer并恢复非零初值，再按command
+buffer缓存更新，部分replay在该提交开始时预先应用，每次非OnlyDraw恢复被CPU更新的
+buffer初值，完成前一提交再CPU写。不是通用
+initial contents或多队列调度重构。无新chunk，Max1264；详情PHASE49/BATCH49。
+
+最终50 API/CLI、664类异常、500次lifecycle通过，growth3,178,496bytes；15份API Metal验证层。
+另三份源码triangle/argument buffer/pipeline variants新录兼容检查通过，不覆盖正式capture。
+最终一键`test_metal_capture_batch49_macos.sh`包含全部主回归和源码兼容复验，
+统一日志`/tmp/metal-batch49-final.log`。仅重放LAST_TEST=49。
+库/app `1cd92c21c774…`，T49 `82771996ea03…`，GUI executable未改，完整hash见BATCH49。
+
+无GUI/Computer Use、无提交。下次先读QA_CONSOLIDATED/QA_PENDING，**T34–T49及T10 marker
+共17份**仍待人工，PHASE35–49均开放。下一T50/PHASE50。其他wrapper association生命周期、
+全部InitialContents、更多高级资源仍有缺口，不将本批计数当真实引擎已全面支持。
+以下为历史检查点，不覆盖本节。
+
+## 2026-09-26 最新：BATCH48 自动通过，162 bridge / 98 chunk剩余
+
+新增T48预编译library四入口file/URL/data/bundle，接通旧chunk1015–1018；默认库1014
+修复NSData读取和autorelease误用，旧格式不变。无新chunk，Max1264。失败library/function
+返回NULL并保留NSError，不产生空wrapper；replay只使用capture字节，origin不参与加载。
+
+捕获时发现Library/Function提前release堆损坏，改为proxy独立拥有native +1，不再挂
+native→proxy retaining association；先销毁ObjC实例，再释放记录/native。T48在首帧前
+释放全部库/函数仍保留5库7shader父依赖。其他wrapper旧association策略未重构，后续应独立审计。
+
+正式主batch49 API/CLI、577类异常、490次lifecycle通过，growth1,228,800bytes；14份API
+Metal验证层。另源码triangle/argument buffer/pipeline variants新录API+3-loopCLI通过，
+不覆盖旧正式capture。主日志`/tmp/metal-batch48-final.log`，补充`/tmp/metal-batch48-source-compat.log`。
+两段使用同一库，补充脚本已并入一键`test_metal_capture_batch48_macos.sh`。只重放LAST_TEST=48。
+库/app `6df633b629eb…`，T48 `f71eaf76384b…`；完整hash/边界见BATCH48/PHASE48。
+
+未运行GUI/Computer Use，未提交。下一chat读QA_CONSOLIDATED/QA_PENDING：**T34–T48及
+T10 marker共16份**仍待人工，阶段35–48开放；下一T49/PHASE49。Binary shader有反射但
+无原始MSL展示，非library损坏；不宣称跨GPU/OS兼容、动态库或真实引擎全面支持。
+原metallib生成目录已恢复，`.offline`不残留。下方为历史检查点。
+
+## 2026-09-26 最新：BATCH47 自动通过，166 bridge / 102 chunk剩余
+
+新增同步pipeline三个入口：render options/reflection、compute function options/reflection、
+compute descriptor，复用旧chunk1022/1024/1025，Max仍1264。T47实际使用六个pipeline，
+覆盖native reflection/Params结构体、options3/0、descriptor maxThreads64/mutability/
+线程执行宽度整倍数。Replay记录shader父依赖/反射，验证整倍数及dispatchThreads尾组。
+native复制descriptor不改调用方对象；高级未支持状态明确拒绝，异步创建仍未接通。
+
+`test_metal_capture_batch47_macos.sh` 最终完整通过：48 API/CLI、513类异常（新增84），
+480次lifecycle，resident growth491,520bytes；13份Replay API Metal验证层。
+日志`/tmp/metal-batch47-final.log`。库/app `16c921313c2f…`，T47 `a28eef0f401b…`，
+完整hash与范围见BATCH47/PHASE47。只重放设LAST_TEST=47。未运行GUI、未提交。
+
+下一chat先读QA_CONSOLIDATED/QA_PENDING，**T34–T47和T10 marker共15份**待集中人工QA。
+旧待验项全部保留；PHASE35–47及对应batch未关闭。下一编号T48/PHASE48。
+可以继续挑终端可测功能；本批不宣称任意pipeline/真实引擎已兼容。下方均为历史检查点。
+
+## 2026-09-26 最新：BATCH45–46 自动通过，169 bridge / 105 chunk剩余
+
+本轮按用户要求多推进bridge/chunk。Fence创建/包装/生命周期及三类encoder的update/wait，
+两种timed present、buffer add/remove marker，共11入口，移除7bridge/接通9旧chunk。
+追加Compute1262/1263、Max1264，资源类型尾部追加eResFence。T44为fence链，T45/T46复用
+该链并分别覆盖atTime/minimum-duration与marker；原T34–T43不重录、不丢待验状态。
+
+完整batch脚本 `test_metal_capture_batch45_46_macos.sh` 通过，最终47 API/CLI、429类异常、
+470次lifecycle（growth1,638,400bytes）；12份Replay API验证层，T00另CLI+40次生命周期。
+库/app `33c4399361f7…`，T44/T45/T46 `caa028676f68…` / `9e71f6b21883…` / `7b1fbea45e1f…`。
+仅重放设LAST_TEST=46；范围与完整hash见BATCH45–46、PHASE45/46。没有运行GUI或提交。
+
+下一chat先读QA_CONSOLIDATED/QA_PENDING，**T34–T46和T10 marker共14份**待集中人工QA。
+T45/T46只查差异，别把fence数值重复三遍；未收到用户反馈不可关闭PHASE35–46及相关批次。
+下一编号T47/PHASE47。Fence限当前帧先update后wait，不支持捕获前/外部状态或跨队列保证；
+拒绝same/ended encoder无效等待。标记为structured metadata，无范围高亮UI；present不重现
+时钟等待。可以继续终端开发高级对象前置或常用资源路径，但不把计数下降当真实引擎兼容。
+下方旧“最新”标题均为历史检查点。
+
+## 2026-09-26 最新：BATCH43–44 自动通过，十一份 capture 待集中 GUI QA
+
+用户继续要求快速终端开发，不用Computer Use。新增T42七个compute资源/barrier/marker、
+T43五个render声明/barrier入口；修复失败pipeline空包装和vertex RW buffer descriptor/
+usage/VS Storage Buffers表入口。剩余176/114，追加chunk1255–1261，旧capture IDs不变。
+范围/边界见BATCH43–44、PHASE43/44；支持直接buffer/texture，非通用heap/AS/高级stage。
+
+最终联合 **44份API/CLI、342类畸形、440次lifecycle**通过，resident growth2,899,968bytes；
+9份replay Metal验证层通过。native/capture/XML阶段与最终共享回归分段证据见批次文档。
+正式库/app副本 `736925e6e195…`，GUI executable `3cc9c3b63507…`，
+T42/T43 `25c6e7349f22…` / `7139504e2357…`；全部未提交，未运行GUI。
+一键入口 `test_metal_capture_batch43_44_macos.sh`，只重放可用
+`RENDERDOC_METAL_LAST_TEST=43 bash util/buildscripts/scripts/test_metal_replay_batch35_38_macos.sh`。
+
+下一chat先读 QA_CONSOLIDATED/QA_PENDING：**T34–T43 和T10 marker**十一份仍待人工。
+同一app集中检查，旧未验项全部保留；未收到反馈不得关闭PHASE35–44或相关batch。
+下一编号T44/PHASE45。可继续终端开发；texture barrier依赖链/RenderTargets scope尚无
+独立fixture，vertex RW texture、高级资源/同步对象依赖需另设范围。不得称真实UE已支持。
+下面所有旧“最新”标题均为历史检查点，不覆盖本段。
+
+## 2026-09-26 最新：BATCH41–42 自动通过，九份 capture 待集中 GUI QA
+
+用户继续要求额度重置前快速终端开发，不做Computer Use。本次新增T40三个compute参数/
+共享内存入口，以及T41 blit descriptor/四种optimization，修复CPU subresource hint错误
+chunk与资源漏引用。八个入口全部有native/capture/replay证据；剩余marker181/119。
+新compute chunk IDs1252–1254，旧编号不变。限制与异常边界见BATCH41–42、PHASE41/42。
+
+正式一键脚本 `test_metal_capture_batch41_42_macos.sh` 已跑通；最终42份API/CLI、239类
+畸形输入、420次lifecycle。后补display padding修复后，最终联合再次通过，resident growth
+2,736,128bytes。库/app副本更新为`b30a0e4cb6ee…`；
+T40/T41为`73a3398cec48…` / `35745dc5f7ab…`。未提交，未启动GUI，未改变旧T37capture。
+只重放可用 `RENDERDOC_METAL_LAST_TEST=41 bash util/buildscripts/scripts/test_metal_replay_batch35_38_macos.sh`。
+
+接手先读 `QA_CONSOLIDATED.md` / `QA_PENDING.md`：当前 **T34–T41和T10 marker** 共九份
+capture待人工；全部旧未验项保留。若用户继续开发，可推进新的终端可测功能；若请求QA，
+按总单在同一app中合并检查，不逐批重复。不要自动关闭PHASE35–42或任何未验batch。
+下一编号T42/PHASE43。原生验证层确认compute offset接口不能接inline bytes；未实现inline
+常量解码UI、threadgroup专用UI、counter sample buffers、通用3D compute/真实UE兼容。
+
+## 2026-09-26 最新：BATCH39–40 自动通过，集中 QA 总单已建立
+
+用户希望额度重置前持续做终端可验证开发，重置后再统一 QA；不使用 Computer Use。
+最新完成 T38 六项 sampler LOD（含事件有效 descriptor）和 T39 Private buffer readback，
+并打通两个 buffer-output compute 布局。剩余 bridge/chunk 为182/124。新 native/capture/
+XML/API/3-loop CLI 通过；最终40 captures、175类异常、400次lifecycle，含反复private
+staging读回。测试入口 `test_metal_capture_batch39_40_macos.sh` 和设置 LAST_TEST=39
+的共享回归脚本；详情见 BATCH39–40、PHASE39/40、STATUS。
+
+下一 chat 优先读 `QA_CONSOLIDATED.md` 和 `QA_PENDING.md`。当前待验 T34–T39 与
+T10 marker，共七份capture，在一个app进程中合并验收；用户未要求前继续开发即可。
+不得把前面批次未验项丢掉或自动关闭。版本hash以集中总单为准，旧表保留历史证据。
+
+## 2026-09-26 最新：BATCH38 接通，GUI 全部留待后续 chat
+
+用户当前要求连续快速开发、只做终端可判定验证，不做 Computer Use。已进一步完成
+T36 visibility/store/barrier、T37 四种 blit transfer、T10 marker 路由及 D32S8 API
+读回/拾取。bridge/chunk 当前 **186/128**；38 份旧/新 capture API/CLI 和 10 轮
+lifecycle 通过，71 类异常输入干净拒绝。脚本入口和功能限制见 `BATCH38.md`、
+`PHASE38.md`；完整联合重放脚本 `test_metal_replay_batch35_38_macos.sh`。
+
+最终库 `47e0635e8736…`（app 内嵌副本相同），T36/T37/T10_debug 为
+`436b3262fef5…` / `f87cbbc8ca00…` / `2d4a8d609bae…`；T34/T35 与旧 T10 不变。
+待验 **T34/T35/T36/T37 + T10 marker 增量**，见 `QA_PENDING.md`、`QA_BATCH35-37.md`
+和 `QA_BATCH38.md`。用户请求 QA 后再指导同一进程验收；目前任何新批次均不能关闭。
+Debug marker 仅结构化 API 事件；D32S8 API 支持不代表 depth Texture Viewer shader 已做。
+不把终端跑通推断为真实 UE/Nanite 支持。原有 UE 5.6.1 记录和所有未提交改动保留。
+
+以下为此前历史检查点，其旧版计数、hash 与“当前批”表述不覆盖本节。
+
+## 2026-09-26 BATCH35-37 自动完成，GUI 留待后续 chat
+
+用户明确要求本轮优先连续开发与终端可验证操作，不使用 Computer Use。T34/T35/T36
+已完成实现与自动闭环：bridge/chunk 计数 216/165 → 194/143（最后补齐
+`waitUntilScheduled` 和五项 command/render debug marker）；两个新增 batch 脚本
+覆盖 native、capture/XML、Replay API、3-loop CLI、19 类畸形 capture 拒绝和最终
+3 captures × 10 lifecycle（最后一轮 resident growth 606,208 bytes）。最终库
+`ba380a0317b6…`，captures 为 `e6ee77deb50a…` / `7fbed8c95df6…` /
+`37d6c5cb1306…`。没有启动 qrenderdoc，不得把 T34–T36 写成 GUI 已通过。
+
+接手先读 `BATCH35-37.md`、PHASE35–37、`QA_BATCH35-37.md` 和 `QA_PENDING.md`。
+若用户要求继续开发，可继续审计剩余 194/143，优先可用受控 fixture 验证的常用资源/
+render 命令簇；高级 heap/event/ray tracing/function-table 需按对象依赖独立规划。若用户
+要求 QA，则在同一 qrenderdoc 进程按验收单检查 T34/T35/T36，收到明确反馈后再关闭批次。
+
+共享 render 路径还定向复验了 T01/T02/T04/T07/T17 的 Replay API 与 CLI；T00 加这些
+旧场景及 T34/T36 的 8 captures × 10 lifecycle 通过，growth 245,760 bytes。T35 是无 draw
+fixture，受 lifecycle harness 只能把首项视为无 draw 的约束，另与 T34/T36 组成三项轮次。
+
+## 2026-09-26 UE 5.6.1 本机目标
+
+用户已有 `/Volumes/CauseUseMac/UE_5.6`。只读检查确认这是官方 UE 5.6.1
+promoted build，`Engine/Binaries/Mac/UnrealEditor` 含 arm64。首轮普通帧
+试截可使用此安装，不需先编译源码版；当前尚未实际启动或截帧。
+该安装的 RenderDoc 插件模块只允许 Win64/Linux，Mac 首轮先走外部注入。
+路径与验收层次见 `REAL_WORLD_CAPTURE_ROADMAP.md`。`QA_PENDING.md` 无待验项。
+
 ## 2026-09-26 真实应用目标与本机能力评估
 
 用户希望本项目最终能截取 macOS 图形应用/游戏并接入 UE/Unity，重点是 UE
@@ -168,7 +452,7 @@ captures 已重生成。当前 GUI 和 EID 见 `STATUS.md` 顶部及 `QA_BATCH29
 ## 新 agent 的最短接手路径
 
 1. 阅读 `README.md` 入口、`STATUS.md` 顶部当前批次与最近恢复检查点、当前 BATCH 文档
-   （最近完成的是 `BATCH33-34.md`）、其中两份 PHASE 文档，以及本文件、`QA_GUIDE.md` 和
+   （当前为 `BATCH39-40.md`，前批为 `BATCH35-37.md` / `BATCH38.md`）、当前PHASE及集中QA总单，以及本文件、`QA_GUIDE.md` 和
    `QA_PENDING.md` 的接手/验证规则与待验项；`PLAN.md` 和历史阶段文档按需追查。
 2. 执行 `git status --short --branch`，把工作区视为可能包含前任未提交的有效修改，不得清理、覆盖或
    回退未知改动。

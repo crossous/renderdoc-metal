@@ -28,6 +28,28 @@
 
 #import <Metal/Metal.h>
 
+struct StitchedDescriptorSnapshot
+{
+  WrappedMTLFunction *function = NULL;
+  rdcstr graphName;
+  rdcstr functionName;
+};
+bool SnapshotStitchedDescriptor(MTLStitchedLibraryDescriptor *descriptor,
+                                StitchedDescriptorSnapshot &snapshot);
+bool MetalTileDescriptorSupported(MTLTileRenderPipelineDescriptor *descriptor,
+                                  bool allowArchives = false);
+bool MetalMeshDescriptorSupported(MTLMeshRenderPipelineDescriptor *descriptor,
+                                  bool allowArchives = false)
+    API_AVAILABLE(macos(13.0), ios(16.0));
+
+// A native shared-texture handle is only reproducible when it was exported from a
+// wrapped texture in this process. The association deliberately does not survive IPC.
+void MetalAssociateSharedTextureHandle(MTLSharedTextureHandle *handle, id<MTLTexture> source);
+id<MTLTexture> MetalSharedTextureHandleSource(MTLSharedTextureHandle *handle);
+void MetalAssociateSharedEventHandle(MTLSharedEventHandle *handle, id<MTLSharedEvent> source);
+id<MTLSharedEvent> MetalSharedEventHandleSource(MTLSharedEventHandle *handle);
+id<MTLHeap> MetalWrappedHeap(id<MTLHeap> real);
+
 // clang-format off
 #define DECLARE_OBJC_WRAPPED_INTERFACES(CPPTYPE)                              \
   @interface ObjCBridgeMTL##CPPTYPE : NSObject<MTL##CPPTYPE>                  \
@@ -40,6 +62,10 @@
 
 METALCPP_WRAPPED_PROTOCOLS(DECLARE_OBJC_WRAPPED_INTERFACES)
 #undef DECLARE_OBJC_WRAPPED_INTERFACES
+
+// Shared events need their own Objective-C protocol identity while reusing the event wrapper.
+@interface ObjCBridgeMTLSharedEvent : ObjCBridgeMTLEvent <MTLSharedEvent>
+@end
 
 #define DECLARE_UNIMPLEMENTED_WRAPPED_OBJC_HELPERS(CPPTYPE)     \
   inline WrappedMTL##CPPTYPE *GetWrapped(id<MTL##CPPTYPE> objC) \

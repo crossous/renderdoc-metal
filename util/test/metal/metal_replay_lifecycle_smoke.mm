@@ -125,6 +125,21 @@ static bool OpenValidateClose(const char *path, bool expectDraw, bool validateUn
 
   const APIProperties props = renderer->GetAPIProperties();
   const ActionDescription *draw = FindAction(renderer->GetRootActions(), ActionFlags::Drawcall);
+  if(!draw) draw = FindAction(renderer->GetRootActions(), ActionFlags::MeshDispatch);
+  bool rayCompute = false;
+  for(const SDChunk *chunk : renderer->GetStructuredFile().chunks)
+    rayCompute |= chunk->name == "MTLAccelerationStructureCommandEncoder::refitTriangle" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::refitTriangleExtended" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::refitTriangleNoDuplicate" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::refitFormattedTriangle" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::refitIndexedTriangle" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::refitBoundingBox" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::buildInstance" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::buildInstances" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::buildDistinctInstances" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::buildMultipleDistinctInstances" ||
+                  chunk->name == "MTLAccelerationStructureCommandEncoder::buildRepeatedDistinctInstances" ||
+                  chunk->name == "MTLComputePipelineState::newIntersectionFunctionTableWithDescriptor";
   ResourceId swapBuffer;
   for(const TextureDescription &texture : renderer->GetTextures())
   {
@@ -137,13 +152,28 @@ static bool OpenValidateClose(const char *path, bool expectDraw, bool validateUn
 
   bool success = props.pipelineType == GraphicsAPI::Metal && props.localRenderer == GraphicsAPI::Metal &&
                  !renderer->GetRootActions().empty() && swapBuffer != ResourceId() &&
-                 ((draw != NULL) == expectDraw);
+                 ((draw != NULL) == expectDraw || (expectDraw && !draw && rayCompute));
 
   if(success && draw)
   {
     renderer->SetFrameEvent(draw->eventId, true);
     bytebuf pixels = renderer->GetTextureData(swapBuffer, {0, 0, 0});
     success = !pixels.empty();
+    // T39 has two 516-byte buffers. Repeated unaligned reads exercise both shared memory and
+    // private-buffer staging allocation/release inside the same process across capture reopen.
+    for(const BufferDescription &buffer : renderer->GetBuffers())
+    {
+      if(buffer.length != 516)
+        continue;
+      for(uint32_t read = 0; read < 4; read++)
+      {
+        const uint64_t offset = 3 + read * 17;
+        const bytebuf bytes = renderer->GetBufferData(buffer.resourceId, offset, 9);
+        success &= bytes.size() == 9;
+        for(size_t i = 0; i < bytes.size(); i++)
+          success &= bytes[i] == byte((offset + i) * 7 + 3);
+      }
+    }
     if(success && validateUnsupported)
       success = ValidateUnsupportedInterfaces(renderer, swapBuffer, draw->eventId);
   }
@@ -174,7 +204,12 @@ int main(int argc, char **argv)
   for(int i = 0; i < iterations && success; i++)
   {
     for(int capture = 1; capture < argc - 1 && success; capture++)
+    {
       success = OpenValidateClose(argv[capture], capture != 1, i == 0 && capture == 2);
+      if(!success)
+        fprintf(stderr, "Metal replay lifecycle failed at iteration %d: %s\n", i,
+                argv[capture]);
+    }
     if(i == 1)
       baseline = ResidentBytes();
   }

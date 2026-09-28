@@ -36,16 +36,59 @@ public:
 
   void SetCommandBuffer(WrappedMTLCommandBuffer *commandBuffer) { m_CommandBuffer = commandBuffer; }
   DECLARE_FUNCTION_SERIALISED(void, endEncoding);
+  DECLARE_FUNCTION_SERIALISED(void, updateFence, WrappedMTLFence *fence);
+  DECLARE_FUNCTION_SERIALISED(void, waitForFence, WrappedMTLFence *fence);
+  DECLARE_FUNCTION_SERIALISED(void, useResource, WrappedMTLResource *resource, MTL::ResourceUsage usage);
+  DECLARE_FUNCTION_SERIALISED(void, useResources, rdcarray<WrappedMTLResource *> resources,
+                              MTL::ResourceUsage usage);
+  DECLARE_FUNCTION_SERIALISED(void, memoryBarrierWithScope, MTL::BarrierScope scope);
+  DECLARE_FUNCTION_SERIALISED(void, memoryBarrierWithResources, rdcarray<WrappedMTLResource *> resources);
+  DECLARE_FUNCTION_SERIALISED(void, pushDebugGroup, NS::String *string);
+  DECLARE_FUNCTION_SERIALISED(void, insertDebugSignpost, NS::String *string);
+  DECLARE_FUNCTION_SERIALISED(void, popDebugGroup);
   DECLARE_FUNCTION_SERIALISED(void, setComputePipelineState,
                               WrappedMTLComputePipelineState *pipeline);
+  void setVisibleFunctionTable(WrappedMTLVisibleFunctionTable *table, uint32_t index);
+  template <typename SerialiserType>
+  bool Serialise_setVisibleFunctionTable(SerialiserType &ser,
+                                         WrappedMTLVisibleFunctionTable *table, uint32_t index);
+  void setVisibleFunctionTables(rdcarray<WrappedMTLVisibleFunctionTable *> tables, NS::Range range);
+  template <typename SerialiserType>
+  bool Serialise_setVisibleFunctionTables(SerialiserType &ser,
+      rdcarray<WrappedMTLVisibleFunctionTable *> tables, NS::Range range);
+  void setIntersectionFunctionTable(WrappedMTLIntersectionFunctionTable *table, uint32_t index);
+  template <typename SerialiserType>
+  bool Serialise_setIntersectionFunctionTable(SerialiserType &ser,
+      WrappedMTLIntersectionFunctionTable *table, uint32_t index);
+  void setIntersectionFunctionTables(rdcarray<WrappedMTLIntersectionFunctionTable *> tables,
+                                     NS::Range range);
+  template <typename SerialiserType>
+  bool Serialise_setIntersectionFunctionTables(SerialiserType &ser,
+      rdcarray<WrappedMTLIntersectionFunctionTable *> tables, NS::Range range);
   DECLARE_FUNCTION_SERIALISED(void, setTexture, WrappedMTLTexture *texture, NS::UInteger index);
   DECLARE_FUNCTION_SERIALISED(void, setTextures, rdcarray<WrappedMTLTexture *> textures,
+                              NS::Range range);
+  DECLARE_FUNCTION_SERIALISED(void, setSamplerStateWithLOD, WrappedMTLSamplerState *sampler,
+                              float lodMinClamp, float lodMaxClamp, NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setSamplerStatesWithLOD,
+                              rdcarray<WrappedMTLSamplerState *> samplers,
+                              rdcarray<float> lodMinClamps, rdcarray<float> lodMaxClamps,
                               NS::Range range);
   DECLARE_FUNCTION_SERIALISED(void, setSamplerState, WrappedMTLSamplerState *sampler,
                               NS::UInteger index);
   DECLARE_FUNCTION_SERIALISED(void, setSamplerStates,
                               rdcarray<WrappedMTLSamplerState *> samplers, NS::Range range);
   DECLARE_FUNCTION_SERIALISED(void, setBuffer, WrappedMTLBuffer *buffer, NS::UInteger offset,
+                              NS::UInteger index);
+  void setAccelerationStructure(WrappedMTLAccelerationStructure *structure,
+                                NS::UInteger index);
+  template <typename SerialiserType>
+  bool Serialise_setAccelerationStructure(SerialiserType &ser,
+                                          WrappedMTLAccelerationStructure *structure,
+                                          NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setBytes, rdcarray<byte> data, NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setBufferOffset, NS::UInteger offset, NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setThreadgroupMemoryLength, NS::UInteger length,
                               NS::UInteger index);
   DECLARE_FUNCTION_SERIALISED(void, setBuffers, rdcarray<WrappedMTLBuffer *> buffers,
                               rdcarray<NS::UInteger> offsets, NS::Range range);

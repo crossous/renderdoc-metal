@@ -60,6 +60,10 @@ static const uint32_t MetalComputeSamplerDescriptorOffset = 0x1000;
 
 static uint32_t MetalDescriptorSlot(const DescriptorAccess &access)
 {
+  // Argument-buffer member descriptors use a separate address space, not direct FS slots.
+  if(access.stage == ShaderStage::Fragment && access.type == DescriptorType::Buffer &&
+     access.byteOffset >= 0x2000 && access.byteOffset < 0x2000 + 32 * 32)
+    return (access.byteOffset - 0x2000) % 32;
   if(access.stage == ShaderStage::Compute && access.type == DescriptorType::Sampler &&
      access.byteOffset >= MetalComputeSamplerDescriptorOffset)
     return access.byteOffset - MetalComputeSamplerDescriptorOffset;
@@ -844,13 +848,19 @@ void MetalPipelineStateViewer::SetState()
   m_PipeFlow->setStagesEnabled(
       {true, vertexShader != ResourceId(), true, fragmentShader != ResourceId(), true, false});
 
+  rdcarray<UsedDescriptor> vertexResources =
+      pipe.GetReadOnlyResources(ShaderStage::Vertex, !m_ShowUnused->isChecked());
   for(const UsedDescriptor &binding :
-      pipe.GetReadOnlyResources(ShaderStage::Vertex, !m_ShowUnused->isChecked()))
+      pipe.GetReadWriteResources(ShaderStage::Vertex, !m_ShowUnused->isChecked()))
+    if(binding.access.type == DescriptorType::ReadWriteBuffer)
+      vertexResources.push_back(binding);
+  for(const UsedDescriptor &binding : vertexResources)
   {
     const Descriptor &descriptor = binding.descriptor;
     if(descriptor.resource == ResourceId())
       continue;
-    if(binding.access.type == DescriptorType::Buffer)
+    if(binding.access.type == DescriptorType::Buffer ||
+       binding.access.type == DescriptorType::ReadWriteBuffer)
     {
       RDTreeWidgetItem *item = AddResourceRow(
           m_VertexStorageBuffers,

@@ -37,6 +37,16 @@
 #include "metal_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
+#include "metal_fence.h"
+#include "metal_event.h"
+#include "metal_heap.h"
+#include "metal_rate_map.h"
+#include "metal_counter_sample_buffer.h"
+#include "metal_dynamic_library.h"
+#include "metal_binary_archive.h"
+#include "metal_visible_function_table.h"
+#include "metal_acceleration_structure.h"
+#include "metal_acceleration_structure_command_encoder.h"
 #include "metal_indirect_command_buffer.h"
 #include "metal_texture.h"
 
@@ -50,6 +60,8 @@ bool MetalResourceManager::ResourceTypeRelease(WrappedResourceType res)
 
   if(real && res->m_ObjcBridge)
   {
+    if(res->m_Type == eResHeap)
+      objc_setAssociatedObject((id)real, real, NULL, OBJC_ASSOCIATION_ASSIGN);
     // The real object owns the embedded bridge through this association. Removing it invokes the
     // bridge's dealloc path, which unregisters and deletes the correctly typed C++ wrapper.
     objc_setAssociatedObject((id)real, res->m_ObjcBridge, NULL, OBJC_ASSOCIATION_ASSIGN);
@@ -86,6 +98,36 @@ bool MetalResourceManager::ResourceTypeRelease(WrappedResourceType res)
         ReleaseWrappedResource((WrappedMTLArgumentEncoder *)res);
         break;
       case eResSamplerState: ReleaseWrappedResource((WrappedMTLSamplerState *)res); break;
+      case eResFence: ReleaseWrappedResource((WrappedMTLFence *)res); break;
+      case eResEvent: ReleaseWrappedResource((WrappedMTLEvent *)res); break;
+      case eResHeap: ReleaseWrappedResource((WrappedMTLHeap *)res); break;
+      case eResRasterizationRateMap:
+        ReleaseWrappedResource((WrappedMTLRasterizationRateMap *)res);
+        break;
+      case eResCounterSampleBuffer:
+        ReleaseWrappedResource((WrappedMTLCounterSampleBuffer *)res);
+        break;
+      case eResDynamicLibrary:
+        ReleaseWrappedResource((WrappedMTLDynamicLibrary *)res);
+        break;
+      case eResBinaryArchive:
+        ReleaseWrappedResource((WrappedMTLBinaryArchive *)res);
+        break;
+      case eResFunctionHandle:
+        ReleaseWrappedResource((WrappedMTLFunctionHandle *)res);
+        break;
+      case eResVisibleFunctionTable:
+        ReleaseWrappedResource((WrappedMTLVisibleFunctionTable *)res);
+        break;
+      case eResIntersectionFunctionTable:
+        ReleaseWrappedResource((WrappedMTLIntersectionFunctionTable *)res);
+        break;
+      case eResAccelerationStructure:
+        ReleaseWrappedResource((WrappedMTLAccelerationStructure *)res);
+        break;
+      case eResAccelerationStructureCommandEncoder:
+        ReleaseWrappedResource((WrappedMTLAccelerationStructureCommandEncoder *)res);
+        break;
       case eResIndirectCommandBuffer:
         ReleaseWrappedResource((WrappedMTLIndirectCommandBuffer *)res);
         break;
