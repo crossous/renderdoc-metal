@@ -35,6 +35,7 @@
 #include "metal_function.h"
 #include "metal_library.h"
 #include "metal_render_command_encoder.h"
+#include "metal_parallel_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
 #include "metal_fence.h"
@@ -60,7 +61,9 @@ bool MetalResourceManager::ResourceTypeRelease(WrappedResourceType res)
 
   if(real && res->m_ObjcBridge)
   {
-    if(res->m_Type == eResHeap)
+    if(res->m_Type == eResHeap || res->m_Type == eResBuffer || res->m_Type == eResTexture ||
+       res->m_Type == eResVisibleFunctionTable || res->m_Type == eResIntersectionFunctionTable ||
+       res->m_Type == eResAccelerationStructure)
       objc_setAssociatedObject((id)real, real, NULL, OBJC_ASSOCIATION_ASSIGN);
     // The real object owns the embedded bridge through this association. Removing it invokes the
     // bridge's dealloc path, which unregisters and deletes the correctly typed C++ wrapper.
@@ -84,6 +87,9 @@ bool MetalResourceManager::ResourceTypeRelease(WrappedResourceType res)
       case eResTexture: ReleaseWrappedResource((WrappedMTLTexture *)res); break;
       case eResRenderCommandEncoder:
         ReleaseWrappedResource((WrappedMTLRenderCommandEncoder *)res);
+        break;
+      case eResParallelRenderCommandEncoder:
+        ReleaseWrappedResource((WrappedMTLParallelRenderCommandEncoder *)res);
         break;
       case eResBlitCommandEncoder:
         ReleaseWrappedResource((WrappedMTLBlitCommandEncoder *)res);

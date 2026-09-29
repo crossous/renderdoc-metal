@@ -331,6 +331,24 @@ public:
   void CaptureCmdBufEnqueue(MetalResourceRecord *cbRecord);
 
   void AddFrameCaptureRecordChunk(Chunk *chunk) { m_FrameCaptureRecord->AddChunk(chunk); }
+  void RegisterCapturedFrameResource(ResourceId id)
+  {
+    SCOPED_LOCK(m_CapturedFrameResourcesLock);
+    m_CapturedFrameResources.insert(id);
+  }
+  void RegisterFramePlacementResource(ResourceId id, WrappedMTLHeap *heap)
+  {
+    m_FramePlacementResources[id] = heap;
+  }
+  bool IsFramePlacementResource(ResourceId id) const
+  {
+    return m_FramePlacementResources.count(id) != 0;
+  }
+  void RegisterFrameBufferTextureView(ResourceId id) { m_FrameBufferTextureViews.insert(id); }
+  bool IsFrameBufferTextureView(ResourceId id) const
+  {
+    return m_FrameBufferTextureViews.count(id) != 0;
+  }
   void RegisterBufferTextureParent(ResourceId texture, ResourceId buffer);
   // From ResourceManager interface
   bool Prepare_InitialState(WrappedMTLObject *res);
@@ -348,6 +366,7 @@ public:
   void RegisterDrawableInfo(CA::MetalDrawable *caMtlDrawable, MTL::Texture *realTexture);
   MetalDrawableInfo UnregisterDrawableInfo(MTL::Drawable *mtlDrawable);
   static WrappedMTLTexture *GetDrawableTexture(MTL::Drawable *mtlDrawable);
+  void PresentDrawable(CA::MetalDrawable *drawable);
 
   void AddEvent();
   void AddAction(const ActionDescription &a);
@@ -369,30 +388,47 @@ public:
   void SetReplayRenderTarget(ResourceId target) { m_ReplayRenderTarget = target; }
   ResourceId GetReplayRenderTarget() const { return m_ReplayRenderTarget; }
   bool SetReplayCommandBuffer(WrappedMTLCommandBuffer *commandBuffer);
-  bool CanEncodeReplayEvent(WrappedMTLCommandBuffer *buffer) const
-  {
-    return buffer == m_ReplayCommandBuffer && !m_ReplayCommandBufferCommitted &&
-           !m_ReplayRenderCommandEncoder && !m_ReplayComputeCommandEncoder &&
-           !m_ReplayBlitCommandEncoder && !m_ReplayAccelerationStructureCommandEncoder;
-  }
+  bool SelectReplayCommandBuffer(WrappedMTLCommandBuffer *buffer);
+  bool CanEncodeReplayEvent(WrappedMTLCommandBuffer *buffer);
+  bool IsReplayCommandBufferCommitted(WrappedMTLCommandBuffer *buffer) const;
   bool ReplayCPUBufferUpdate(WrappedMTLBuffer *buffer, uint64_t start, const bytebuf &data);
   bool RecordReplayBufferInitialContents(ResourceId id, const bytebuf &contents);
+  bool RestoreReplayPrivateBufferInitialContents();
+  bool RecordReplayBCTextureInitialContents(ResourceId id, const bytebuf &contents);
+  bool RestoreReplayBCTextureInitialContents();
   WrappedMTLRenderCommandEncoder *GetReplayRenderCommandEncoder() const
   {
     return m_ReplayRenderCommandEncoder;
+  }
+  WrappedMTLRenderCommandEncoder *GetReplayRenderCommandEncoder(
+      WrappedMTLRenderCommandEncoder *encoder);
+  WrappedMTLParallelRenderCommandEncoder *GetReplayParallelRenderCommandEncoder() const
+  {
+    return m_ReplayParallelRenderCommandEncoder;
+  }
+  WrappedMTLParallelRenderCommandEncoder *GetReplayParallelRenderCommandEncoder(
+      WrappedMTLParallelRenderCommandEncoder *encoder);
+  void SetReplayParallelRenderCommandEncoder(WrappedMTLParallelRenderCommandEncoder *encoder)
+  {
+    m_ReplayParallelRenderCommandEncoder = encoder;
   }
   WrappedMTLBlitCommandEncoder *GetReplayBlitCommandEncoder() const
   {
     return m_ReplayBlitCommandEncoder;
   }
+  WrappedMTLBlitCommandEncoder *GetReplayBlitCommandEncoder(WrappedMTLBlitCommandEncoder *encoder);
   WrappedMTLComputeCommandEncoder *GetReplayComputeCommandEncoder() const
   {
     return m_ReplayComputeCommandEncoder;
   }
+  WrappedMTLComputeCommandEncoder *GetReplayComputeCommandEncoder(
+      WrappedMTLComputeCommandEncoder *encoder);
   WrappedMTLAccelerationStructureCommandEncoder *GetReplayAccelerationStructureCommandEncoder() const
   {
     return m_ReplayAccelerationStructureCommandEncoder;
   }
+  WrappedMTLAccelerationStructureCommandEncoder *GetReplayAccelerationStructureCommandEncoder(
+      WrappedMTLAccelerationStructureCommandEncoder *encoder);
   void SetReplayRenderCommandEncoder(WrappedMTLRenderCommandEncoder *encoder)
   {
     m_ReplayRenderCommandEncoder = encoder;
@@ -410,7 +446,9 @@ public:
   {
     m_ReplayComputeCommandEncoder = encoder;
   }
-  void MarkReplayCommandBufferCommitted() { m_ReplayCommandBufferCommitted = true; }
+  void MarkReplayCommandBufferCommitted();
+  void AssignPendingReplayCPUBufferUpdates(WrappedMTLCommandBuffer *buffer);
+  bool ApplyReplayCPUBufferUpdates(WrappedMTLCommandBuffer *buffer);
 
   enum
   {
@@ -420,6 +458,7 @@ public:
   static uint64_t g_nextDrawableTLSSlot;
   static IMP g_real_CAMetalLayer_nextDrawable;
   static IMP g_real_CAMetalDrawable_texture;
+  static IMP g_real_CAMetalDrawable_present;
 
 private:
   static void MTLFixupForMetalDriverAssert();
@@ -430,6 +469,7 @@ private:
 
   void CaptureClearSubmittedCmdBuffers();
   void CaptureCmdBufSubmit(MetalResourceRecord *record);
+  void ReleaseCapturedCommandBuffer(MetalResourceRecord *record);
   void EndCaptureFrame(ResourceId backbuffer);
 
   template <typename SerialiserType>
@@ -442,7 +482,7 @@ private:
   bool ProcessChunk(ReadSerialiser &ser, MetalChunk chunk);
   RDResult ContextReplayLog(CaptureState readType, uint32_t endEventID,
                             ReplayLogType replayType);
-  void FinishReplayCommands();
+  bool FinishReplayCommands();
   bool ResetReplayCPUUpdatedBuffers();
   WrappedMTLTexture *Common_NewTexture(RDMTL::TextureDescriptor &descriptor, MetalChunk chunkType,
                                        bool ioSurfaceTexture, IOSurfaceRef iosurface,
@@ -454,6 +494,10 @@ private:
   MetalResourceManager *m_ResourceManager = NULL;
   uint64_t m_ReplayEpoch = 0;
   uint64_t m_CaptureEpoch = 0;
+  Threading::CriticalSection m_CapturedFrameResourcesLock;
+  std::set<ResourceId> m_CapturedFrameResources;
+  std::map<ResourceId, WrappedMTLHeap *> m_FramePlacementResources;
+  std::set<ResourceId> m_FrameBufferTextureViews;
   ResourceId m_LastPresentedImage;
   ResourceId m_ReplayRenderTarget;
 
@@ -471,6 +515,7 @@ private:
   WrappedMTLVisibleFunctionTable *m_DummyReplayVisibleFunctionTable = NULL;
   WrappedMTLIntersectionFunctionTable *m_DummyReplayIntersectionFunctionTable = NULL;
   WrappedMTLRenderCommandEncoder *m_DummyReplayRenderCommandEncoder = NULL;
+  WrappedMTLParallelRenderCommandEncoder *m_DummyReplayParallelRenderCommandEncoder = NULL;
   WrappedMTLBlitCommandEncoder *m_DummyReplayBlitCommandEncoder = NULL;
   WrappedMTLAccelerationStructureCommandEncoder *
       m_DummyReplayAccelerationStructureCommandEncoder = NULL;
@@ -487,6 +532,7 @@ private:
   Threading::CriticalSection m_CaptureOutputLayersLock;
   std::unordered_set<CA::MetalLayer *> m_CaptureOutputLayers;
   WrappedMTLTexture *m_CapturedBackbuffer = NULL;
+  std::atomic<bool> m_DirectPresentEndPending{false};
   Threading::CriticalSection m_CaptureDrawablesLock;
   rdcflatmap<MTL::Drawable *, MetalDrawableInfo> m_CaptureDrawableInfos;
 
@@ -494,21 +540,40 @@ private:
   StreamReader *m_FrameReader = NULL;
   uint64_t m_CurChunkOffset = 0;
   WrappedMTLCommandBuffer *m_ReplayCommandBuffer = NULL;
+  struct ReplayCommandBufferState
+  {
+    WrappedMTLCommandBuffer *buffer = NULL;
+    WrappedMTLRenderCommandEncoder *render = NULL;
+    WrappedMTLParallelRenderCommandEncoder *parallel = NULL;
+    WrappedMTLBlitCommandEncoder *blit = NULL;
+    WrappedMTLAccelerationStructureCommandEncoder *acceleration = NULL;
+    WrappedMTLComputeCommandEncoder *compute = NULL;
+    ResourceId renderTarget;
+    bool committed = false;
+    bool cpuUpdatesApplied = false;
+  };
+  std::map<ResourceId, ReplayCommandBufferState> m_ReplayCommandBuffers;
+  rdcarray<ResourceId> m_ReplayCommandBufferOrder;
   WrappedMTLRenderCommandEncoder *m_ReplayRenderCommandEncoder = NULL;
+  WrappedMTLParallelRenderCommandEncoder *m_ReplayParallelRenderCommandEncoder = NULL;
   WrappedMTLBlitCommandEncoder *m_ReplayBlitCommandEncoder = NULL;
   WrappedMTLAccelerationStructureCommandEncoder *m_ReplayAccelerationStructureCommandEncoder = NULL;
   WrappedMTLComputeCommandEncoder *m_ReplayComputeCommandEncoder = NULL;
   bool m_ReplayCommandBufferCommitted = false;
+  bool m_ReplayChunkIsGPUWork = false;
   struct CPUBufferUpdate
   {
     ResourceId buffer;
     uint64_t offset;
     bytebuf data;
   };
-  // Snapshot updates are captured at submission, after the encoded draw chunks. Apply them at
-  // their command buffer's start during event replay, including partial replay before commit.
+  // Snapshot updates are captured immediately before submission, after the encoded GPU chunks.
+  // Associate them with that submission during loading, then apply them before its replay commit
+  // (including a partial replay's final implicit commit), once per command buffer.
   std::map<ResourceId, rdcarray<CPUBufferUpdate>> m_ReplayCPUBufferUpdates;
+  rdcarray<CPUBufferUpdate> m_PendingReplayCPUBufferUpdates;
   std::map<ResourceId, bytebuf> m_ReplayBufferInitialContents;
+  std::map<ResourceId, bytebuf> m_ReplayBCTextureInitialContents;
   // Includes unchanged Shared initial states as well as buffers with frame CPU writes.
   std::set<ResourceId> m_ReplayCPUUpdatedBuffers;
   Threading::CriticalSection m_BufferTextureParentsLock;

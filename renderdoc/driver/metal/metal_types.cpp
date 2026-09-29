@@ -41,6 +41,7 @@
 #include "metal_library.h"
 #include "metal_manager.h"
 #include "metal_render_command_encoder.h"
+#include "metal_parallel_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
 #include "metal_fence.h"
@@ -75,6 +76,12 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
       RDCFATAL("'%s' objc != m_ObjcBridge %p != %p", className, objc, &wrappedCPP->m_ObjcBridge); \
     }                                                                                             \
     MTL::CPPTYPE *real = (MTL::CPPTYPE *)wrappedCPP->m_Real;                                      \
+    if(real && (WrappedMTL##CPPTYPE::TypeEnum == eResBuffer ||                                 \
+                WrappedMTL##CPPTYPE::TypeEnum == eResTexture ||                                \
+                WrappedMTL##CPPTYPE::TypeEnum == eResVisibleFunctionTable ||                   \
+                WrappedMTL##CPPTYPE::TypeEnum == eResIntersectionFunctionTable ||              \
+                WrappedMTL##CPPTYPE::TypeEnum == eResAccelerationStructure))                   \
+      objc_setAssociatedObject((id)real, real, objc, OBJC_ASSOCIATION_ASSIGN);                    \
     if(WrappedMTL##CPPTYPE::TypeEnum == eResLibrary ||                                          \
        WrappedMTL##CPPTYPE::TypeEnum == eResFunction ||                                        \
        WrappedMTL##CPPTYPE::TypeEnum == eResRenderPipelineState ||                             \
@@ -89,6 +96,20 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
       wrappedCPP->m_OwnsReal = true;                                                           \
       return;                                                                                 \
     }                                                                                         \
+    if(WrappedMTL##CPPTYPE::TypeEnum == eResCommandBuffer ||                                  \
+       WrappedMTL##CPPTYPE::TypeEnum == eResBlitCommandEncoder ||                            \
+       WrappedMTL##CPPTYPE::TypeEnum == eResComputeCommandEncoder ||                         \
+       WrappedMTL##CPPTYPE::TypeEnum == eResRenderCommandEncoder ||                          \
+       WrappedMTL##CPPTYPE::TypeEnum == eResParallelRenderCommandEncoder ||                  \
+       WrappedMTL##CPPTYPE::TypeEnum == eResAccelerationStructureCommandEncoder)            \
+    {                                                                                         \
+      /* Command buffers and encoders are autoreleased native objects. Keep one native        \
+       * reference until the app releases its independently owned proxy, across pools. */     \
+      if(real) real->retain();                                                                 \
+      wrappedCPP->m_OwnsReal = true;                                                           \
+      ((MTL::CPPTYPE *)objc)->autorelease();                                                    \
+      return;                                                                                 \
+    }                                                                                         \
     if(real)                                                                                      \
     {                                                                                             \
       objc_setAssociatedObject((id)real, objc, objc, OBJC_ASSOCIATION_RETAIN);                    \
@@ -98,6 +119,10 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
   void DeallocateObjCBridge(WrappedMTL##CPPTYPE *wrappedCPP)                                      \
   {                                                                                               \
     NS::Object *ownedReal = wrappedCPP->m_OwnsReal ? (NS::Object *)wrappedCPP->m_Real : NULL;    \
+    if(ownedReal && (WrappedMTL##CPPTYPE::TypeEnum == eResVisibleFunctionTable ||              \
+                     WrappedMTL##CPPTYPE::TypeEnum == eResIntersectionFunctionTable ||           \
+                     WrappedMTL##CPPTYPE::TypeEnum == eResAccelerationStructure))                \
+      objc_setAssociatedObject((id)ownedReal, ownedReal, NULL, OBJC_ASSOCIATION_ASSIGN);         \
     if(ownedReal)                                                                             \
       objc_destructInstance((id)wrappedCPP);                                                  \
     wrappedCPP->m_ObjcBridge = NULL;                                                              \
@@ -918,7 +943,9 @@ RenderPassDescriptor::operator MTL::RenderPassDescriptor *()
 
 ComputePassSampleBufferAttachmentDescriptor::ComputePassSampleBufferAttachmentDescriptor(
     MTL::ComputePassSampleBufferAttachmentDescriptor *objc)
-    : startOfEncoderSampleIndex(objc->startOfEncoderSampleIndex()),
+    : sampleBuffer(GetWrapped(objc->sampleBuffer())),
+      sampleBufferId(GetResID(sampleBuffer)),
+      startOfEncoderSampleIndex(objc->startOfEncoderSampleIndex()),
       endOfEncoderSampleIndex(objc->endOfEncoderSampleIndex())
 {
 }
@@ -926,8 +953,7 @@ ComputePassSampleBufferAttachmentDescriptor::ComputePassSampleBufferAttachmentDe
 void ComputePassSampleBufferAttachmentDescriptor::CopyTo(
     MTL::ComputePassSampleBufferAttachmentDescriptor *objc)
 {
-  // TODO: when WrappedMTLCounterSampleBuffer exists
-  // objc->setSampleBuffer(Unwrap(sampleBuffer));
+  objc->setSampleBuffer(Unwrap(sampleBuffer));
   objc->setStartOfEncoderSampleIndex(startOfEncoderSampleIndex);
   objc->setEndOfEncoderSampleIndex(endOfEncoderSampleIndex);
 }

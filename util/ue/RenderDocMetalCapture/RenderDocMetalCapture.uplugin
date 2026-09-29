@@ -1,0 +1,18 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1",
+  "FriendlyName": "RenderDoc Metal Capture",
+  "Description": "One-frame RenderDoc Metal capture from the UE editor viewport.",
+  "Category": "Developer Tools",
+  "EnabledByDefault": true,
+  "CanContainContent": false,
+  "Modules": [
+    {
+      "Name": "RenderDocMetalCapture",
+      "Type": "Editor",
+      "LoadingPhase": "PostEngineInit",
+      "PlatformAllowList": ["Mac"]
+    }
+  ]
+}

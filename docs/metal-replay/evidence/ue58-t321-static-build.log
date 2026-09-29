@@ -1,0 +1,279 @@
+[1/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/common/common.cpp.o
+[2/278] Building CXX object renderdoc/CMakeFiles/include-bin.dir/3rdparty/include-bin/main.cpp.o
+[3/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/common/dds_readwrite.cpp.o
+[4/278] Building CXX object renderdoc/CMakeFiles/renderdoc_libentry.dir/os/posix/posix_libentry.cpp.o
+[5/278] Linking CXX executable bin/include-bin
+[6/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/common/jobsystem.cpp.o
+[7/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/common/threading_tests.cpp.o
+[8/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/image_viewer.cpp.o
+[9/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/gpu_address_range_tracker.cpp.o
+[10/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/target_control.cpp.o
+[11/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/settings.cpp.o
+[12/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/remote_server.cpp.o
+[13/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/bit_flag_iterator_tests.cpp.o
+[14/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/intervals_tests.cpp.o
+[15/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/android/android_tools.cpp.o
+[16/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/android/android.cpp.o
+[17/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/core.cpp.o
+[18/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/replay_proxy.cpp.o
+[19/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/android/jdwp.cpp.o
+[20/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/android/jdwp_util.cpp.o
+[21/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/android/android_utils.cpp.o
+[22/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/android/jdwp_connection.cpp.o
+[23/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/plugins.cpp.o
+[24/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/hooks/hooks.cpp.o
+[25/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/resource_manager.cpp.o
+[26/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/maths/camera.cpp.o
+[27/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/maths/matrix.cpp.o
+[28/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/maths/formatpacking.cpp.o
+[29/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/maths/vec.cpp.o
+[30/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/core/sparse_page_table.cpp.o
+[31/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/replay/app_api.cpp.o
+[32/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/os_specific.cpp.o
+[33/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/replay/capture_options.cpp.o
+[34/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/replay/dummy_driver.cpp.o
+[35/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/replay/capture_file.cpp.o
+[36/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/replay/entry_points.cpp.o
+[37/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/replay/basic_types_tests.cpp.o
+[38/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/replay/replay_output.cpp.o
+[39/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/replay/replay_driver.cpp.o
+[40/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/lz4io.cpp.o
+[41/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/zstdio.cpp.o
+[42/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/serialiser.cpp.o
+[43/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/replay/replay_controller.cpp.o
+[44/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/streamio.cpp.o
+[45/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/rdcfile.cpp.o
+[46/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/codecs/chrome_json_codec.cpp.o
+[47/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/codecs/xml_codec.cpp.o
+[48/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/comp_io_tests.cpp.o
+[49/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/strings/grisu2.cpp.o
+[50/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/streamio_tests.cpp.o
+[51/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/shaders/controlflow.cpp.o
+[52/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/strings/string_utils.cpp.o
+[53/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/jpeg-compressor/jpge.cpp.o
+[54/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/jpeg-compressor/jpgd.cpp.o
+[55/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/serialise/serialiser_tests.cpp.o
+[56/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/strings/utf8printf.cpp.o
+[57/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/lz4/lz4.c.o
+[58/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/md5/md5.c.o
+[59/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/pugixml/pugixml.cpp.o
+[60/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/miniz/miniz.c.o
+[61/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/debug.c.o
+[62/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/error_private.c.o
+[63/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/entropy_common.c.o
+[64/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/fse_compress.c.o
+[65/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/fse_decompress.c.o
+[66/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/hist.c.o
+[67/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/huf_compress.c.o
+[68/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/superluminal/superluminal.cpp.o
+[69/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/threading.c.o
+[70/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/pool.c.o
+[71/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/huf_decompress.c.o
+[72/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/zstd_common.c.o
+[73/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/xxhash.c.o
+[74/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/zstd_compress.c.o
+[75/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/zstd_decompress.c.o
+[76/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/zstd_double_fast.c.o
+[77/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/zstd_fast.c.o
+[78/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/zstd_ldm.c.o
+[79/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/zstd_lazy.c.o
+[80/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/zstdmt_compress.c.o
+[81/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/zstd/zstd_opt.c.o
+[82/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/tinyfiledialogs/tinyfiledialogs.c.o
+[83/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/apple/apple_stringio.cpp.o
+[84/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/tinyexr/tinyexr.cpp.o
+[85/278] Building C object renderdoc/CMakeFiles/rdoc.dir/3rdparty/stb/stb_impl.c.o
+[86/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/apple/apple_callstack.cpp.o
+[87/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/apple/apple_process.cpp.o
+[88/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/apple/apple_threading.cpp.o
+[89/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/catch/catch.cpp.o
+[90/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/apple/apple_helpers.mm.o
+[91/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/apple/apple_hook.cpp.o
+[92/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/apple/apple_network.cpp.o
+[93/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/posix_network.cpp.o
+[94/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/posix_stringio.cpp.o
+[95/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/posix_threading.cpp.o
+[96/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/compressonator/BC1_Encode_kernel.cpp.o
+[97/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/os/posix/posix_process.cpp.o
+[98/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/compressonator/BC2_Encode_kernel.cpp.o
+[99/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/compressonator/BC3_Encode_kernel.cpp.o
+[100/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/compressonator/BC4_Encode_kernel.cpp.o
+[101/278] Building CXX object renderdoc/CMakeFiles/rdoc_version.dir/replay/version.cpp.o
+[102/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/compressonator/BC5_Encode_kernel.cpp.o
+[103/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/compressonator/BC6_Encode_kernel.cpp.o
+[104/278] Building CXX object renderdoc/CMakeFiles/rdoc.dir/3rdparty/compressonator/BC7_Encode_Kernel.cpp.o
+[105/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_dispatch_table_bridge.mm.o
+[106/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_hook.cpp.o
+[107/278] Linking CXX static library renderdoc/librenderdoc_libentry.a
+[108/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_hook_bridge.mm.o
+[109/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_device_library.cpp.o
+[110/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_device.cpp.o
+[111/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_device_pipeline.cpp.o
+[112/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_device_async.cpp.o
+[113/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_device_bridge.mm.o
+[114/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_depth_stencil_state.cpp.o
+[115/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_resources.cpp.o
+[116/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_depth_stencil_state_bridge.mm.o
+[117/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_types.cpp.o
+[118/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_function.cpp.o
+[119/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_library_bridge.mm.o
+[120/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_library.cpp.o
+[121/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_function_bridge.mm.o
+[122/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_common.cpp.o
+[123/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_function_constants.mm.o
+[124/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_command_queue.cpp.o
+[125/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_command_queue_bridge.mm.o
+[126/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_command_buffer_bridge.mm.o
+[127/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_render_pipeline_state.cpp.o
+[128/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_command_buffer.cpp.o
+[129/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_render_pipeline_state_bridge.mm.o
+[130/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_visible_function_table_bridge.mm.o
+[131/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_visible_function_table.cpp.o
+[132/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_acceleration_structure.cpp.o
+[133/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_acceleration_structure_bridge.mm.o
+[134/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_sampler_state.cpp.o
+[135/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_acceleration_structure_command_encoder_bridge.mm.o
+[136/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_acceleration_structure_command_encoder.cpp.o
+[137/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_fence.cpp.o
+[138/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_event.cpp.o
+[139/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_event_bridge.mm.o
+[140/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_fence_bridge.mm.o
+[141/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_heap.cpp.o
+[142/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_heap_bridge.mm.o
+[143/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_rate_map.cpp.o
+[144/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_rate_map_bridge.mm.o
+[145/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_counter_sample_buffer.cpp.o
+[146/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_counter_sample_buffer_bridge.mm.o
+[147/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_dynamic_library.cpp.o
+[148/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_dynamic_library_bridge.mm.o
+[149/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_binary_archive.cpp.o
+[150/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_binary_archive_bridge.mm.o
+[151/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_stitched_library.cpp.o
+[152/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_sampler_state_bridge.mm.o
+[153/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_indirect_command_buffer.cpp.o
+[154/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_indirect_command_buffer_bridge.mm.o
+[155/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_texture_bridge.mm.o
+[156/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_texture.cpp.o
+[157/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_buffer.cpp.o
+[158/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_buffer_bridge.mm.o
+[159/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_blit_command_encoder.cpp.o
+[160/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_blit_command_encoder_bridge.mm.o
+[161/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_argument_encoder_bridge.mm.o
+[162/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_argument_encoder.cpp.o
+[163/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_compute_pipeline_state.cpp.o
+[164/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_compute_pipeline_state_bridge.mm.o
+[165/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_compute_command_encoder_bridge.mm.o
+[166/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_compute_command_encoder.cpp.o
+[167/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_render_command_encoder_bridge.mm.o
+[168/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_render_command_encoder.cpp.o
+[169/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_parallel_render_command_encoder.cpp.o
+[170/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_parallel_render_command_encoder_bridge.mm.o
+[171/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_helpers_bridge.mm.o
+[172/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_core.cpp.o
+[173/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_manager.cpp.o
+[174/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_init_state.cpp.o
+[175/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/official/metal-cpp.cpp.o
+[176/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_stringise.cpp.o
+[177/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_serialise.cpp.o
+[178/278] Building CXX object renderdoc/driver/ihv/amd/CMakeFiles/rdoc_amd.dir/amd_isa.cpp.o
+[179/278] Building CXX object renderdoc/driver/ihv/amd/CMakeFiles/rdoc_amd.dir/amd_isa_devices.cpp.o
+[180/278] Building CXX object renderdoc/driver/ihv/amd/CMakeFiles/rdoc_amd.dir/amd_counters.cpp.o
+[181/278] Building CXX object renderdoc/driver/ihv/amd/CMakeFiles/rdoc_amd.dir/amd_isa_posix.cpp.o
+[182/278] Building CXX object renderdoc/driver/ihv/amd/CMakeFiles/rdoc_amd.dir/amd_rgp.cpp.o
+[183/278] Building CXX object renderdoc/driver/metal/CMakeFiles/rdoc_metal.dir/metal_replay.cpp.o
+[184/278] Generating CMakeFiles/data.src/data/glsl/depth_copy.frag.c
+[185/278] Generating CMakeFiles/data.src/data/glsl/blit.vert.c
+[186/278] Generating CMakeFiles/data.src/data/glsl/checkerboard.frag.c
+[187/278] Generating CMakeFiles/data.src/data/glsl/depth_copyms.frag.c
+[188/278] Generating CMakeFiles/data.src/data/glsl/fixedcol.frag.c
+[189/278] Generating CMakeFiles/data.src/data/glsl/glsl_ubos.h.c
+[190/278] Generating CMakeFiles/data.src/data/glsl/histogram.comp.c
+[191/278] Generating CMakeFiles/data.src/data/glsl/glsl_globals.h.c
+[192/278] Generating CMakeFiles/data.src/data/glsl/mesh.frag.c
+[193/278] Generating CMakeFiles/data.src/data/glsl/mesh.comp.c
+[194/278] Generating CMakeFiles/data.src/data/glsl/mesh.geom.c
+[195/278] Generating CMakeFiles/data.src/data/glsl/mesh.vert.c
+[196/278] Generating CMakeFiles/data.src/data/glsl/quadresolve.frag.c
+[197/278] Generating CMakeFiles/data.src/data/glsl/minmaxresult.comp.c
+[198/278] Generating CMakeFiles/data.src/data/glsl/minmaxtile.comp.c
+[199/278] Generating CMakeFiles/data.src/data/glsl/quadwrite.frag.c
+[200/278] Generating CMakeFiles/data.src/data/glsl/pixelhistory_primid.frag.c
+[201/278] Generating CMakeFiles/data.src/data/glsl/pixelhistory_mscopy.comp.c
+[202/278] Generating CMakeFiles/data.src/data/glsl/pixelhistory_mscopy_depth.comp.c
+[203/278] Generating CMakeFiles/data.src/data/glsl/shaderdebug_sample.vert.c
+[204/278] Generating CMakeFiles/data.src/data/glsl/texremap.frag.c
+[205/278] Generating CMakeFiles/data.src/data/glsl/texdisplay.frag.c
+[206/278] Generating CMakeFiles/data.src/data/glsl/gles_texsample.h.c
+[207/278] Generating CMakeFiles/data.src/data/glsl/gl_texsample.h.c
+[208/278] Generating CMakeFiles/data.src/data/glsl/gltext.frag.c
+[209/278] Generating CMakeFiles/data.src/data/glsl/vk_texsample.h.c
+[210/278] Generating CMakeFiles/data.src/data/glsl/vktext.frag.c
+[211/278] Generating CMakeFiles/data.src/data/glsl/gltext.vert.c
+[212/278] Generating CMakeFiles/data.src/data/glsl/vktext.vert.c
+[213/278] Generating CMakeFiles/data.src/data/glsl/array2ms.comp.c
+[214/278] Generating CMakeFiles/data.src/data/glsl/trisize.frag.c
+[215/278] Generating CMakeFiles/data.src/data/glsl/ms2array.comp.c
+[216/278] Generating CMakeFiles/data.src/data/glsl/trisize.geom.c
+[217/278] Generating CMakeFiles/data.src/data/glsl/deptharr2ms.frag.c
+[218/278] Generating CMakeFiles/data.src/data/glsl/depthms2arr.frag.c
+[219/278] Generating CMakeFiles/data.src/data/glsl/discard.frag.c
+[220/278] Generating CMakeFiles/data.src/data/glsl/vk_depthbuf2ms.frag.c
+[221/278] Generating CMakeFiles/data.src/data/glsl/vk_ms2buffer.comp.c
+[222/278] Generating CMakeFiles/data.src/data/glsl/vk_buffer2ms.comp.c
+[223/278] Generating CMakeFiles/data.src/data/glsl/vk_depthms2buffer.comp.c
+[224/278] Generating CMakeFiles/data.src/data/glsl/debug_math.comp.c
+[225/278] Generating CMakeFiles/data.src/data/hlsl/quadswizzle.hlsl.c
+[226/278] Generating CMakeFiles/data.src/data/glsl/debug_sample.frag.c
+[227/278] Generating CMakeFiles/data.src/driver/vulkan/renderdoc.json.c
+[228/278] Generating CMakeFiles/data.src/data/sourcecodepro.ttf.c
+[229/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/blit.vert.c.o
+[230/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/checkerboard.frag.c.o
+[231/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/depth_copy.frag.c.o
+[232/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/depth_copyms.frag.c.o
+[233/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/fixedcol.frag.c.o
+[234/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/glsl_ubos.h.c.o
+[235/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/histogram.comp.c.o
+[236/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/glsl_globals.h.c.o
+[237/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/mesh.frag.c.o
+[238/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/mesh.geom.c.o
+[239/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/mesh.comp.c.o
+[240/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/mesh.vert.c.o
+[241/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/minmaxresult.comp.c.o
+[242/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/quadwrite.frag.c.o
+[243/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/minmaxtile.comp.c.o
+[244/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/quadresolve.frag.c.o
+[245/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/pixelhistory_mscopy.comp.c.o
+[246/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/pixelhistory_mscopy_depth.comp.c.o
+[247/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/pixelhistory_primid.frag.c.o
+[248/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/shaderdebug_sample.vert.c.o
+[249/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/texremap.frag.c.o
+[250/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/texdisplay.frag.c.o
+[251/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/gl_texsample.h.c.o
+[252/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/gles_texsample.h.c.o
+[253/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/gltext.frag.c.o
+[254/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/gltext.vert.c.o
+[255/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/vktext.frag.c.o
+[256/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/vk_texsample.h.c.o
+[257/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/trisize.frag.c.o
+[258/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/vktext.vert.c.o
+[259/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/array2ms.comp.c.o
+[260/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/ms2array.comp.c.o
+[261/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/deptharr2ms.frag.c.o
+[262/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/depthms2arr.frag.c.o
+[263/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/discard.frag.c.o
+[264/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/trisize.geom.c.o
+[265/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/vk_buffer2ms.comp.c.o
+[266/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/vk_depthbuf2ms.frag.c.o
+[267/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/vk_ms2buffer.comp.c.o
+[268/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/vk_depthms2buffer.comp.c.o
+[269/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/hlsl/quadswizzle.hlsl.c.o
+[270/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/debug_math.comp.c.o
+[271/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/glsl/debug_sample.frag.c.o
+[272/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/driver/vulkan/renderdoc.json.c.o
+[273/278] Building C object renderdoc/CMakeFiles/renderdoc.dir/CMakeFiles/data.src/data/sourcecodepro.ttf.c.o
+[274/278] Linking CXX shared library lib/librenderdoc.dylib
+ld: warning: ignoring duplicate libraries: '-lc++'
+[275/278] Building CXX object renderdoccmd/CMakeFiles/renderdoccmd.dir/renderdoccmd_apple.cpp.o
+[276/278] Building CXX object renderdoccmd/CMakeFiles/renderdoccmd.dir/apple/cocoa_window.mm.o
+[277/278] Building CXX object renderdoccmd/CMakeFiles/renderdoccmd.dir/renderdoccmd.cpp.o
+[278/278] Linking CXX executable bin/renderdoccmd

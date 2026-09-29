@@ -1,6 +1,69 @@
 # Metal Replay 总体计划
 
+> **实施门槛：**所有新的真实应用失败先按
+> [跨 API 横向排查顺序](CROSS_API_TRIAGE.md)检查 D3D12/Vulkan 的现成方案、
+> UE/Unity 是否专门适配，再只对 Metal 特有约束设计实现；不能直接删守卫。
+
 ## 当前优先级：黑盒回放、稳定性、真实普通帧
+
+09-29 [BATCH321](BATCH321_UE58_CAPTURE_VIEW_ORDER_AND_WATCHDOG.md)：
+`UE58_capture.rdc` 的 buffer view/父 placement buffer 顺序已修于 capture 代码，
+但旧帧推进到帧内 purgeable/GPU 完成时触发 Metal Validation 断言；本机随后
+WindowServer watchdog 重启。此机暂停 GPU 回放，当前代码只做执行前安全拒绝。
+先在别的 Mac 对完成回调与 purgeable 资源回收做原生、注入、API/CLI 和
+必要负例闭环，再考虑当前帧重播；不要宣称该帧已正常开启。
+
+09-29 [BATCH320](BATCH320.md)：`frame1770` 人工 UI 已打开但内容失败。
+先用受控 viewport 按钮取得一个含 UE 场景 render pass 的最小帧，核对
+scope、attachment、GPU 像素；旧帧的 Metal debug group 已在新 viewer
+终端事件树接通。黑色 replay 输出与 Shader Converter GPU VA/资源身份
+缺口需完整小夹具闭环，不能因为 API/CLI 打开成功就宣称画面正确。
+
+09-29 [BATCH319](BATCH319.md)：用户 v0x10 `frame1770` 的帧内 Shared placement
+buffer 重置已修复，同帧有界 API/CLI 打开通过。下一步由用户人工检查当前
+`qrenderdoc.app` 的画面、事件树、资源与异常日志，再取得真正 Empty、
+非 Nanite 最小场景与原生 UE 输出对照。默认 bindless GPU VA 重定位仍需
+独立验证；当前一帧终端打开成功不能证明所有资源数据或 Nanite 正确。
+
+09-29 当前首阻塞见 [BATCH315–318](BATCH315-318.md)：用户 v0xF
+`frame5394` 先命中 typed buffer view，随后命中 BC placement 纹理。
+两族小夹具定向终端通过；BC 帧首纹理快照要求新 v0x10 capture，旧 UE 帧
+明确拒绝。下一步以新库在 Empty、非 Nanite 场景重截一次，随后只做
+一次有日志、超时的 API/CLI 回放。默认 bindless GPU VA 重定位仍是
+待实测缺口；不要用旧 v0xF 帧推断它是当前首阻塞。
+
+09-29 新帧重截和有界回放的终端入口见
+[M7 记录](UE58_M7_RECAPTURE_GATE_2026-09-29.md)。必须先有 v0xF UE 新帧，
+再依据实测首阻塞决定是否实施 Shader Converter bindless 族；静态嫌疑不等于
+回放失败归因。
+
+09-29 [BATCH313–314](BATCH313-314.md) 已在 v0xF 新截帧中定向验证
+placement buffer 的显式 alias 和 UE 风格释放复用，含原生、注入、
+API/CLI、两轮事件回跳及畸形拒绝。旧 v0xE `frame4476` 无释放时序仍
+安全拒绝；下一次 UE 测试需用新库取得 Empty、非 Nanite 最小帧，
+然后只做一次有日志/超时的 API/CLI 打开，定位下一首个真实阻塞。
+默认 bindless 的 GPU VA 重定位未解决，不宣称 UE 普通帧已通过。
+
+09-29 新真实帧 `UE58_frame4476.rdc` 的**第一个**回放阻塞已定位到
+placement heap 区间复用；见[首个阻塞证据](UE58_M6_FRAME4476_PLACEMENT_LIFETIME_2026-09-29.md)。
+横向对照与新格式的定向实现见 BATCH313–314；纹理交叉复用、帧前
+无序释放和复杂 GPU 在途 alias 仍需各自原生/注入验证，不得删除重叠守卫。
+既有 [T133](BATCH131-132.md) 原生/注入正例和回放拒绝为最小复现起点。
+该帧是 `Lvl_FirstPerson` 编辑器视口，后续仍需 Empty、非 Nanite 最小帧。
+旧 `frame833` 的 bindless/GPU 等待问题是另一缺口。
+
+09-29 当前停点见[Private 初始状态与 bindless 审计](UE58_M5_PRIVATE_INITIAL_BINDLESS_2026-09-29.md)：
+`frame833` 仍卡在 GPU command buffer `503251`；优先以小夹具验证 UE
+Shader Converter bindless descriptor 的 GPU 地址/资源 ID 重定位，再取得
+新截帧。**当前项目不要再用 `-BindlessOff` 做截帧入口**：本机 UE 5.8.3
+在该参数下的 `METAL_SM6` 全局着色器编译失败，未创建编辑器窗口；见
+[启动失败证据](UE58_M6_BINDLESSOFF_STARTUP_2026-09-29.md)。先恢复已能启动的
+默认配置，在 Empty、非 Nanite 关卡取得普通帧；bindless 需正面实现和新帧验证。
+
+本机 UE 5.8.3 已有一份真帧定向 CLI/API 回放通过，见
+[STATUS](STATUS.md) 顶部。下一步固定非 Nanite 最小场景，核对原生 UE
+画面/GPU 结果与 RenderDoc 输出，并由用户人工检查 UI 事件树与资源；
+不得把这一份截帧的终端通过外推到 Nanite、全量稳定性或 UI 通过。
 
 按[BLACKBOX_GATE](BLACKBOX_GATE.md)执行：近期不以穷举光追参数或
 降低防御宏计数为目标。先保留安全捕获/必要状态/正确GPU结果的

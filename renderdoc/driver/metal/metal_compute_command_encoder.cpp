@@ -32,6 +32,7 @@
 #include "metal_resource_commands.h"
 #include "metal_texture.h"
 #include "metal_buffer.h"
+#include "metal_heap.h"
 #include "metal_sampler_state.h"
 #include "metal_acceleration_structure.h"
 
@@ -45,6 +46,90 @@ WrappedMTLComputeCommandEncoder::WrappedMTLComputeCommandEncoder(MTL::ComputeCom
 }
 
 template <typename SerialiserType>
+bool WrappedMTLComputeCommandEncoder::Serialise_declareHeaps(
+    SerialiserType &ser, rdcarray<WrappedMTLHeap *> heaps, bool arrayVariant)
+{
+  const bool expectedArrayVariant = arrayVariant;
+  SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
+  SERIALISE_ELEMENT(heaps).Important();
+  SERIALISE_ELEMENT(arrayVariant).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) ||
+       !Unwrap(ComputeCommandEncoder) || heaps.size() > 32 ||
+       arrayVariant != expectedArrayVariant ||
+       (!arrayVariant && heaps.size() != 1))
+    {
+      RDCERR("Invalid Metal compute heap declaration shape or encoder");
+      return false;
+    }
+    rdcarray<const MTL::Heap *> real;
+    for(WrappedMTLHeap *heap : heaps)
+    {
+      if(!heap || heap->m_Type != eResHeap || !heap->m_Real || heap->m_Device != m_Device)
+      {
+        RDCERR("Invalid Metal compute heap declaration resource identity");
+        return false;
+      }
+      real.push_back(Unwrap(heap));
+    }
+    if(!arrayVariant)
+      Unwrap(ComputeCommandEncoder)->useHeap(real[0]);
+    else if(!real.empty())
+      Unwrap(ComputeCommandEncoder)->useHeaps(real.data(), real.size());
+  }
+  return true;
+}
+
+void WrappedMTLComputeCommandEncoder::declareHeaps(rdcarray<WrappedMTLHeap *> heaps,
+                                                   bool arrayVariant)
+{
+  if(heaps.size() > 32 || (!arrayVariant && heaps.size() != 1))
+  {
+    RDCERR("Invalid Metal compute heap declaration count");
+    return;
+  }
+  rdcarray<const MTL::Heap *> real;
+  for(WrappedMTLHeap *heap : heaps)
+  {
+    if(!heap || heap->m_Type != eResHeap || !heap->m_Real || heap->m_Device != m_Device)
+    {
+      RDCERR("Invalid Metal compute heap declaration resource");
+      return;
+    }
+    real.push_back(Unwrap(heap));
+  }
+  auto invoke = [&]() {
+    if(!arrayVariant)
+      Unwrap(this)->useHeap(real[0]);
+    else if(!real.empty())
+      Unwrap(this)->useHeaps(real.data(), real.size());
+  };
+  SERIALISE_TIME_CALL(invoke());
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(arrayVariant ? MetalChunk::MTLComputeCommandEncoder_useHeaps :
+                                          MetalChunk::MTLComputeCommandEncoder_useHeap);
+    Serialise_declareHeaps(ser, heaps, arrayVariant);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    for(WrappedMTLHeap *heap : heaps)
+    {
+      record->AddParent(GetRecord(heap));
+      record->MarkResourceFrameReferenced(GetResID(heap), eFrameRef_Read);
+    }
+  }
+}
+
+template bool WrappedMTLComputeCommandEncoder::Serialise_declareHeaps(
+    ReadSerialiser &, rdcarray<WrappedMTLHeap *>, bool);
+template bool WrappedMTLComputeCommandEncoder::Serialise_declareHeaps(
+    WriteSerialiser &, rdcarray<WrappedMTLHeap *>, bool);
+
+template <typename SerialiserType>
 bool WrappedMTLComputeCommandEncoder::Serialise_useResource(SerialiserType &ser, WrappedMTLResource *resource, MTL::ResourceUsage usage)
 {
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
@@ -54,7 +139,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_useResource(SerialiserType &ser,
   if(IsReplayingAndReading())
   {
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
-       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) ||
        !Unwrap(ComputeCommandEncoder) || !ValidMetalResourceUsage(usageValue) ||
        !ValidMetalResidencyResource(m_Device, resource))
     {
@@ -92,7 +177,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_useResources(SerialiserType &ser
   if(IsReplayingAndReading())
   {
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
-       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) ||
        !Unwrap(ComputeCommandEncoder) || !ValidMetalResourceUsage(usageValue) ||
        !ValidMetalResidencyResources(m_Device, resources))
     {
@@ -134,6 +219,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_memoryBarrierWithScope(Serialise
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || scopeValue == 0 || (scopeValue & ~uint64_t(MTL::BarrierScopeBuffers | MTL::BarrierScopeTextures)) != 0)
     {
       RDCERR("Invalid Metal compute memory barrier");
@@ -167,6 +256,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_memoryBarrierWithResources(Seria
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || !ValidMetalCommandResources(m_Device, resources))
     {
       RDCERR("Invalid Metal compute memory barrier");
@@ -205,8 +298,16 @@ bool WrappedMTLComputeCommandEncoder::Serialise_pushDebugGroup(SerialiserType &s
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
   SERIALISE_ELEMENT(string).Important();
   SERIALISE_CHECK_READ_ERRORS();
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::PushMarker);
+  }
   // Keep markers as structured API events. Partial replay may stop inside a debug group.
-  return !IsReplayingAndReading() || ComputeCommandEncoder != NULL;
+  return !IsReplayingAndReading() ||
+         (ComputeCommandEncoder && ComputeCommandEncoder->m_Type == eResComputeCommandEncoder &&
+          ComputeCommandEncoder->m_Real &&
+          ComputeCommandEncoder == m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder));
 }
 
 void WrappedMTLComputeCommandEncoder::pushDebugGroup(NS::String *string)
@@ -229,8 +330,16 @@ bool WrappedMTLComputeCommandEncoder::Serialise_insertDebugSignpost(SerialiserTy
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
   SERIALISE_ELEMENT(string).Important();
   SERIALISE_CHECK_READ_ERRORS();
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::SetMarker);
+  }
   // Keep markers as structured API events. Partial replay may stop inside a debug group.
-  return !IsReplayingAndReading() || ComputeCommandEncoder != NULL;
+  return !IsReplayingAndReading() ||
+         (ComputeCommandEncoder && ComputeCommandEncoder->m_Type == eResComputeCommandEncoder &&
+          ComputeCommandEncoder->m_Real &&
+          ComputeCommandEncoder == m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder));
 }
 
 void WrappedMTLComputeCommandEncoder::insertDebugSignpost(NS::String *string)
@@ -252,8 +361,16 @@ bool WrappedMTLComputeCommandEncoder::Serialise_popDebugGroup(SerialiserType &se
 {
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
   SERIALISE_CHECK_READ_ERRORS();
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(NULL, ActionFlags::PopMarker);
+  }
   // Keep markers as structured API events. Partial replay may stop inside a debug group.
-  return !IsReplayingAndReading() || ComputeCommandEncoder != NULL;
+  return !IsReplayingAndReading() ||
+         (ComputeCommandEncoder && ComputeCommandEncoder->m_Type == eResComputeCommandEncoder &&
+          ComputeCommandEncoder->m_Real &&
+          ComputeCommandEncoder == m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder));
 }
 
 void WrappedMTLComputeCommandEncoder::popDebugGroup()
@@ -279,7 +396,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_updateFence(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!ComputeCommandEncoder || ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+    if(!ComputeCommandEncoder || ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) ||
        ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real || !ValidMetalFence(fence))
     {
@@ -318,7 +435,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_waitForFence(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!ComputeCommandEncoder || ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+    if(!ComputeCommandEncoder || ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) ||
        ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real || !ValidMetalFence(fence) ||
        !fence->CanWait(m_Device->GetReplayEpoch(), GetResID(ComputeCommandEncoder)))
@@ -356,6 +473,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
 
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     Unwrap(ComputeCommandEncoder)->endEncoding();
     m_Device->SetReplayComputeCommandEncoder(NULL);
     if(IsLoading(m_State))
@@ -392,6 +513,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setComputePipelineState(
 
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!pipeline)
       return false;
     Unwrap(ComputeCommandEncoder)->setComputePipelineState(Unwrap(pipeline));
@@ -413,7 +538,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTable(
   {
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real ||
-       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() || index >= 31 ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) || index >= 31 ||
        (table && (table->m_Type != eResVisibleFunctionTable || !table->m_Real ||
                   table->m_Pipeline != m_Pipeline || table->m_Stage != (MTL::RenderStages)0)))
     {
@@ -457,7 +582,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTables(
   {
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real ||
-       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) ||
        range.length == 0 || range.length > 31 || range.location > 31 - range.length ||
        tables.size() != range.length)
     {
@@ -523,7 +648,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTable(
   {
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real ||
-       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() || index >= 31 ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) || index >= 31 ||
        (table && (table->m_Type != eResIntersectionFunctionTable || !table->m_Real ||
                   table->m_Pipeline != m_Pipeline || table->m_Stage != (MTL::RenderStages)0)))
     {
@@ -567,7 +692,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTables(
   {
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real ||
-       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder() ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) ||
        range.length == 0 || range.length > 31 || range.location > 31 - range.length ||
        tables.size() != range.length)
     {
@@ -649,6 +774,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setTexture(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(index >= 128)
       return false;
     Unwrap(ComputeCommandEncoder)->setTexture(Unwrap(texture), index);
@@ -693,6 +822,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setTextures(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || textures.size() != range.length || bound.size() != range.length)
       return false;
     rdcarray<const MTL::Texture *> real;
@@ -745,6 +878,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setSamplerState(SerialiserType &
 
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(index >= 16 || !sampler)
     {
       RDCERR("Invalid Metal compute sampler binding");
@@ -792,6 +929,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setSamplerStates(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || samplers.size() != range.length || bound.size() != range.length)
       return false;
     rdcarray<const MTL::SamplerState *> real;
@@ -846,6 +987,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setBuffer(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || index >= 31 || (buffer && offset >= Unwrap(buffer)->length()) ||
        (!buffer && offset != 0))
     {
@@ -884,6 +1029,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setAccelerationStructure(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !Unwrap(ComputeCommandEncoder) || index >= 31 ||
        (structure && (structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
@@ -947,6 +1096,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setBuffers(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || buffers.size() != range.length ||
        offsets.size() != range.length || bound.size() != range.length)
       return false;
@@ -1000,6 +1153,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setBytes(SerialiserType &ser, rd
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || index >= 31 || data.size() > 4096)
     {
       RDCERR("Invalid Metal compute inline bytes binding");
@@ -1034,6 +1191,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setBufferOffset(SerialiserType &
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || index >= 31 ||
        !m_Device->GetReplay()->SetComputeBufferOffset((uint32_t)index, (uint64_t)offset))
     {
@@ -1067,6 +1228,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setThreadgroupMemoryLength(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || index >= 31 || (length & 15) != 0 ||
        length > Unwrap(m_Device)->maxThreadgroupMemoryLength())
     {
@@ -1111,6 +1276,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
 
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     MTL::ComputeCommandEncoder *realEncoder = Unwrap(ComputeCommandEncoder);
     MetalReplay *replay = m_Device->GetReplay();
     const TextureDescription source = replay->GetTexture(replay->GetComputeTextureForAccess(false));
@@ -1119,21 +1288,44 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
     const MetalPipe::BufferBinding output = replay->GetComputeBufferForAccess(true);
     const bool bufferOnly = destination.resourceId == ResourceId() &&
                             output.resourceId != ResourceId();
-    if(!ComputeCommandEncoder || !replay->ValidateComputeThreadgroup(threadsPerGroup) || (!bufferOnly &&
+    // UE's precompiled compute shader may have no resource reflection. It can still use a
+    // valid slot-0 buffer with no texture bindings (e.g. a GPU indirect-argument writer).
+    const MetalPipe::BufferBinding slot0 = replay->GetComputeBuffer(0);
+    const bool slot0BufferOnly = source.resourceId == ResourceId() &&
+                                 destination.resourceId == ResourceId() &&
+                                 slot0.resourceId != ResourceId() && slot0.byteSize > 0 &&
+                                 replay->ValidateComputeBufferBindings(true);
+    if(!ComputeCommandEncoder || !replay->ValidateComputeThreadgroup(threadsPerGroup) ||
+       (!bufferOnly && !slot0BufferOnly &&
         (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
          source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
          source.width != destination.width || source.height != destination.height ||
          source.format != destination.format)) ||
-       groups.width == 0 || groups.height == 0 ||
-       groups.depth != 1 || threadsPerGroup.width == 0 || threadsPerGroup.height == 0 ||
-       threadsPerGroup.depth != 1 || groups.width > UINT32_MAX || groups.height > UINT32_MAX ||
+       groups.width == 0 || groups.height == 0 || groups.depth == 0 ||
+       threadsPerGroup.width == 0 || threadsPerGroup.height == 0 ||
+       threadsPerGroup.depth == 0 || groups.width > UINT32_MAX || groups.height > UINT32_MAX ||
+       groups.depth > UINT32_MAX ||
        threadsPerGroup.width > UINT32_MAX || threadsPerGroup.height > UINT32_MAX ||
-       threadsPerGroup.width * threadsPerGroup.height > 1024 ||
-       (!bufferOnly &&
+       threadsPerGroup.depth > UINT32_MAX ||
+       threadsPerGroup.width > 1024 / threadsPerGroup.height ||
+       threadsPerGroup.width * threadsPerGroup.height > 1024 / threadsPerGroup.depth ||
+       (!bufferOnly && !slot0BufferOnly &&
         (groups.width < (destination.width + threadsPerGroup.width - 1) / threadsPerGroup.width ||
          groups.height < (destination.height + threadsPerGroup.height - 1) / threadsPerGroup.height)))
     {
       RDCERR("Invalid Metal compute texture binding or dispatch grid");
+      fprintf(stderr, "Metal compute dispatch rejected: groups=%llux%llux%llu threads=%llux%llux%llu src=%d srcType=%u dst=%d dstType=%u in=%d out=%d bufferOnly=%d\n",
+              (uint64_t)groups.width, (uint64_t)groups.height, (uint64_t)groups.depth,
+              (uint64_t)threadsPerGroup.width, (uint64_t)threadsPerGroup.height,
+              (uint64_t)threadsPerGroup.depth, source.resourceId != ResourceId(),
+              (uint32_t)source.type, destination.resourceId != ResourceId(),
+              (uint32_t)destination.type, input.resourceId != ResourceId(),
+              output.resourceId != ResourceId(), bufferOnly ? 1 : 0);
+      fprintf(stderr, "Metal compute dispatch bindings: slot0=%d slot0Bytes=%llu validated=%d threadgroupValid=%d\n",
+              replay->GetComputeBuffer(0).resourceId != ResourceId() ? 1 : 0,
+              replay->GetComputeBuffer(0).byteSize,
+              replay->ValidateComputeBufferBindings() ? 1 : 0,
+              replay->ValidateComputeThreadgroup(threadsPerGroup) ? 1 : 0);
       return false;
     }
     if(bufferOnly && !replay->ValidateComputeBufferBindings())
@@ -1141,7 +1333,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       RDCERR("Invalid Metal compute output buffer range");
       return false;
     }
-    if(!bufferOnly && (input.resourceId != ResourceId() || output.resourceId != ResourceId()) &&
+    if(!bufferOnly && !slot0BufferOnly &&
+       (input.resourceId != ResourceId() || output.resourceId != ResourceId()) &&
        (input.resourceId == ResourceId() || output.resourceId == ResourceId() ||
         input.byteSize < (uint64_t)destination.width * destination.height * 4 ||
         output.byteSize < (uint64_t)destination.width * destination.height * 4))
@@ -1166,7 +1359,14 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       action.dispatchThreadsDimension[1] = (uint32_t)threadsPerGroup.height;
       action.dispatchThreadsDimension[2] = (uint32_t)threadsPerGroup.depth;
       AddAction(action);
-      if(!bufferOnly)
+      if(slot0BufferOnly)
+      {
+        // With no shader resource reflection, report all bound buffers conservatively.
+        for(uint32_t slot = 0; slot < 31; slot++)
+          replay->AddUsage(replay->GetComputeBuffer(slot).resourceId,
+                           ResourceUsage::CS_RWResource);
+      }
+      else if(!bufferOnly)
       {
         replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
         replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);
@@ -1213,6 +1413,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
 
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     MTL::Buffer *realBuffer = Unwrap(indirectBuffer);
     const uint64_t argumentSize = sizeof(MTL::DispatchThreadgroupsIndirectArguments);
     if(!ComputeCommandEncoder || !m_Device->GetReplay()->ValidateComputeThreadgroup(threadsPerGroup) ||
@@ -1231,10 +1435,16 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
     MetalReplay *replay = m_Device->GetReplay();
     const TextureDescription source = replay->GetTexture(replay->GetComputeTextureForAccess(false));
     const TextureDescription destination = replay->GetTexture(replay->GetComputeTextureForAccess(true));
-    if(source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
-       source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
-       source.width != destination.width || source.height != destination.height ||
-       source.format != destination.format)
+    const MetalPipe::BufferBinding slot0 = replay->GetComputeBuffer(0);
+    const bool slot0BufferOnly = source.resourceId == ResourceId() &&
+                                 destination.resourceId == ResourceId() &&
+                                 slot0.resourceId != ResourceId() && slot0.byteSize > 0 &&
+                                 replay->ValidateComputeBufferBindings(true);
+    if(!slot0BufferOnly &&
+       (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
+        source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
+        source.width != destination.width || source.height != destination.height ||
+        source.format != destination.format))
     {
       RDCERR("Invalid Metal compute texture binding for indirect dispatch");
       return false;
@@ -1242,7 +1452,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
 
     const MetalPipe::BufferBinding input = replay->GetComputeBufferForAccess(false);
     const MetalPipe::BufferBinding output = replay->GetComputeBufferForAccess(true);
-    if((input.resourceId != ResourceId() || output.resourceId != ResourceId()) &&
+    if(!slot0BufferOnly &&
+       (input.resourceId != ResourceId() || output.resourceId != ResourceId()) &&
        (input.resourceId == ResourceId() || output.resourceId == ResourceId() ||
         input.byteSize < (uint64_t)destination.width * destination.height * 4 ||
         output.byteSize < (uint64_t)destination.width * destination.height * 4))
@@ -1269,8 +1480,17 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
                                             GetResID(indirectBuffer),
                                             indirectBufferOffset);
       replay->AddUsage(GetResID(indirectBuffer), ResourceUsage::Indirect);
-      replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
-      replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);
+      if(slot0BufferOnly)
+      {
+        for(uint32_t slot = 0; slot < 31; slot++)
+          replay->AddUsage(replay->GetComputeBuffer(slot).resourceId,
+                           ResourceUsage::CS_RWResource);
+      }
+      else
+      {
+        replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
+        replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);
+      }
       if(input.resourceId != ResourceId())
       {
         replay->AddUsage(input.resourceId, ResourceUsage::CS_Resource);
@@ -1310,6 +1530,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreads(SerialiserType &
 
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     MetalReplay *replay = m_Device->GetReplay();
     const TextureDescription source = replay->GetTexture(replay->GetComputeTextureForAccess(false));
     const TextureDescription destination = replay->GetTexture(replay->GetComputeTextureForAccess(true));
@@ -1392,6 +1616,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setSamplerStateWithLOD(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || index >= 16 || bound != (sampler != NULL) ||
        !std::isfinite(lodMinClamp) || !std::isfinite(lodMaxClamp) ||
        lodMinClamp < 0.0f || lodMaxClamp < lodMinClamp)
@@ -1448,6 +1676,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setSamplerStatesWithLOD(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
+      return false;
+
     if(!ComputeCommandEncoder || samplers.size() != range.length || bound.size() != range.length ||
        lodMinClamps.size() != range.length || lodMaxClamps.size() != range.length)
     {

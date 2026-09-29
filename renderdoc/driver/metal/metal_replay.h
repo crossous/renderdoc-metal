@@ -69,10 +69,22 @@ public:
                           MTL::ComputePipelineReflection *reflection,
                           MTL::ComputePipelineState *pipeline, bool threadExecutionMultiple = false);
   void BeginComputePass();
+  struct EncoderReplayState
+  {
+    MetalPipe::State pipeline;
+    RDMTL::RenderPassDescriptor renderPass;
+    std::map<uint32_t, uint64_t> computeInlineBytes, computeThreadgroupMemory;
+    std::map<uint32_t, rdcpair<float, float>> samplerLOD;
+    rdcarray<uint32_t> vertexAttributeStrides;
+  };
+  EncoderReplayState SaveEncoderState() const;
+  void RestoreEncoderState(const EncoderReplayState &state);
+  void ActivateEncoderContext(ResourceId commandBuffer);
+  void ClearEncoderContexts();
   void SetComputePipeline(ResourceId id);
   void SetComputeTexture(uint32_t index, ResourceId id);
   void BindComputeSampler(uint32_t index, ResourceId id);
-  bool ValidateComputeBufferBindings() const;
+  bool ValidateComputeBufferBindings(bool allowMissingBufferReflection = false) const;
   bool ValidateComputeThreadgroup(const MTL::Size &threads, const MTL::Size *grid = NULL) const;
   void SetComputeThreadgroupMemory(uint32_t index, uint64_t length);
   void BindComputeBytes(uint32_t index, uint64_t length);
@@ -167,6 +179,7 @@ public:
   void AddEvent(uint32_t chunkIndex, uint64_t fileOffset);
   uint32_t GetNextEventID() const { return m_NextEventID; }
   void AddAction(const ActionDescription &action);
+  void AddDebugGroup(const NS::String *label, ActionFlags flag);
   void RegisterComputeIndirectAction(uint32_t eventId, ResourceId buffer, uint64_t offset);
   bool HasPendingComputeIndirectActions() const { return !m_PendingComputeIndirectActions.empty(); }
   void ResolvePendingComputeIndirectActions();
@@ -344,12 +357,18 @@ private:
   uint32_t m_LastActionEventID = 0;
   uint32_t m_MultiActionChildrenRemaining = 0;
   std::map<uint32_t, uint32_t> m_MultiActionEndEvents;
+  std::map<ResourceId, rdcarray<uint32_t>> m_DebugGroupPaths;
 
   rdcarray<ResourceDescription> m_Resources;
   std::map<ResourceId, size_t> m_ResourceIdx;
   rdcarray<BufferDescription> m_Buffers;
   rdcarray<TextureDescription> m_Textures;
-  std::map<ResourceId, rdcarray<bytebuf>> m_TextureViewSourceInitial;
+  struct TextureViewSourceInitial
+  {
+    rdcarray<bytebuf> sharedData;
+    MTL::Texture *privateCopy = NULL;
+  };
+  std::map<ResourceId, TextureViewSourceInitial> m_TextureViewSourceInitial;
   std::map<ResourceId, rdcstr> m_LibrarySources;
   std::map<ResourceId, ShaderReflection> m_Shaders;
 
@@ -396,6 +415,8 @@ private:
   // Resource id in an argument struct is not a direct shader binding slot.
   std::map<ResourceId, std::map<uint32_t, rdcstr>> m_ShaderArgumentSlots;
   MetalPipe::State m_CurrentPipelineState;
+  ResourceId m_ActiveEncoderContext;
+  std::map<ResourceId, EncoderReplayState> m_EncoderContexts;
   RDMTL::RenderPassDescriptor m_CurrentRenderPassDescriptor;
   std::map<uint32_t, MetalPipe::State> m_EventPipelineStates;
   // Per-binding overrides are event state, not a mutation of the immutable sampler object.

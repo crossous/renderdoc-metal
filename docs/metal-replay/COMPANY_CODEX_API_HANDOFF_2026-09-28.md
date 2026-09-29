@@ -1,5 +1,21 @@
 # 公司 Codex API 临时接手单（2026-09-28）
 
+> 2026-09-29 M9：先读 [BATCH321](BATCH321_UE58_CAPTURE_VIEW_ORDER_AND_WATCHDOG.md)。
+> 当前远程 M4 Max 发生 WindowServer watchdog 重启，已暂停本机 GPU 回放。
+> `UE58_capture.rdc` 的 buffer view 创建顺序修正已写入代码，但旧帧推进到
+> purgeable/GPU 完成边界后仍失败；当前只实现执行前安全拒绝，不能宣称
+> 当前帧可正常开启。继续时先在其他机器完成该功能族闭环。
+
+> 2026-09-29 M8：先读 [BATCH320](BATCH320.md) 与 STATUS 顶部。
+> 用户已人工打开 `frame1770`，内容验收失败：仅 Slate pass 且 RT 全黑。
+> 新 viewer 终端可显示 UE debug group；受控 viewport 按钮已编译、待用户
+> 点击验证。Shader Converter GPU VA 仍是明确缺口。
+
+> **后续 agent 先读：**遇到新 Metal 缺口，先按
+> [跨 API 横向排查顺序](CROSS_API_TRIAGE.md)核对 RenderDoc 的 D3D12/Vulkan
+> 实现与引擎源码，再处理 Metal 特有差异。本文的 BATCH311–312 停点已是
+> 历史状态；本机 UE 最新进展见 [STATUS](STATUS.md) 顶部。
+
 ## 接手范围与停点
 
 用户将本机当前 chat 暂停，待 Pro 额度重置后返回集中人工 QA；公司 Codex API 可继续

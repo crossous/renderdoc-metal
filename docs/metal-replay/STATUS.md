@@ -1,6 +1,233 @@
 # Metal Replay 当前状态
 
-最后更新：2026-09-28（Asia/Shanghai）
+## M9 / BATCH321：UE58_capture 原因定位；WindowServer watchdog 后暂停 GPU
+
+用户 `UE58_capture.rdc`（SHA256 `a96e685f…`）确由受控 viewport 按钮保存，
+但 15 个帧内创建的 buffer texture view 被错误写到父 placement buffer 之前。
+捕获顺序代码已修，最小原生/注入/API/CLI/GPU 像素及事件回跳曾在重启前通过。
+旧帧的诊断副本越过该处后，回放在帧内 `PurgeableStateEmpty` 触发 Metal
+Validation 断言；随后本机发生 WindowServer watchdog 重启，因果未归属。
+当前加了 GPU 执行前的安全拒绝，**旧帧仍不能正常开启**，等待在其他机器
+验证完整 GPU 完成/资源回收功能族。重启后只完成无 GPU 的编译；定向回归、
+全量回归、人工 UI 内容验收均未运行。详见 [BATCH321](BATCH321_UE58_CAPTURE_VIEW_ORDER_AND_WATCHDOG.md)。
+累计成功 UI QA 增量 **0**。
+
+> 新缺口的优先处理方法见 [跨 API 横向排查顺序](CROSS_API_TRIAGE.md)：
+> 先查 RenderDoc 其他图形 API 与引擎源码，再处理 Metal 特有差异。
+
+最后更新：2026-09-29（Asia/Shanghai）
+
+## M8 / BATCH320：frame1770 人工 UI 内容失败，scope 已接通，黑屏仍在
+
+用户已在 qrenderdoc 人工打开 `UE58_frame1770.rdc`：文件能打开，但无 UE
+scope、唯一 RT 黑色，**内容验收失败**。XML 证实 UE 已发出 10 组
+compute scope 和一个 `SlateUI` render scope；RDC 主体是 280 draw 的
+Slate 合成帧，并非场景 GBuffer 帧。新 viewer 将 Metal debug group 映射到
+事件树；旧 UE 帧终端显示 21 marker、280 draw。项目级按钮已按 UE 官方
+RenderDoc 插件的受控 viewport 绘制顺序修改，UE 插件及库/viewer 构建通过，
+但尚未点击新按钮验证真正场景截帧。旧帧整幅 RT 于首 draw 前后及帧尾均
+全零；Shader Converter GPU VA 缺通用映射，尚未修复或证明唯一根因。
+详见 [BATCH320](BATCH320.md)。**定向终端通过；全量回归未运行；人工
+UI 已执行且内容失败；累计成功 UI QA 增量 0。**
+
+## M7 / BATCH319：UE58 frame1770 定向终端打开通过，后续 UI 结果见 BATCH320
+
+用户新截 v0x10 `UE58_frame1770.rdc`（29,633,881 字节，SHA256
+`75dad9cecc5876c71db77de0e3a46b0f51371118e2d28ff3584113b148dda51d`），
+注入库和插件 API 解析、保存均有日志；实际场景仍是 `Lvl_FirstPerson` PIE。
+首次 API 打开通过，CLI 在帧内 Shared placement buffer `410638` 的帧首
+重置失败后预览崩溃。按 D3D12/Vulkan 帧首资源边界修复后，同一帧一次
+有界 Metal Validation API/CLI 均退出 0；T319 原生/注入、GPU 值、事件
+回跳、两例负例，以及 T35/T59/T117/T313/T314/T317/T318 相关定向回归
+通过（T318 使用专用探针）。最终库与 viewer 内嵌库 SHA256 均为
+`c9bdc6bea56256140df635a65c30d5b56531c78a233b24a23568a5a372acfd6a`。
+详见 [BATCH319](BATCH319.md)。**当批终端定向通过；全量回归未运行；
+后续人工 UI 内容验收失败见 BATCH320，累计成功 UI QA 增量 0。**默认
+bindless GPU VA 重定位及 Empty 最小场景仍待验证。
+
+## M7 / BATCH315–318：BC placement 小夹具通过；UE v0xF 帧需重截
+
+用户按钮生成 `UE58_frame5394.rdc`（SHA256 `fe304ecbd3392a4a4a35e45531e74e1b963bc266b558583ef5645d96c64f4081`），
+确认 dyld 注入和截帧保存；缩略图是 `Lvl_FirstPerson`，不是 Empty。
+一次有界 API 打开先拒绝 UE typed buffer view；定向修复后第二次拒绝
+BC5 placement 纹理。BC1/BC1 sRGB/BC5 的原生 Metal Validation、
+v0x10 帧首块快照、帧内拷贝、T317/T318 注入截帧、API/CLI、原始块
+及 GPU 像素/事件回跳均通过；5 例负例安全拒绝，旧 T37/T117/T313/T59
+定向通过。最终库和 viewer 内嵌库 SHA256 均为
+`c13816cf6485ab945aa08ba476bc173613d5fbd609cb15518a6e65aabee49354`。
+旧 v0xF UE 帧缺 BC 帧首初始内容，最终库有界 API 打开安全拒绝于 BC1
+placement；不能继续用旧帧判断后续桥接。下一步用 v0x10 新库在 Empty、
+非 Nanite 场景重截一次，再有界回放定位首个新阻塞。默认 bindless GPU VA
+重定位仍未解决。详见 [BATCH315–318](BATCH315-318.md)。
+**定向终端通过；全量回归和人工 UI 未运行；累计 UI QA 增量 0。**
+
+## M7 新帧重截入口：前一阶段记录
+
+本机 UE 5.8.3 项目与当时注入库预检通过；新增显式 `.rdc` 的有界 API/CLI
+单次回放脚本，并以 T313 小帧验证其运行。磁盘上尚无采用 v0xF 新库的
+UE 帧，旧 `frame4476` 不能验证 placement 修复。Shader Converter
+bindless 表项是横向审计发现的后续风险，尚非新帧实测首阻塞。
+18:26 新 UE 会话已确认 dyld 注入、插件 API 解析和引擎初始化；此前
+`/tmp` 与 `/private/tmp` 路径字面比较导致的插件拒绝已通过启动脚本的
+物理路径规范化修正。等待用户点击一次截帧。
+见 [重截与回放入口](UE58_M7_RECAPTURE_GATE_2026-09-29.md)。
+**全量回归和人工 UI 未运行；累计 UI QA 增量 0。**
+
+## M7 / BATCH313–314：placement buffer 复用定向闭环，UE 旧帧仍拒绝
+
+按 [跨 API 排查顺序](CROSS_API_TRIAGE.md)对照 D3D12/Vulkan 的独立资源身份与
+UE `FreeBlock`，本机 Metal Validation 确认 placement buffer 原生 aliasability。
+新 v0xF 截帧保留帧内 placement 创建顺序；T313 显式 alias、T314 释放复用的
+原生/注入/API/CLI、GPU 字节及两轮事件回跳通过，受影响旧 T116/T117/T131/T132
+定向回归及 39 例相关畸形输入通过。库和 viewer 内嵌库 SHA256 均为
+`243043fb9dc1459afd3e1c2a6571dd7b880e1b76bf5b2122156a28a695fa1337`。
+旧 v0xE `frame4476` 在最终库下 API/CLI 各单次仍安全拒绝于
+`MTLHeap::newBuffer(offset)`；它缺帧内创建/释放时序，必须用新库重截。
+详见 [BATCH313–314](BATCH313-314.md)。**没有全量回归或人工 UI 验收；
+累计 UI QA 增量 0。**
+
+## M6 / UE58 frame4476：首个回放阻塞为 placement heap 复用
+
+用户完成默认 bindless 配置下的 UE 5.8.3 截帧后，编辑器已退出。
+`UE58_frame4476.rdc` SHA256 `ab0e5a2918af5568a0257eb6f316140f68954f26d6c09e0b4f17606434b5bcbb`
+（149,219,170 字节）。嵌入缩略图显示 `Lvl_FirstPerson` 编辑器视口，
+不是 Empty 关卡。一次 Metal Validation API `OpenCapture` 在约 2 秒后
+安全拒绝：placement heap `6047` 的 buffer `1374505` 与先前
+`1373003` 占用区间重叠；无新 GPU Validation 报错。
+详见[新帧首个阻塞证据](UE58_M6_FRAME4476_PLACEMENT_LIFETIME_2026-09-29.md)。
+**此旧帧尚未打开**；本节首次诊断时 CLI 回放未运行，后续结果见上方 M7。
+全量回归、人工 UI 验收均未运行，
+累计 UI QA 增量 **0**。
+
+## UE 5.8.3 `-BindlessOff` 启动隔离失败（16:22 session）
+
+本机 `SocoTestProj` 的 `METAL_SM6` 编辑器在注入库
+SHA256 `19d491f0…`、附加 `-BindlessOff` 后进入全局着色器编译，
+未创建窗口。16:46 日志出现 3157 个全局着色器编译错误；
+27 分钟时终止失败启动。没有新 `.rdc`，也没有回放或人工 UI 验收。
+这证明该隔离命令在当前项目不可用，尚未单独证明编译失败归属 UE、
+参数组合或注入。见[启动失败证据](UE58_M6_BINDLESSOFF_STARTUP_2026-09-29.md)。
+去掉参数后的新 session `20260929-165339` 已由终端确认 UE 初始化和插件
+解析 RenderDoc API；用户已截得 `UE58_frame4476.rdc`（149 MB，
+SHA256 `ab0e5a29…`），缩略图是 `Lvl_FirstPerson` 编辑器视口。
+截至记录时 UE 仍运行；新帧 GPU 回放尚未执行。
+累计 UI QA 增量仍为 **0**。
+
+## M5 / UE 5.8.3：Private 初始状态小夹具闭环，frame833 仍超时
+
+本批接通 Private buffer 的帧首 GPU 上传和每次回放重置；原生/注入、
+API/CLI 像素与回跳、未知资源负例及 T13/T21/T29 定向回归通过。
+`frame833` 的 420 个 Private buffer（421,200,384 字节）上传成功，
+但单次限时 75 秒 CLI 仍在 `ResourceId::503251` 等待超时；没有新
+Validation 报错。UE SM6 bindless descriptor heap 中有捕获进程的
+GPU VA，旧帧没有原地址映射，属于下一步待证明和处理的完整资源族。
+详见[本批证据](UE58_M5_PRIVATE_INITIAL_BINDLESS_2026-09-29.md)。
+**这张帧未打开**；全量回归和人工 UI 未运行，累计 UI QA 增量 **0**。
+
+## M4 / UE 5.8.3：Private 间接绘制小夹具通过，frame833 仍未打开
+
+现有 `UE58_frame833.rdc` 无需重截，viewer 已重建；本轮对 Private
+普通/indexed 间接绘制及 buffer-only compute 的小夹具做了原生、注入、
+API/CLI 定向验证，旧 T13/T21/T29 单次回归通过。UE 帧先越过原
+`contents()` 断言及两个 compute 安全拒绝，但 14:21 的单次 CLI
+60 秒超时，已终止；20 秒短 trace 进一步定位到等待
+`ResourceId::503251`（XML 创建 chunk 3921、提交 chunk 10180）未完成。
+暂停重复大帧回放，下一步静态审计其提交/依赖图并做小夹具。
+库及 app 内嵌库 SHA256 `42ada08ec64c…`。
+详见[本批证据](UE58_M4_PRIVATE_INDIRECT_2026-09-29.md)。
+**新帧未通过**；全量回归及人工 UI 未运行，累计 UI QA 增量 **0**。
+
+## M4 / UE 5.8.3 先前停点：frame833 回放仍阻塞，停止 GPU 复测
+
+对 `UE58_frame833.rdc` 的定向诊断已越过 placement 纹理等早期拒绝，但
+12:22 的 Metal Validation 在 `drawPrimitives(indirect)` 对 Private buffer
+调用 `contents()` 时触发进程断言。已加入存储模式前置检查，同类 indexed
+路径亦检查；未验证的 compute buffer dispatch 放行已撤回。viewer/CLI
+重新编译通过，内嵌/CLI 回放库 SHA256 `319fd504dece…`；
+**没有在新 GPU 错误后再运行回放**。因此本帧仍不可称为
+可打开或画面正确；最后实测的阻塞是 GPU 可写、Private buffer 的
+间接绘制参数与执行点元数据。撤回未验 compute 放行后，当前构建的
+首个安全拒绝点尚未实测，可能更早。详见
+[本批证据](UE58_M4_QRENDERDOC_3D_PLACEMENT_2026-09-29.md)。
+当前构建没有全量回归或人工 UI 验收，累计 UI QA 增量 **0**。
+请勿将当前 app 视为 `frame833` 的可用 viewer：Private 间接绘制现在会
+明确拒绝，GPU 生成的参数仍需执行点读回和完整验证。
+
+## M4 / UE 5.8.3 先前停点：新按钮截帧已保存，回放停在 3D placement 纹理
+
+用户 `20260929-064750` 会话用 SHA256 `1ab4448a93b2…` 注入库成功保存
+`UE58_frame833.rdc`（`472dfa48a56c…`，14,660,781 字节），说明上批
+截帧结束的生命周期修复已在这次 UE 会话跨过原崩溃点。独立 worktree 的
+`build-qrenderdoc/bin/qrenderdoc.app` 已编译，内嵌回放库与同次 CLI 构建均为
+`8f79ed3345fd…`；**未启动 GUI**。该 CLI 在 Metal Validation 下单次打开
+新帧退出 1，安全拒绝于 `MTLHeap::newTexture(offset)`：首个不支持的描述符
+`MTLTextureType3D`（type 7），并非日志初看显示的资源选项或 hazard 值。
+帧中共有 230 个 placement 纹理创建，含 2D、2D array、3D、cube；
+后续格式、mip 和深度也超出现有 T117 的 2D 子集。需以完整功能族验证后
+再扩展守卫。详见[本次构建与阻塞证据](UE58_M4_QRENDERDOC_3D_PLACEMENT_2026-09-29.md)。
+**定向终端只确认了截帧保存和首个回放阻塞**；全量回归及人工 UI 未运行，
+累计 UI QA 增量 **0**。
+用户首次打开 viewer 于 11:50:01 在 `PythonContext::GlobalInit` 的
+`PyDict_SetItemString` 闪退，第二次进程正常运行；同一栈在前一天也曾出现。
+首次自动生成 Python stubs 写了版本标记却未生成文件，疑似 Python 3.14
+兼容或失败后未清理错误状态；与新帧 Metal 回放阻塞是两个问题，详见上链证据。
+
+## M4 / UE 5.8.3 先前停点：按钮截帧结束崩溃，生命周期修复待 UE 复测
+
+用户 `20260929-024537` 会话确实在按钮请求后崩溃：RenderDoc
+`EndFrameCapture` 向错误的原生对象发送 `waitUntilCompleted`，没有新 UE
+`.rdc`；UE 随后在错误处理内卡住约两分钟。已按[跨 API 排查顺序](CROSS_API_TRIAGE.md)
+核对并修复 command buffer record 跨 autorelease pool 的代理/原生保活。
+本机原生及注入短 pool 夹具、按钮式 trigger/direct present、API/CLI 单次
+回放通过；最终 dylib `1ab4448a93b2…`，详见[本批证据](UE58_M4_CAPTURE_LIFETIME_2026-09-29.md)。
+当时尚未用新库复测 UE；后续 `20260929-064750` 会话已保存新帧，见上节。
+全量回归和人工 UI 未跑；累计 UI QA 增量 **0**。
+
+## M4 / UE 5.8.3：已有真帧定向终端回放通过
+
+独立 worktree `renderdoc-metal-t312` 的 UE 真帧 `UE58_frame99.rdc` 现可在
+Metal Validation 下单次 CLI 完整打开；API 对 165 个 draw 的首、四分之一、
+中间、四分之三、末尾及回跳首事件检查 pipeline 身份通过。交错 command
+buffer 的原生/注入截帧此前取得，本批 API GPU 数据/seek、CLI 和 2 例对象
+身份负例通过；T35/T41/T56/T114 等旧帧定向回归通过。修复保留各 buffer
+的 encoder 与状态，在捕获的 commit 点提交，并在 commit 前恢复 Shared CPU
+写入；未活动的 Metal 反射参数不再强制要求 argument packet。细节见
+[本批证据](UE58_M4_INTERLEAVED_REPLAY_2026-09-29.md)。
+
+这是**定向终端通过**，尚无本批新 UE 截帧、原生 UE 画面/GPU 输出逐项对照、
+全量压力回归或人工 UI 通过证据。当前项目亦未固定为严格非 Nanite 最小
+场景；该里程碑仍待验证。累计 UI QA 增量 **0**，原 274 份待验不变。
+
+## M4 / UE 5.8.3 先前停点：已截一帧，回放阻塞（历史）
+
+2026-09-29 本机首次取得 UE 真帧 `UE58_frame99.rdc`（SHA256
+`8a55f0e3738d8b10255dc855e13933ef6e9ab1055f7f59831fe3cfdba4a51022`）。
+插件日志确认注入并保存。定向补齐 Shared Placement、4096 样本 counter buffer
+和资源 `PurgeableStateEmpty` 后，单次 CLI 回放到达有效的**交错 command buffer**
+时序：UE 先创建多个 buffer，再返回较早者编码。当前回放器在创建下一 buffer 时
+提前提交上一 buffer，Metal Validation 于 `setCurrentCommandEncoder:` 触发
+SIGABRT。现在各 encoder 入口及 commit 增加活动/未提交守卫；同一帧安全拒绝于
+`MTLCommandBuffer::blitCommandEncoderWithDescriptor`，仍**不能打开 UE 帧**。
+原生/注入的最小交错夹具重现该回放缺口；详见
+[本机证据](UE58_M4_EVIDENCE_2026-09-29.md)。出现新 GPU Validation 错误后未再升级
+UE 负载。全量回归、长时压力和人工 UI 均未运行；累计 UI QA 增量 **0**，
+原 274 份待验不变。
+
+## M4 / UE 5.8.3 先前接入检查点
+
+见 [UE58_M4_INTEGRATION_2026-09-28.md](UE58_M4_INTEGRATION_2026-09-28.md)。
+独立 worktree 从 `e0a26f7e6` 建立，保留旧目录 4 项改动。UE 5.8.3
+项目级按钮插件已编译且注入库确实进入 UE。首次 blit pass 崩溃复现为
+包装 counter buffer 传给原生 descriptor，以及跨 autorelease pool 的命令对象生命周期；
+blit counter attachments 已接通为 Metal capture 版本 `0xD`。随后修复 compute
+`useHeap`/`useHeaps` 包装对象被原生转发的问题，新 chunk 1384/1385。
+本机两个功能族的原生 Validation、注入捕获、CLI/API 单次回放及 6+7 例
+负例通过；T41/T101/T312 旧帧单次回放通过，详见批次记录。
+最后一次 UE 启动 `20260929-001104` 已越过这两个崩溃点，随后在
+`parallelRenderCommandEncoderWithDescriptor:` 的未接通守卫 SIGTRAP；
+期间还有 AGX counter-buffer 类型错误及 heap identity 拒绝，须先定位。
+**没有 UE `.rdc`，没有 UE API/CLI 回放、全量回归或人工 UI QA**；
+累计 UI QA 增量 0，原 274 份待验不变。GPU 驱动调用链曾崩溃，停止继续增加 UE 负载。
 
 ## 当前安全检查点：BATCH311–312
 

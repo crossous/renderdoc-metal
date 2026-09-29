@@ -33,6 +33,7 @@
 #include "metal_rate_map.h"
 #include "metal_counter_sample_buffer.h"
 #include "metal_render_command_encoder.h"
+#include "metal_parallel_render_command_encoder.h"
 #include "metal_resources.h"
 #include "metal_texture.h"
 
@@ -108,7 +109,8 @@ bool WrappedMTLCommandBuffer::Serialise_accelerationStructureCommandEncoder(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!CommandBuffer || Encoder == ResourceId())
+    if(!CommandBuffer || !m_Device->CanEncodeReplayEvent(CommandBuffer) ||
+       Encoder == ResourceId())
       return false;
     MTL::AccelerationStructureCommandEncoder *real =
         Unwrap(CommandBuffer)->accelerationStructureCommandEncoder();
@@ -267,7 +269,8 @@ bool WrappedMTLCommandBuffer::Serialise_blitCommandEncoder(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    if(!CommandBuffer || BlitCommandEncoder == ResourceId())
+    if(!CommandBuffer || !m_Device->CanEncodeReplayEvent(CommandBuffer) ||
+       BlitCommandEncoder == ResourceId())
       return false;
     return CommandBuffer->ReplayBlitCommandEncoder(BlitCommandEncoder,
                                                     Unwrap(CommandBuffer)->blitCommandEncoder());
@@ -277,23 +280,80 @@ bool WrappedMTLCommandBuffer::Serialise_blitCommandEncoder(SerialiserType &ser,
 
 template <typename SerialiserType>
 bool WrappedMTLCommandBuffer::Serialise_blitCommandEncoderWithDescriptor(
-    SerialiserType &ser, WrappedMTLBlitCommandEncoder *encoder, bool hasSampleBuffers)
+    SerialiserType &ser, WrappedMTLBlitCommandEncoder *encoder, bool hasSampleBuffers,
+    rdcarray<RDMTL::BlitPassSampleBufferAttachmentDescriptor> attachments)
 {
   SERIALISE_ELEMENT_LOCAL(CommandBuffer, this);
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, GetResID(encoder))
       .TypedAs("MTLBlitCommandEncoder"_lit);
   SERIALISE_ELEMENT(hasSampleBuffers).Important();
+  if(ser.VersionAtLeast(0xD))
+    SERIALISE_ELEMENT(attachments).Important();
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!CommandBuffer || BlitCommandEncoder == ResourceId() || hasSampleBuffers)
+    if(!CommandBuffer || CommandBuffer->m_Type != eResCommandBuffer ||
+       !CommandBuffer->m_Real || !m_Device->CanEncodeReplayEvent(CommandBuffer) ||
+       BlitCommandEncoder == ResourceId() ||
+       (!ser.VersionAtLeast(0xD) && hasSampleBuffers) ||
+       (ser.VersionAtLeast(0xD) && attachments.size() != MAX_BLIT_PASS_SAMPLE_BUFFER_ATTACHMENTS))
     {
       RDCERR("Invalid Metal blit encoder or unsupported counter sample attachments");
       return false;
     }
-    MTL::BlitPassDescriptor *descriptor = MTL::BlitPassDescriptor::blitPassDescriptor();
-    return CommandBuffer->ReplayBlitCommandEncoder(
-        BlitCommandEncoder, Unwrap(CommandBuffer)->blitCommandEncoder(descriptor));
+    MTL::BlitPassDescriptor *descriptor = MTL::BlitPassDescriptor::alloc()->init();
+    bool boundSamples = false;
+    for(size_t i = 0; i < attachments.size(); i++)
+    {
+      const auto &attachment = attachments[i];
+      if((attachment.sampleBufferId != ResourceId() &&
+          (!attachment.sampleBuffer ||
+           GetResID(attachment.sampleBuffer) != attachment.sampleBufferId)) ||
+         (attachment.sampleBufferId == ResourceId() && attachment.sampleBuffer) ||
+         (attachment.sampleBuffer &&
+          (attachment.sampleBuffer->m_Type != eResCounterSampleBuffer ||
+           !attachment.sampleBuffer->m_Real)))
+      {
+        RDCERR("Invalid Metal blit pass counter sample buffer identity");
+        descriptor->release();
+        return false;
+      }
+      if(!attachment.sampleBuffer)
+      {
+        if(attachment.startOfEncoderSampleIndex != MTLCounterDontSample ||
+           attachment.endOfEncoderSampleIndex != MTLCounterDontSample)
+        {
+          RDCERR("Metal blit pass has sample indices without a counter buffer");
+          descriptor->release();
+          return false;
+        }
+        continue;
+      }
+      boundSamples = true;
+      const uint64_t count = Unwrap(attachment.sampleBuffer)->sampleCount();
+      if((attachment.startOfEncoderSampleIndex != MTLCounterDontSample &&
+          attachment.startOfEncoderSampleIndex >= count) ||
+         (attachment.endOfEncoderSampleIndex != MTLCounterDontSample &&
+          attachment.endOfEncoderSampleIndex >= count))
+      {
+        RDCERR("Invalid Metal blit pass counter sample index");
+        descriptor->release();
+        return false;
+      }
+      auto *native = descriptor->sampleBufferAttachments()->object(i);
+      native->setSampleBuffer(Unwrap(attachment.sampleBuffer));
+      native->setStartOfEncoderSampleIndex(attachment.startOfEncoderSampleIndex);
+      native->setEndOfEncoderSampleIndex(attachment.endOfEncoderSampleIndex);
+    }
+    if(ser.VersionAtLeast(0xD) && boundSamples != hasSampleBuffers)
+    {
+      RDCERR("Inconsistent Metal blit pass counter attachment flag");
+      descriptor->release();
+      return false;
+    }
+    MTL::BlitCommandEncoder *real = Unwrap(CommandBuffer)->blitCommandEncoder(descriptor);
+    descriptor->release();
+    return CommandBuffer->ReplayBlitCommandEncoder(BlitCommandEncoder, real);
   }
   return true;
 }
@@ -303,8 +363,39 @@ WrappedMTLBlitCommandEncoder *WrappedMTLCommandBuffer::blitCommandEncoderWithDes
 {
   if(!descriptor)
     return NULL;
+  rdcarray<RDMTL::BlitPassSampleBufferAttachmentDescriptor> attachments;
+  attachments.resize(MAX_BLIT_PASS_SAMPLE_BUFFER_ATTACHMENTS);
+  bool hasSampleBuffers = false;
+  MTL::BlitPassDescriptor *nativeDescriptor = MTL::BlitPassDescriptor::alloc()->init();
+  for(uint32_t i = 0; i < MAX_BLIT_PASS_SAMPLE_BUFFER_ATTACHMENTS; i++)
+  {
+    auto *source = descriptor->sampleBufferAttachments()->object(i);
+    auto &attachment = attachments[i];
+    if(!source)
+      continue;
+    MTL::CounterSampleBuffer *sample = source->sampleBuffer();
+    if(!sample)
+      continue;
+    hasSampleBuffers = true;
+    attachment.sampleBuffer = GetWrapped(sample);
+    if(attachment.sampleBuffer->m_Type != eResCounterSampleBuffer ||
+       !attachment.sampleBuffer->m_Real)
+    {
+      RDCERR("Invalid Metal blit pass counter sample buffer");
+      nativeDescriptor->release();
+      return NULL;
+    }
+    attachment.sampleBufferId = GetResID(attachment.sampleBuffer);
+    attachment.startOfEncoderSampleIndex = source->startOfEncoderSampleIndex();
+    attachment.endOfEncoderSampleIndex = source->endOfEncoderSampleIndex();
+    auto *native = nativeDescriptor->sampleBufferAttachments()->object(i);
+    native->setSampleBuffer(Unwrap(attachment.sampleBuffer));
+    native->setStartOfEncoderSampleIndex(attachment.startOfEncoderSampleIndex);
+    native->setEndOfEncoderSampleIndex(attachment.endOfEncoderSampleIndex);
+  }
   MTL::BlitCommandEncoder *realEncoder = NULL;
-  SERIALISE_TIME_CALL(realEncoder = Unwrap(this)->blitCommandEncoder(descriptor));
+  SERIALISE_TIME_CALL(realEncoder = Unwrap(this)->blitCommandEncoder(nativeDescriptor));
+  nativeDescriptor->release();
   if(!realEncoder)
     return NULL;
   WrappedMTLBlitCommandEncoder *wrappedEncoder = NULL;
@@ -312,18 +403,15 @@ WrappedMTLBlitCommandEncoder *WrappedMTLCommandBuffer::blitCommandEncoderWithDes
   wrappedEncoder->SetCommandBuffer(this);
   if(IsCaptureMode(m_State))
   {
-    bool hasSampleBuffers = false;
-    for(uint32_t i = 0; i < MAX_BLIT_PASS_SAMPLE_BUFFER_ATTACHMENTS; i++)
-    {
-      MTL::BlitPassSampleBufferAttachmentDescriptor *attachment =
-          descriptor->sampleBufferAttachments()->object(i);
-      hasSampleBuffers |= attachment && attachment->sampleBuffer() != NULL;
-    }
     CACHE_THREAD_SERIALISER();
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLCommandBuffer_blitCommandEncoderWithDescriptor);
-    Serialise_blitCommandEncoderWithDescriptor(ser, wrappedEncoder, hasSampleBuffers);
+    Serialise_blitCommandEncoderWithDescriptor(ser, wrappedEncoder, hasSampleBuffers, attachments);
     GetRecord(this)->AddChunk(scope.Get());
     GetResourceManager()->AddResourceRecord(wrappedEncoder);
+    for(const auto &attachment : attachments)
+      if(attachment.sampleBuffer)
+        GetRecord(this)->MarkResourceFrameReferenced(attachment.sampleBufferId,
+                                                     eFrameRef_PartialWrite);
   }
   return wrappedEncoder;
 }
@@ -370,6 +458,12 @@ bool WrappedMTLCommandBuffer::Serialise_computeCommandEncoder(
 
   if(IsReplayingAndReading())
   {
+    if(!CommandBuffer || !m_Device->CanEncodeReplayEvent(CommandBuffer) ||
+       ComputeCommandEncoder == ResourceId())
+    {
+      RDCERR("Metal compute encoder requires an active uncommitted command buffer");
+      return false;
+    }
     MTL::ComputeCommandEncoder *realEncoder = Unwrap(CommandBuffer)->computeCommandEncoder();
     if(!realEncoder)
       return false;
@@ -420,25 +514,76 @@ WrappedMTLComputeCommandEncoder *WrappedMTLCommandBuffer::computeCommandEncoder(
 template <typename SerialiserType>
 bool WrappedMTLCommandBuffer::Serialise_computeCommandEncoderWithDescriptor(
     SerialiserType &ser, WrappedMTLComputeCommandEncoder *encoder,
-    MTL::DispatchType dispatchType)
+    MTL::DispatchType dispatchType,
+    rdcarray<RDMTL::ComputePassSampleBufferAttachmentDescriptor> attachments)
 {
   SERIALISE_ELEMENT_LOCAL(CommandBuffer, this);
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, GetResID(encoder))
       .TypedAs("MTLComputeCommandEncoder"_lit);
   SERIALISE_ELEMENT(dispatchType).Important();
+  if(ser.VersionAtLeast(0xE))
+    SERIALISE_ELEMENT(attachments).Important();
   SERIALISE_CHECK_READ_ERRORS();
 
   if(IsReplayingAndReading())
   {
-    if(dispatchType != MTL::DispatchTypeSerial && dispatchType != MTL::DispatchTypeConcurrent)
+    if(!CommandBuffer || CommandBuffer->m_Type != eResCommandBuffer ||
+       !CommandBuffer->m_Real || !m_Device->CanEncodeReplayEvent(CommandBuffer) ||
+       ComputeCommandEncoder == ResourceId() ||
+       (dispatchType != MTL::DispatchTypeSerial &&
+        dispatchType != MTL::DispatchTypeConcurrent) ||
+       (ser.VersionAtLeast(0xE) &&
+        attachments.size() != MAX_COMPUTE_PASS_SAMPLE_BUFFER_ATTACHMENTS))
     {
-      RDCERR("Invalid Metal compute dispatch type %u", (uint32_t)dispatchType);
+      RDCERR("Invalid Metal compute pass descriptor or encoder identity");
       return false;
     }
-    MTL::ComputePassDescriptor *descriptor = MTL::ComputePassDescriptor::computePassDescriptor();
+    MTL::ComputePassDescriptor *descriptor = MTL::ComputePassDescriptor::alloc()->init();
     descriptor->setDispatchType(dispatchType);
-    return ReplayComputeCommandEncoder(
-        ComputeCommandEncoder, Unwrap(CommandBuffer)->computeCommandEncoder(descriptor));
+    for(size_t i = 0; i < attachments.size(); i++)
+    {
+      const auto &attachment = attachments[i];
+      if((attachment.sampleBufferId != ResourceId() &&
+          (!attachment.sampleBuffer ||
+           GetResID(attachment.sampleBuffer) != attachment.sampleBufferId)) ||
+         (attachment.sampleBufferId == ResourceId() && attachment.sampleBuffer) ||
+         (attachment.sampleBuffer &&
+          (attachment.sampleBuffer->m_Type != eResCounterSampleBuffer ||
+           !attachment.sampleBuffer->m_Real || attachment.sampleBuffer->m_Device != m_Device)))
+      {
+        RDCERR("Invalid Metal compute pass counter sample buffer identity");
+        descriptor->release();
+        return false;
+      }
+      if(!attachment.sampleBuffer)
+      {
+        if(attachment.startOfEncoderSampleIndex != MTLCounterDontSample ||
+           attachment.endOfEncoderSampleIndex != MTLCounterDontSample)
+        {
+          RDCERR("Metal compute pass has sample indices without a counter buffer");
+          descriptor->release();
+          return false;
+        }
+        continue;
+      }
+      const uint64_t count = Unwrap(attachment.sampleBuffer)->sampleCount();
+      if((attachment.startOfEncoderSampleIndex != MTLCounterDontSample &&
+          attachment.startOfEncoderSampleIndex >= count) ||
+         (attachment.endOfEncoderSampleIndex != MTLCounterDontSample &&
+          attachment.endOfEncoderSampleIndex >= count))
+      {
+        RDCERR("Invalid Metal compute pass counter sample index");
+        descriptor->release();
+        return false;
+      }
+      auto *native = descriptor->sampleBufferAttachments()->object(i);
+      native->setSampleBuffer(Unwrap(attachment.sampleBuffer));
+      native->setStartOfEncoderSampleIndex(attachment.startOfEncoderSampleIndex);
+      native->setEndOfEncoderSampleIndex(attachment.endOfEncoderSampleIndex);
+    }
+    MTL::ComputeCommandEncoder *real = Unwrap(CommandBuffer)->computeCommandEncoder(descriptor);
+    descriptor->release();
+    return CommandBuffer->ReplayComputeCommandEncoder(ComputeCommandEncoder, real);
   }
   return true;
 }
@@ -448,8 +593,55 @@ WrappedMTLComputeCommandEncoder *WrappedMTLCommandBuffer::computeCommandEncoderW
 {
   if(!descriptor)
     return NULL;
+  rdcarray<RDMTL::ComputePassSampleBufferAttachmentDescriptor> attachments;
+  attachments.resize(MAX_COMPUTE_PASS_SAMPLE_BUFFER_ATTACHMENTS);
+  MTL::ComputePassDescriptor *nativeDescriptor = MTL::ComputePassDescriptor::alloc()->init();
+  nativeDescriptor->setDispatchType(descriptor->dispatchType());
+  for(size_t i = 0; i < attachments.size(); i++)
+  {
+    auto *source = descriptor->sampleBufferAttachments()->object(i);
+    auto &attachment = attachments[i];
+    attachment.startOfEncoderSampleIndex = source->startOfEncoderSampleIndex();
+    attachment.endOfEncoderSampleIndex = source->endOfEncoderSampleIndex();
+    MTL::CounterSampleBuffer *sample = source->sampleBuffer();
+    if(!sample)
+    {
+      if(attachment.startOfEncoderSampleIndex != MTLCounterDontSample ||
+         attachment.endOfEncoderSampleIndex != MTLCounterDontSample)
+      {
+        RDCERR("Metal compute pass has sample indices without a counter buffer");
+        nativeDescriptor->release();
+        return NULL;
+      }
+      continue;
+    }
+    attachment.sampleBuffer = GetWrapped(sample);
+    attachment.sampleBufferId = GetResID(attachment.sampleBuffer);
+    if(attachment.sampleBuffer->m_Type != eResCounterSampleBuffer ||
+       !attachment.sampleBuffer->m_Real || attachment.sampleBuffer->m_Device != m_Device)
+    {
+      RDCERR("Invalid Metal compute pass counter sample buffer");
+      nativeDescriptor->release();
+      return NULL;
+    }
+    const uint64_t count = Unwrap(attachment.sampleBuffer)->sampleCount();
+    if((attachment.startOfEncoderSampleIndex != MTLCounterDontSample &&
+        attachment.startOfEncoderSampleIndex >= count) ||
+       (attachment.endOfEncoderSampleIndex != MTLCounterDontSample &&
+        attachment.endOfEncoderSampleIndex >= count))
+    {
+      RDCERR("Invalid Metal compute pass counter sample index");
+      nativeDescriptor->release();
+      return NULL;
+    }
+    auto *native = nativeDescriptor->sampleBufferAttachments()->object(i);
+    native->setSampleBuffer(Unwrap(attachment.sampleBuffer));
+    native->setStartOfEncoderSampleIndex(attachment.startOfEncoderSampleIndex);
+    native->setEndOfEncoderSampleIndex(attachment.endOfEncoderSampleIndex);
+  }
   MTL::ComputeCommandEncoder *realEncoder = NULL;
-  SERIALISE_TIME_CALL(realEncoder = Unwrap(this)->computeCommandEncoder(descriptor));
+  SERIALISE_TIME_CALL(realEncoder = Unwrap(this)->computeCommandEncoder(nativeDescriptor));
+  nativeDescriptor->release();
   if(!realEncoder)
     return NULL;
 
@@ -461,9 +653,13 @@ WrappedMTLComputeCommandEncoder *WrappedMTLCommandBuffer::computeCommandEncoderW
     CACHE_THREAD_SERIALISER();
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLCommandBuffer_computeCommandEncoderWithDescriptor);
     Serialise_computeCommandEncoderWithDescriptor(ser, wrappedEncoder,
-                                                  descriptor->dispatchType());
+                                                  descriptor->dispatchType(), attachments);
     GetRecord(this)->AddChunk(scope.Get());
     GetResourceManager()->AddResourceRecord(wrappedEncoder);
+    for(const auto &attachment : attachments)
+      if(attachment.sampleBuffer)
+        GetRecord(this)->MarkResourceFrameReferenced(attachment.sampleBufferId,
+                                                     eFrameRef_PartialWrite);
   }
   return wrappedEncoder;
 }
@@ -481,12 +677,14 @@ bool WrappedMTLCommandBuffer::Serialise_computeCommandEncoder(
 
   if(IsReplayingAndReading())
   {
-    if(dispatchType != MTL::DispatchTypeSerial && dispatchType != MTL::DispatchTypeConcurrent)
+    if(!CommandBuffer || !m_Device->CanEncodeReplayEvent(CommandBuffer) ||
+       ComputeCommandEncoder == ResourceId() ||
+       (dispatchType != MTL::DispatchTypeSerial && dispatchType != MTL::DispatchTypeConcurrent))
     {
       RDCERR("Invalid Metal compute dispatch type %u", (uint32_t)dispatchType);
       return false;
     }
-    return ReplayComputeCommandEncoder(
+    return CommandBuffer->ReplayComputeCommandEncoder(
         ComputeCommandEncoder, Unwrap(CommandBuffer)->computeCommandEncoder(dispatchType));
   }
   return true;
@@ -528,6 +726,12 @@ bool WrappedMTLCommandBuffer::Serialise_renderCommandEncoderWithDescriptor(
 
   if(IsReplayingAndReading())
   {
+    if(!CommandBuffer || !m_Device->CanEncodeReplayEvent(CommandBuffer) ||
+       RenderCommandEncoder == ResourceId())
+    {
+      RDCERR("Metal render encoder requires an active uncommitted command buffer");
+      return false;
+    }
     if((descriptor.rasterizationRateMapId != ResourceId() &&
         (!descriptor.rasterizationRateMap ||
          descriptor.rasterizationRateMap->m_Type != eResRasterizationRateMap ||
@@ -720,6 +924,185 @@ WrappedMTLRenderCommandEncoder *WrappedMTLCommandBuffer::renderCommandEncoderWit
 }
 
 template <typename SerialiserType>
+bool WrappedMTLCommandBuffer::Serialise_parallelRenderCommandEncoderWithDescriptor(
+    SerialiserType &ser, WrappedMTLParallelRenderCommandEncoder *encoder,
+    RDMTL::RenderPassDescriptor &descriptor)
+{
+  SERIALISE_ELEMENT_LOCAL(CommandBuffer, this).Important();
+  SERIALISE_ELEMENT_LOCAL(ParallelRenderCommandEncoder, GetResID(encoder))
+      .TypedAs("MTLParallelRenderCommandEncoder"_lit).Important();
+  SERIALISE_ELEMENT(descriptor).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!CommandBuffer || CommandBuffer->m_Type != eResCommandBuffer ||
+       !CommandBuffer->m_Real || !m_Device->CanEncodeReplayEvent(CommandBuffer) ||
+       ParallelRenderCommandEncoder == ResourceId())
+    {
+      RDCERR("Invalid Metal parallel render command buffer or encoder identity");
+      return false;
+    }
+    WrappedMTLObject *existing = GetResourceManager()->GetResource(
+        ParallelRenderCommandEncoder, true);
+    if(existing && existing->m_Type != eResParallelRenderCommandEncoder)
+    {
+      RDCERR("Invalid Metal parallel render encoder resource identity");
+      return false;
+    }
+    if((descriptor.rasterizationRateMapId != ResourceId() &&
+        (!descriptor.rasterizationRateMap ||
+         descriptor.rasterizationRateMap->m_Type != eResRasterizationRateMap ||
+         !descriptor.rasterizationRateMap->m_Real ||
+         GetResID(descriptor.rasterizationRateMap) != descriptor.rasterizationRateMapId)) ||
+       (descriptor.rasterizationRateMapId == ResourceId() && descriptor.rasterizationRateMap))
+    {
+      RDCERR("Invalid Metal parallel render pass rasterization rate map identity");
+      return false;
+    }
+    for(const auto &attachment : descriptor.sampleBufferAttachments)
+    {
+      if((attachment.sampleBufferId != ResourceId() &&
+          (!attachment.sampleBuffer ||
+           GetResID(attachment.sampleBuffer) != attachment.sampleBufferId)) ||
+         (attachment.sampleBufferId == ResourceId() && attachment.sampleBuffer) ||
+         (attachment.sampleBuffer &&
+          (attachment.sampleBuffer->m_Type != eResCounterSampleBuffer ||
+           !attachment.sampleBuffer->m_Real || attachment.sampleBuffer->m_Device != m_Device)))
+      {
+        RDCERR("Invalid Metal parallel render pass counter sample buffer identity");
+        return false;
+      }
+      if(!attachment.sampleBuffer)
+        continue;
+      const uint64_t count = Unwrap(attachment.sampleBuffer)->sampleCount();
+      for(uint64_t index : {uint64_t(attachment.startOfVertexSampleIndex),
+                            uint64_t(attachment.endOfVertexSampleIndex),
+                            uint64_t(attachment.startOfFragmentSampleIndex),
+                            uint64_t(attachment.endOfFragmentSampleIndex)})
+        if(index != MTLCounterDontSample && index >= count)
+        {
+          RDCERR("Invalid Metal parallel render pass counter sample index");
+          return false;
+        }
+    }
+    MTL::RenderPassDescriptor *nativeDescriptor(descriptor);
+    uint16_t deferredStoreActions = 0;
+    for(NS::UInteger i = 0; i < descriptor.colorAttachments.size(); i++)
+      if(descriptor.colorAttachments[i].storeAction == MTL::StoreActionUnknown)
+      {
+        if(descriptor.colorAttachments[i].texture)
+          deferredStoreActions |= uint16_t(1U << i);
+        else
+          nativeDescriptor->colorAttachments()->object(i)->setStoreAction(MTL::StoreActionStore);
+      }
+    if(descriptor.depthAttachment.storeAction == MTL::StoreActionUnknown)
+    {
+      if(descriptor.depthAttachment.texture)
+        deferredStoreActions |= uint16_t(1U << 8);
+      else
+        nativeDescriptor->depthAttachment()->setStoreAction(MTL::StoreActionStore);
+    }
+    if(descriptor.stencilAttachment.storeAction == MTL::StoreActionUnknown)
+    {
+      if(descriptor.stencilAttachment.texture)
+        deferredStoreActions |= uint16_t(1U << 9);
+      else
+        nativeDescriptor->stencilAttachment()->setStoreAction(MTL::StoreActionStore);
+    }
+    MTL::ParallelRenderCommandEncoder *real =
+        Unwrap(CommandBuffer)->parallelRenderCommandEncoder(nativeDescriptor);
+    nativeDescriptor->release();
+    if(!real) return false;
+    WrappedMTLParallelRenderCommandEncoder *wrapped =
+        (WrappedMTLParallelRenderCommandEncoder *)existing;
+    if(wrapped)
+      GetResourceManager()->ReplaceRealResource(wrapped, real);
+    else
+      GetResourceManager()->WrapResource(ParallelRenderCommandEncoder, real, wrapped);
+    wrapped->SetCommandBuffer(CommandBuffer);
+    wrapped->SetDeferredStoreActions(deferredStoreActions);
+    m_Device->SetReplayParallelRenderCommandEncoder(wrapped);
+    m_Device->GetReplay()->BeginRenderPass(descriptor);
+    ResourceId colorTarget;
+    if(!descriptor.colorAttachments.empty() && descriptor.colorAttachments[0].texture)
+      colorTarget = GetResID(descriptor.colorAttachments[0].texture);
+    m_Device->SetReplayRenderTarget(colorTarget);
+    if(IsLoading(m_State))
+    {
+      m_Device->AddResource(ParallelRenderCommandEncoder, ResourceType::CommandBuffer,
+                            "Parallel Render Encoder");
+      m_Device->DerivedResource(CommandBuffer, ParallelRenderCommandEncoder);
+      AddEvent();
+      ActionDescription action;
+      action.customName = StringFormat::Fmt("Begin Metal Parallel Render Pass (%s)",
+                                            RDMTL::RenderPassOpString(descriptor, false).c_str());
+      action.flags = ActionFlags::PassBoundary | ActionFlags::BeginPass;
+      bool clearsColor = false;
+      for(const auto &attachment : descriptor.colorAttachments)
+        clearsColor |= attachment.texture && attachment.loadAction == MTL::LoadActionClear;
+      if(clearsColor) action.flags |= ActionFlags::Clear | ActionFlags::ClearColor;
+      const bool clearsDepth = descriptor.depthAttachment.texture &&
+                               descriptor.depthAttachment.loadAction == MTL::LoadActionClear;
+      const bool clearsStencil = descriptor.stencilAttachment.texture &&
+                                 descriptor.stencilAttachment.loadAction == MTL::LoadActionClear;
+      if(clearsDepth || clearsStencil)
+        action.flags |= ActionFlags::Clear | ActionFlags::ClearDepthStencil;
+      m_Device->GetReplay()->SetActionOutputs(action);
+      AddAction(action);
+      m_Device->GetReplay()->AddRenderPassLoadUsage(descriptor);
+    }
+  }
+  return true;
+}
+
+WrappedMTLParallelRenderCommandEncoder *
+WrappedMTLCommandBuffer::parallelRenderCommandEncoderWithDescriptor(
+    RDMTL::RenderPassDescriptor &descriptor)
+{
+  MTL::RenderPassDescriptor *nativeDescriptor(descriptor);
+  MTL::ParallelRenderCommandEncoder *real = NULL;
+  SERIALISE_TIME_CALL(real = Unwrap(this)->parallelRenderCommandEncoder(nativeDescriptor));
+  nativeDescriptor->release();
+  if(!real) return NULL;
+  WrappedMTLParallelRenderCommandEncoder *wrapped = NULL;
+  GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
+  wrapped->SetCommandBuffer(this);
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLCommandBuffer_parallelRenderCommandEncoderWithDescriptor);
+    Serialise_parallelRenderCommandEncoderWithDescriptor(ser, wrapped, descriptor);
+    MetalResourceRecord *record = GetRecord(this);
+    record->AddChunk(scope.Get());
+    GetResourceManager()->AddResourceRecord(wrapped);
+    auto referenceAttachment = [record](const RDMTL::RenderPassAttachmentDescriptor &attachment) {
+      if(attachment.texture)
+        record->MarkResourceFrameReferenced(GetResID(attachment.texture), eFrameRef_Read);
+      if(attachment.resolveTexture)
+        record->MarkResourceFrameReferenced(GetResID(attachment.resolveTexture), eFrameRef_Read);
+    };
+    for(const auto &attachment : descriptor.colorAttachments)
+      referenceAttachment(attachment);
+    referenceAttachment(descriptor.depthAttachment);
+    referenceAttachment(descriptor.stencilAttachment);
+    if(descriptor.visibilityResultBuffer)
+      record->MarkResourceFrameReferenced(GetResID(descriptor.visibilityResultBuffer),
+                                          eFrameRef_ReadBeforeWrite);
+    if(descriptor.rasterizationRateMap)
+      record->MarkResourceFrameReferenced(GetResID(descriptor.rasterizationRateMap), eFrameRef_Read);
+    for(const auto &attachment : descriptor.sampleBufferAttachments)
+      if(attachment.sampleBuffer)
+        record->MarkResourceFrameReferenced(attachment.sampleBufferId, eFrameRef_PartialWrite);
+  }
+  return wrapped;
+}
+
+template bool WrappedMTLCommandBuffer::Serialise_parallelRenderCommandEncoderWithDescriptor(
+    ReadSerialiser &, WrappedMTLParallelRenderCommandEncoder *, RDMTL::RenderPassDescriptor &);
+template bool WrappedMTLCommandBuffer::Serialise_parallelRenderCommandEncoderWithDescriptor(
+    WriteSerialiser &, WrappedMTLParallelRenderCommandEncoder *, RDMTL::RenderPassDescriptor &);
+
+template <typename SerialiserType>
 bool WrappedMTLCommandBuffer::Serialise_presentDrawable(SerialiserType &ser,
                                                         WrappedMTLTexture *presentedImage)
 {
@@ -850,6 +1233,14 @@ bool WrappedMTLCommandBuffer::Serialise_commit(SerialiserType &ser)
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!CommandBuffer || !m_Device->CanEncodeReplayEvent(CommandBuffer))
+    {
+      RDCERR("Metal command buffer commit requires the active uncommitted buffer");
+      return false;
+    }
+    m_Device->AssignPendingReplayCPUBufferUpdates(CommandBuffer);
+    if(!m_Device->ApplyReplayCPUBufferUpdates(CommandBuffer))
+      return false;
     CommandBuffer->commit();
     m_Device->MarkReplayCommandBufferCommitted();
   }
@@ -864,7 +1255,14 @@ void WrappedMTLCommandBuffer::commit()
   // It will be released when it is no longer required to be tracked
   if(isCapture)
   {
+    MetalCmdBufferRecordingInfo *info = GetRecord(this)->cmdInfo;
+    RDCASSERT(info && !info->retainedProxy && !info->retainedNative && m_ObjcBridge);
+    // The record still refers to this wrapper at frame end. Retaining only the native
+    // command buffer lets an autorelease pool destroy the embedded ObjC proxy and wrapper,
+    // leaving record->m_Resource dangling while we wait for submitted GPU work.
+    info->retainedProxy = ((NS::Object *)this)->retain();
     mtlCommandBuffer->retain();
+    info->retainedNative = mtlCommandBuffer;
     // Snapshot before native commit can invoke callbacks or mutate shared memory on the GPU.
     m_Device->CaptureCmdBufCPUWrites(GetRecord(this));
   }
@@ -1061,14 +1459,16 @@ INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer,
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer,
                                             WrappedMTLBlitCommandEncoder *encoder,
                                             blitCommandEncoderWithDescriptor,
-                                            bool hasSampleBuffers);
+                                            bool hasSampleBuffers,
+                                            rdcarray<RDMTL::BlitPassSampleBufferAttachmentDescriptor> attachments);
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer,
                                             WrappedMTLComputeCommandEncoder *encoder,
                                             computeCommandEncoder);
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer,
                                             WrappedMTLComputeCommandEncoder *encoder,
                                             computeCommandEncoderWithDescriptor,
-                                            MTL::DispatchType dispatchType);
+                                            MTL::DispatchType dispatchType,
+                                            rdcarray<RDMTL::ComputePassSampleBufferAttachmentDescriptor> attachments);
 INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandBuffer,
                                             WrappedMTLComputeCommandEncoder *encoder,
                                             computeCommandEncoder,

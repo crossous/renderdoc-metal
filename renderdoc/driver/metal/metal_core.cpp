@@ -34,6 +34,7 @@
 #include "metal_library.h"
 #include "metal_binary_archive.h"
 #include "metal_render_command_encoder.h"
+#include "metal_parallel_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_compute_pipeline_state.h"
 #include "metal_visible_function_table.h"
@@ -101,7 +102,7 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
   // A legacy textureBarrier before the first GPU operation in a pass is redundant. Track every
   // render execution chunk so that case can be replayed without calling an API rejected by this
   // device's Metal validation layer; post-work barriers remain explicitly unsupported.
-  if(m_ReplayRenderCommandEncoder)
+  m_ReplayChunkIsGPUWork = false;
   {
     switch(chunk)
     {
@@ -123,7 +124,7 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       case MetalChunk::MTLRenderCommandEncoder_drawMeshThreadgroups:
       case MetalChunk::MTLRenderCommandEncoder_drawMeshThreads:
       case MetalChunk::MTLRenderCommandEncoder_drawMeshThreadgroups_indirect:
-        m_ReplayRenderCommandEncoder->MarkGPUWork();
+        m_ReplayChunkIsGPUWork = true;
         break;
       default: break;
     }
@@ -344,9 +345,9 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     }
     case MetalChunk::MTLCommandBuffer_computeCommandEncoderWithDescriptor:
       return m_DummyReplayCommandBuffer->Serialise_computeCommandEncoderWithDescriptor(
-          ser, NULL, MTL::DispatchTypeSerial);
+          ser, NULL, MTL::DispatchTypeSerial, {});
     case MetalChunk::MTLCommandBuffer_blitCommandEncoderWithDescriptor:
-      return m_DummyReplayCommandBuffer->Serialise_blitCommandEncoderWithDescriptor(ser, NULL, false);
+      return m_DummyReplayCommandBuffer->Serialise_blitCommandEncoderWithDescriptor(ser, NULL, false, {});
     case MetalChunk::MTLCommandBuffer_computeCommandEncoder:
       return m_DummyReplayCommandBuffer->Serialise_computeCommandEncoder(ser, NULL);
     case MetalChunk::MTLCommandBuffer_computeCommandEncoderWithDispatchType:
@@ -357,7 +358,39 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLCommandBuffer_encodeSignalEvent:
       return m_DummyReplayCommandBuffer->Serialise_encodeEvent(ser, NULL, 0, true);
     case MetalChunk::MTLCommandBuffer_parallelRenderCommandEncoderWithDescriptor:
-      METAL_CHUNK_NOT_HANDLED();
+    {
+      RDMTL::RenderPassDescriptor descriptor;
+      return m_DummyReplayCommandBuffer->Serialise_parallelRenderCommandEncoderWithDescriptor(
+          ser, NULL, descriptor);
+    }
+    case MetalChunk::MTLParallelRenderCommandEncoder_renderCommandEncoder:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_renderCommandEncoder(ser, NULL);
+    case MetalChunk::MTLParallelRenderCommandEncoder_endEncoding:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_endEncoding(ser);
+    case MetalChunk::MTLParallelRenderCommandEncoder_setColorStoreAction:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_setStoreAction(
+          ser, MTL::StoreActionStore, 0, 0);
+    case MetalChunk::MTLParallelRenderCommandEncoder_setDepthStoreAction:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_setStoreAction(
+          ser, MTL::StoreActionStore, 0, 1);
+    case MetalChunk::MTLParallelRenderCommandEncoder_setStencilStoreAction:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_setStoreAction(
+          ser, MTL::StoreActionStore, 0, 2);
+    case MetalChunk::MTLParallelRenderCommandEncoder_setColorStoreActionOptions:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_setStoreActionOptions(
+          ser, MTL::StoreActionOptionNone, 0, 0);
+    case MetalChunk::MTLParallelRenderCommandEncoder_setDepthStoreActionOptions:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_setStoreActionOptions(
+          ser, MTL::StoreActionOptionNone, 0, 1);
+    case MetalChunk::MTLParallelRenderCommandEncoder_setStencilStoreActionOptions:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_setStoreActionOptions(
+          ser, MTL::StoreActionOptionNone, 0, 2);
+    case MetalChunk::MTLParallelRenderCommandEncoder_pushDebugGroup:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_debugLabel(ser, NULL, 0);
+    case MetalChunk::MTLParallelRenderCommandEncoder_popDebugGroup:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_debugLabel(ser, NULL, 1);
+    case MetalChunk::MTLParallelRenderCommandEncoder_insertDebugSignpost:
+      return m_DummyReplayParallelRenderCommandEncoder->Serialise_debugLabel(ser, NULL, 2);
     case MetalChunk::MTLCommandBuffer_resourceStateCommandEncoder: METAL_CHUNK_NOT_HANDLED();
     case MetalChunk::MTLCommandBuffer_resourceStateCommandEncoderWithDescriptor:
       METAL_CHUNK_NOT_HANDLED();
@@ -1079,6 +1112,10 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       return m_DummyReplayComputeCommandEncoder->Serialise_useResource(ser, NULL, MTL::ResourceUsageRead);
     case MetalChunk::MTLComputeCommandEncoder_useResources:
       return m_DummyReplayComputeCommandEncoder->Serialise_useResources(ser, {}, MTL::ResourceUsageRead);
+    case MetalChunk::MTLComputeCommandEncoder_useHeap:
+      return m_DummyReplayComputeCommandEncoder->Serialise_declareHeaps(ser, {}, false);
+    case MetalChunk::MTLComputeCommandEncoder_useHeaps:
+      return m_DummyReplayComputeCommandEncoder->Serialise_declareHeaps(ser, {}, true);
     case MetalChunk::MTLComputeCommandEncoder_memoryBarrierWithScope:
       return m_DummyReplayComputeCommandEncoder->Serialise_memoryBarrierWithScope(ser, MTL::BarrierScopeBuffers);
     case MetalChunk::MTLComputeCommandEncoder_memoryBarrierWithResources:
@@ -1297,9 +1334,59 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
 
     if((SystemChunk)chunk == SystemChunk::CaptureScope)
     {
+      // A pre-frame BC placement texture must have captured block contents. Older v0xF
+      // captures did not snapshot textures; replaying them would sample uninitialised memory.
+      for(const TextureDescription &description : GetReplay()->GetTextures())
+      {
+        WrappedMTLObject *object = GetResourceManager()->GetResource(description.resourceId, true);
+        MTL::Texture *texture = object && object->m_Type == eResTexture ?
+                                Unwrap((WrappedMTLTexture *)object) : NULL;
+        if(!texture || !texture->heap() || texture->heap()->type() != MTL::HeapTypePlacement)
+          continue;
+        const MTL::PixelFormat format = texture->pixelFormat();
+        if((format == MTL::PixelFormatBC1_RGBA ||
+            format == MTL::PixelFormatBC1_RGBA_sRGB ||
+            format == MTL::PixelFormatBC5_RGUnorm) &&
+           m_ReplayBCTextureInitialContents.count(description.resourceId) == 0)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+                              "Missing Metal BC placement texture initial contents");
+      }
       GetReplay()->WriteFrameRecord().frameInfo.fileOffset = offsetStart;
       frameDataSize = reader->GetSize() - reader->GetOffset();
       m_FrameReader = new StreamReader(reader, frameDataSize);
+
+      // An Empty/Volatile transition is only legal after the GPU has stopped using the
+      // resource. Capture completion callbacks are not represented by command-buffer chunks,
+      // and replay currently does not reproduce their resource lifetime boundary. Scan before
+      // executing any frame GPU work: otherwise Metal Validation can abort the process while
+      // setting a still-in-use resource purgeable.
+      {
+        ReadSerialiser safetyScan(m_FrameReader, Ownership::Nothing);
+        safetyScan.SetVersion(m_SectionVersion);
+        while(!m_FrameReader->AtEnd() && !safetyScan.IsErrored())
+        {
+          MetalChunk candidate = safetyScan.ReadChunk<MetalChunk>();
+          if(candidate == MetalChunk::MTLBuffer_setPurgeableState ||
+             candidate == MetalChunk::MTLTexture_setPurgeableState)
+          {
+            ResourceId resource;
+            uint32_t state = 0;
+            safetyScan.Serialise(candidate == MetalChunk::MTLBuffer_setPurgeableState ?
+                                     "Buffer"_lit : "Texture"_lit,
+                                 resource);
+            safetyScan.Serialise("State"_lit, state);
+            if(state == MTL::PurgeableStateVolatile || state == MTL::PurgeableStateEmpty)
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+                                  "Metal frame purgeable-state transition requires GPU completion "
+                                  "tracking before replay (resource %s)", ToStr(resource).c_str());
+          }
+          safetyScan.SkipCurrentChunk();
+          safetyScan.EndChunk();
+        }
+        if(safetyScan.IsErrored())
+          return RDResult(ResultCode::APIDataCorrupted, safetyScan.GetError().message);
+        m_FrameReader->SetOffset(0);
+      }
 
       if(!GetReplay()->SnapshotTextureViewSources())
         RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal texture view initial state");
@@ -1344,7 +1431,9 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
         if(scan.IsErrored())
           return RDResult(ResultCode::APIDataCorrupted, scan.GetError().message);
       }
-      if(!ResetReplayCPUUpdatedBuffers() || !GetReplay()->ResetTextureViewSources())
+      if(!ResetReplayCPUUpdatedBuffers() || !RestoreReplayPrivateBufferInitialContents() ||
+         !RestoreReplayBCTextureInitialContents() ||
+         !GetReplay()->ResetTextureViewSources())
         RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal initial CPU buffer data");
       m_FrameReader->SetOffset(0);
 
@@ -1370,11 +1459,15 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
   m_StructuredFile->Swap(*m_StoredStructuredData);
   m_StructuredFile = m_StoredStructuredData;
 
-  // Only submission-time CPU-updated buffers need the reset cache introduced for this path.
-  // Other initial-content/resource types keep their existing replay handling.
+  // Keep Private snapshots as well: a GPU-written indirect argument or vertex buffer can be
+  // read before the frame writes it, and every later event replay must start from those bytes.
   for(auto it = m_ReplayBufferInitialContents.begin(); it != m_ReplayBufferInitialContents.end();)
   {
-    if(m_ReplayCPUUpdatedBuffers.count(it->first) == 0)
+    WrappedMTLObject *object = GetResourceManager()->GetResource(it->first, true);
+    const bool privateBuffer = object && object->m_Type == eResBuffer && object->m_Real &&
+                               Unwrap((WrappedMTLBuffer *)object)->storageMode() ==
+                                   MTL::StorageModePrivate;
+    if(m_ReplayCPUUpdatedBuffers.count(it->first) == 0 && !privateBuffer)
       it = m_ReplayBufferInitialContents.erase(it);
     else
       ++it;
@@ -1512,84 +1605,307 @@ RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endE
   return result;
 }
 
-void WrappedMTLDevice::FinishReplayCommands()
+bool WrappedMTLDevice::FinishReplayCommands()
 {
-  if(m_ReplayAccelerationStructureCommandEncoder)
+  bool success = true;
+  const bool traceWaits = !Process::GetEnvVariable("RENDERDOC_METAL_TRACE_REPLAY_WAITS").empty();
+  for(ResourceId id : m_ReplayCommandBufferOrder)
   {
-    Unwrap(m_ReplayAccelerationStructureCommandEncoder)->endEncoding();
-    m_ReplayAccelerationStructureCommandEncoder = NULL;
-  }
-  if(m_ReplayComputeCommandEncoder)
-  {
-    Unwrap(m_ReplayComputeCommandEncoder)->endEncoding();
-    m_ReplayComputeCommandEncoder = NULL;
-  }
-  if(m_ReplayBlitCommandEncoder)
-  {
-    Unwrap(m_ReplayBlitCommandEncoder)->endEncoding();
-    m_ReplayBlitCommandEncoder = NULL;
-  }
-
-  if(m_ReplayRenderCommandEncoder)
-  {
-    m_ReplayRenderCommandEncoder->ResolveDeferredStoreActions();
-    Unwrap(m_ReplayRenderCommandEncoder)->endEncoding();
-    m_ReplayRenderCommandEncoder = NULL;
-  }
-
-  if(m_ReplayCommandBuffer)
-  {
+    auto it = m_ReplayCommandBuffers.find(id);
+    if(it == m_ReplayCommandBuffers.end() || !it->second.buffer)
+      continue;
+    if(!SelectReplayCommandBuffer(it->second.buffer))
+    {
+      success = false;
+      continue;
+    }
+    if(m_ReplayAccelerationStructureCommandEncoder)
+    {
+      Unwrap(m_ReplayAccelerationStructureCommandEncoder)->endEncoding();
+      m_ReplayAccelerationStructureCommandEncoder = NULL;
+    }
+    if(m_ReplayComputeCommandEncoder)
+    {
+      Unwrap(m_ReplayComputeCommandEncoder)->endEncoding();
+      m_ReplayComputeCommandEncoder = NULL;
+    }
+    if(m_ReplayBlitCommandEncoder)
+    {
+      Unwrap(m_ReplayBlitCommandEncoder)->endEncoding();
+      m_ReplayBlitCommandEncoder = NULL;
+    }
+    if(m_ReplayRenderCommandEncoder)
+    {
+      if(!m_ReplayRenderCommandEncoder->GetParallelParent())
+        m_ReplayRenderCommandEncoder->ResolveDeferredStoreActions();
+      Unwrap(m_ReplayRenderCommandEncoder)->endEncoding();
+      m_ReplayRenderCommandEncoder = NULL;
+    }
+    if(m_ReplayParallelRenderCommandEncoder)
+    {
+      m_ReplayParallelRenderCommandEncoder->ResolveDeferredStoreActions();
+      Unwrap(m_ReplayParallelRenderCommandEncoder)->endEncoding();
+      m_ReplayParallelRenderCommandEncoder = NULL;
+    }
     if(!m_ReplayCommandBufferCommitted)
+    {
+      if(!ApplyReplayCPUBufferUpdates(m_ReplayCommandBuffer))
+      {
+        RDCERR("Invalid Metal CPU buffer update before partial replay submission");
+        success = false;
+        // An encoder has already been ended. Submit only if its inputs were restored.
+        it->second.buffer = NULL;
+        continue;
+      }
       Unwrap(m_ReplayCommandBuffer)->commit();
-    Unwrap(m_ReplayCommandBuffer)->waitUntilCompleted();
-    if(NS::Error *error = Unwrap(m_ReplayCommandBuffer)->error())
-      RDCERR("Metal replay command buffer failed: %s",
-             error->localizedDescription()->utf8String());
-    m_ReplayCommandBuffer = NULL;
-    m_ReplayCommandBufferCommitted = false;
+      m_ReplayCommandBufferCommitted = true;
+      it->second.committed = true;
+    }
   }
+  // A buffer can wait on an event signaled by another buffer created later in this frame. Commit
+  // every partial-replay tail before waiting on any of them, preserving Metal queue dependencies.
+  for(ResourceId id : m_ReplayCommandBufferOrder)
+  {
+    auto it = m_ReplayCommandBuffers.find(id);
+    if(it == m_ReplayCommandBuffers.end() || !it->second.buffer || !it->second.committed)
+      continue;
+    MTL::CommandBuffer *real = Unwrap(it->second.buffer);
+    if(traceWaits)
+      fprintf(stderr, "Metal replay wait begin: buffer=%s status=%llu\n",
+              ToStr(id).c_str(), (uint64_t)real->status());
+    real->waitUntilCompleted();
+    if(traceWaits)
+      fprintf(stderr, "Metal replay wait end: buffer=%s status=%llu\n",
+              ToStr(id).c_str(), (uint64_t)real->status());
+    if(NS::Error *error = real->error())
+    {
+      RDCERR("Metal replay command buffer failed: %s", error->localizedDescription()->utf8String());
+      success = false;
+    }
+    it->second.buffer = NULL;
+  }
+  m_ReplayCommandBuffers.clear();
+  m_ReplayCommandBufferOrder.clear();
+  m_PendingReplayCPUBufferUpdates.clear();
+  m_ReplayCommandBuffer = NULL;
+  m_ReplayRenderCommandEncoder = NULL;
+  m_ReplayParallelRenderCommandEncoder = NULL;
+  m_ReplayBlitCommandEncoder = NULL;
+  m_ReplayAccelerationStructureCommandEncoder = NULL;
+  m_ReplayComputeCommandEncoder = NULL;
+  m_ReplayCommandBufferCommitted = false;
+  m_ReplayRenderTarget = ResourceId();
+  GetReplay()->ClearEncoderContexts();
+  return success;
 }
 
 RDResult WrappedMTLDevice::ReplayLog(uint32_t endEventID, ReplayLogType replayType)
 {
   if(replayType != eReplay_OnlyDraw)
   {
-    FinishReplayCommands();
-    if(!ResetReplayCPUUpdatedBuffers() || !GetReplay()->ResetTextureViewSources())
-      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal CPU buffer reset");
+    if(!FinishReplayCommands())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal replay completion");
+    // Frame-created placement children belong to a previous execution of the frame stream.
+    // Release their native allocations before restoring the frame-start contents. Their
+    // ResourceIds and metadata stay registered so the creation chunks can bind fresh objects.
+    for(ResourceId id : m_FrameBufferTextureViews)
+    {
+      WrappedMTLObject *wrapped = GetResourceManager()->GetResource(id, true);
+      if(wrapped && wrapped->m_Real)
+        GetResourceManager()->ReplaceRealResource(wrapped, (NS::Object *)NULL, true);
+    }
+    std::set<WrappedMTLHeap *> affectedHeaps;
+    for(const auto &resource : m_FramePlacementResources)
+    {
+      WrappedMTLObject *wrapped = GetResourceManager()->GetResource(resource.first, true);
+      if(wrapped && wrapped->m_Real)
+        GetResourceManager()->ReplaceRealResource(wrapped, (NS::Object *)NULL, true);
+      affectedHeaps.insert(resource.second);
+    }
+    for(WrappedMTLHeap *heap : affectedHeaps)
+      heap->ResetFramePlacementRanges();
+    if(!ResetReplayCPUUpdatedBuffers())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal Shared buffer reset");
+    if(!RestoreReplayPrivateBufferInitialContents())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal Private buffer reset");
+    if(!RestoreReplayBCTextureInitialContents())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal BC texture reset");
+    if(!GetReplay()->ResetTextureViewSources())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal texture view reset");
   }
 
   RDResult result = ContextReplayLog(CaptureState::ActiveReplaying, endEventID, replayType);
   if(result != ResultCode::Succeeded || replayType != eReplay_WithoutDraw)
-    FinishReplayCommands();
+  {
+    if(!FinishReplayCommands())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal replay completion");
+  }
   return result;
 }
 
 bool WrappedMTLDevice::SetReplayCommandBuffer(WrappedMTLCommandBuffer *commandBuffer)
 {
-  // A following submission can update the same shared memory used by the preceding submission.
-  // Finish the preceding replay buffer before making those CPU writes visible.
-  FinishReplayCommands();
-  m_ReplayCommandBuffer = commandBuffer;
-  m_ReplayCommandBufferCommitted = false;
-  if(IsActiveReplaying(m_State))
+  if(!commandBuffer || m_ReplayCommandBuffers.size() >= 256 ||
+     m_ReplayCommandBuffers.count(GetResID(commandBuffer)))
+    return false;
+  ReplayCommandBufferState state;
+  state.buffer = commandBuffer;
+  m_ReplayCommandBuffers[GetResID(commandBuffer)] = state;
+  m_ReplayCommandBufferOrder.push_back(GetResID(commandBuffer));
+  if(!SelectReplayCommandBuffer(commandBuffer))
+    return false;
+  return true;
+}
+
+bool WrappedMTLDevice::SelectReplayCommandBuffer(WrappedMTLCommandBuffer *buffer)
+{
+  if(!buffer || !buffer->m_Real)
+    return false;
+  auto next = m_ReplayCommandBuffers.find(GetResID(buffer));
+  if(next == m_ReplayCommandBuffers.end() || next->second.buffer != buffer)
+    return false;
+  if(m_ReplayCommandBuffer == buffer)
+    return true;
+  if(m_ReplayCommandBuffer)
   {
-    auto it = m_ReplayCPUBufferUpdates.find(GetResID(commandBuffer));
-    if(it != m_ReplayCPUBufferUpdates.end())
-      for(const CPUBufferUpdate &update : it->second)
-      {
-        WrappedMTLObject *object = GetResourceManager()->GetResource(update.buffer, true);
-        if(!object || object->m_Type != eResBuffer || !object->m_Real)
-          return false;
-        MTL::Buffer *buffer = Unwrap((WrappedMTLBuffer *)object);
-        if(buffer->storageMode() != MTL::StorageModeShared || !buffer->contents() ||
-           update.offset > buffer->length() || update.data.size() > buffer->length() - update.offset)
-          return false;
-        memcpy((byte *)buffer->contents() + update.offset, update.data.data(), update.data.size());
-        if(!GetReplay()->RestoreArgumentBufferResources(update.buffer))
-          return false;
-      }
+    auto current = m_ReplayCommandBuffers.find(GetResID(m_ReplayCommandBuffer));
+    if(current != m_ReplayCommandBuffers.end())
+    {
+      current->second.render = m_ReplayRenderCommandEncoder;
+      current->second.parallel = m_ReplayParallelRenderCommandEncoder;
+      current->second.blit = m_ReplayBlitCommandEncoder;
+      current->second.acceleration = m_ReplayAccelerationStructureCommandEncoder;
+      current->second.compute = m_ReplayComputeCommandEncoder;
+      current->second.renderTarget = m_ReplayRenderTarget;
+      current->second.committed = m_ReplayCommandBufferCommitted;
+    }
   }
+  m_ReplayCommandBuffer = buffer;
+  m_ReplayRenderCommandEncoder = next->second.render;
+  m_ReplayParallelRenderCommandEncoder = next->second.parallel;
+  m_ReplayBlitCommandEncoder = next->second.blit;
+  m_ReplayAccelerationStructureCommandEncoder = next->second.acceleration;
+  m_ReplayComputeCommandEncoder = next->second.compute;
+  m_ReplayRenderTarget = next->second.renderTarget;
+  m_ReplayCommandBufferCommitted = next->second.committed;
+  GetReplay()->ActivateEncoderContext(GetResID(buffer));
+  return true;
+}
+
+bool WrappedMTLDevice::IsReplayCommandBufferCommitted(WrappedMTLCommandBuffer *buffer) const
+{
+  if(!buffer)
+    return true;
+  auto it = m_ReplayCommandBuffers.find(GetResID(buffer));
+  return it == m_ReplayCommandBuffers.end() || it->second.committed ||
+         (m_ReplayCommandBuffer == buffer && m_ReplayCommandBufferCommitted);
+}
+
+bool WrappedMTLDevice::CanEncodeReplayEvent(WrappedMTLCommandBuffer *buffer)
+{
+  return SelectReplayCommandBuffer(buffer) && !m_ReplayCommandBufferCommitted &&
+         !m_ReplayRenderCommandEncoder && !m_ReplayComputeCommandEncoder &&
+         !m_ReplayBlitCommandEncoder && !m_ReplayAccelerationStructureCommandEncoder &&
+         !m_ReplayParallelRenderCommandEncoder;
+}
+
+WrappedMTLRenderCommandEncoder *WrappedMTLDevice::GetReplayRenderCommandEncoder(
+    WrappedMTLRenderCommandEncoder *encoder)
+{
+  if(encoder && encoder->m_Type == eResRenderCommandEncoder &&
+     SelectReplayCommandBuffer(encoder->GetCommandBuffer()))
+  {
+    if(m_ReplayChunkIsGPUWork && m_ReplayRenderCommandEncoder == encoder)
+      encoder->MarkGPUWork();
+    return m_ReplayRenderCommandEncoder;
+  }
+  return NULL;
+}
+
+WrappedMTLParallelRenderCommandEncoder *WrappedMTLDevice::GetReplayParallelRenderCommandEncoder(
+    WrappedMTLParallelRenderCommandEncoder *encoder)
+{
+  if(encoder && encoder->m_Type == eResParallelRenderCommandEncoder &&
+     SelectReplayCommandBuffer(encoder->GetCommandBuffer()))
+    return m_ReplayParallelRenderCommandEncoder;
+  return NULL;
+}
+
+WrappedMTLBlitCommandEncoder *WrappedMTLDevice::GetReplayBlitCommandEncoder(
+    WrappedMTLBlitCommandEncoder *encoder)
+{
+  if(encoder && encoder->m_Type == eResBlitCommandEncoder &&
+     SelectReplayCommandBuffer(encoder->GetCommandBuffer()))
+    return m_ReplayBlitCommandEncoder;
+  return NULL;
+}
+
+WrappedMTLComputeCommandEncoder *WrappedMTLDevice::GetReplayComputeCommandEncoder(
+    WrappedMTLComputeCommandEncoder *encoder)
+{
+  if(encoder && encoder->m_Type == eResComputeCommandEncoder &&
+     SelectReplayCommandBuffer(encoder->GetCommandBuffer()))
+    return m_ReplayComputeCommandEncoder;
+  return NULL;
+}
+
+WrappedMTLAccelerationStructureCommandEncoder *
+WrappedMTLDevice::GetReplayAccelerationStructureCommandEncoder(
+    WrappedMTLAccelerationStructureCommandEncoder *encoder)
+{
+  if(encoder && encoder->m_Type == eResAccelerationStructureCommandEncoder &&
+     SelectReplayCommandBuffer(encoder->GetCommandBuffer()))
+    return m_ReplayAccelerationStructureCommandEncoder;
+  return NULL;
+}
+
+void WrappedMTLDevice::MarkReplayCommandBufferCommitted()
+{
+  if(m_ReplayCommandBuffer)
+  {
+    m_ReplayCommandBufferCommitted = true;
+    m_ReplayCommandBuffers[GetResID(m_ReplayCommandBuffer)].committed = true;
+  }
+}
+
+void WrappedMTLDevice::AssignPendingReplayCPUBufferUpdates(WrappedMTLCommandBuffer *buffer)
+{
+  if(buffer && !m_PendingReplayCPUBufferUpdates.empty())
+  {
+    rdcarray<CPUBufferUpdate> &updates = m_ReplayCPUBufferUpdates[GetResID(buffer)];
+    updates.append(m_PendingReplayCPUBufferUpdates);
+    m_PendingReplayCPUBufferUpdates.clear();
+  }
+}
+
+bool WrappedMTLDevice::ApplyReplayCPUBufferUpdates(WrappedMTLCommandBuffer *buffer)
+{
+  if(!buffer || !IsActiveReplaying(m_State))
+    return buffer != NULL;
+  auto state = m_ReplayCommandBuffers.find(GetResID(buffer));
+  if(state == m_ReplayCommandBuffers.end() || state->second.buffer != buffer)
+    return false;
+  if(state->second.cpuUpdatesApplied)
+    return true;
+  auto it = m_ReplayCPUBufferUpdates.find(GetResID(buffer));
+  if(it != m_ReplayCPUBufferUpdates.end())
+  {
+    for(const CPUBufferUpdate &update : it->second)
+    {
+      WrappedMTLObject *object = GetResourceManager()->GetResource(update.buffer, true);
+      if(!object || object->m_Type != eResBuffer || !object->m_Real)
+        return false;
+      MTL::Buffer *resource = Unwrap((WrappedMTLBuffer *)object);
+      if(resource->storageMode() != MTL::StorageModeShared || !resource->contents() ||
+         update.offset > resource->length() ||
+         update.data.size() > resource->length() - update.offset)
+        return false;
+      memcpy((byte *)resource->contents() + update.offset, update.data.data(), update.data.size());
+      if(!GetReplay()->RestoreArgumentBufferResources(update.buffer))
+        return false;
+    }
+  }
+  state->second.cpuUpdatesApplied = true;
   return true;
 }
 
@@ -1607,6 +1923,111 @@ bool WrappedMTLDevice::RecordReplayBufferInitialContents(ResourceId id, const by
   return true;
 }
 
+bool WrappedMTLDevice::RestoreReplayPrivateBufferInitialContents()
+{
+  // D3D12 and Vulkan restore GPU-local initial state before executing the frame. Metal's
+  // Initial Contents chunks were only cached; contents() cannot write a Private buffer.
+  // Reuse a bounded Shared staging buffer so a large frame does not duplicate all captured
+  // Private bytes in GPU-visible allocation. Wait before reusing staging storage.
+  static constexpr uint64_t stagingCapacity = 16 * 1024 * 1024;
+  MTL::Buffer *staging = NULL;
+  MTL::CommandBuffer *command = NULL;
+  MTL::BlitCommandEncoder *blit = NULL;
+  NS::AutoreleasePool *pool = NULL;
+  uint64_t staged = 0;
+  uint64_t total = 0;
+  uint32_t batches = 0;
+
+  auto flush = [&]() -> bool {
+    if(!command)
+      return true;
+    blit->endEncoding();
+    command->commit();
+    command->waitUntilCompleted();
+    NS::Error *error = command->error();
+    const MTL::CommandBufferStatus status = command->status();
+    if(status != MTL::CommandBufferStatusCompleted)
+      RDCERR("Metal Private initial contents upload failed: status=%u error=%s",
+             (uint32_t)status,
+             error ? error->localizedDescription()->utf8String() : "none");
+    command = NULL;
+    blit = NULL;
+    staged = 0;
+    batches++;
+    pool->drain();
+    pool = NULL;
+    return status == MTL::CommandBufferStatusCompleted;
+  };
+
+  for(const auto &initial : m_ReplayBufferInitialContents)
+  {
+    if(IsFramePlacementResource(initial.first))
+      continue;
+    WrappedMTLObject *object = GetResourceManager()->GetResource(initial.first, true);
+    if(!object || object->m_Type != eResBuffer || !object->m_Real)
+    {
+      flush();
+      if(staging) staging->release();
+      RDCERR("Missing Metal initial buffer %s", ToStr(initial.first).c_str());
+      return false;
+    }
+    MTL::Buffer *destination = Unwrap((WrappedMTLBuffer *)object);
+    if(destination->storageMode() != MTL::StorageModePrivate)
+      continue;
+    if(initial.second.size() != destination->length())
+    {
+      flush();
+      if(staging) staging->release();
+      RDCERR("Invalid Metal Private initial buffer length %s", ToStr(initial.first).c_str());
+      return false;
+    }
+    if(!staging)
+    {
+      staging = Unwrap(this)->newBuffer(stagingCapacity, MTL::ResourceStorageModeShared);
+      if(!staging || !staging->contents())
+      {
+        if(staging) staging->release();
+        RDCERR("Couldn't allocate Metal Private initial contents staging buffer");
+        return false;
+      }
+    }
+    for(uint64_t offset = 0; offset < initial.second.size();)
+    {
+      if(staged == stagingCapacity && !flush())
+      {
+        staging->release();
+        return false;
+      }
+      if(!command)
+      {
+        pool = NS::AutoreleasePool::alloc()->init();
+        command = m_mtlCommandQueue->commandBuffer();
+        blit = command ? command->blitCommandEncoder() : NULL;
+        if(!blit)
+        {
+          if(pool) pool->drain();
+          staging->release();
+          RDCERR("Couldn't create Metal Private initial contents blit encoder");
+          return false;
+        }
+      }
+      const uint64_t size = RDCMIN(uint64_t(initial.second.size()) - offset,
+                                   stagingCapacity - staged);
+      memcpy((byte *)staging->contents() + staged, initial.second.data() + offset, size);
+      blit->copyFromBuffer(staging, staged, destination, offset, size);
+      staged += size;
+      offset += size;
+      total += size;
+    }
+  }
+  const bool success = flush();
+  if(staging) staging->release();
+  if(!Process::GetEnvVariable("RENDERDOC_METAL_TRACE_INITIAL_PRIVATE").empty())
+    fprintf(stderr, "Metal Private initial contents: bytes=%llu batches=%u success=%d\n",
+            (unsigned long long)total, batches, success ? 1 : 0);
+  return success;
+}
+
 bool WrappedMTLDevice::ReplayCPUBufferUpdate(WrappedMTLBuffer *wrapped, uint64_t start,
                                             const bytebuf &data)
 {
@@ -1614,7 +2035,7 @@ bool WrappedMTLDevice::ReplayCPUBufferUpdate(WrappedMTLBuffer *wrapped, uint64_t
     return false;
   MTL::Buffer *buffer = Unwrap(wrapped);
   if(buffer->storageMode() != MTL::StorageModeShared || !buffer->contents() || data.empty() ||
-     start > buffer->length() || data.size() > buffer->length() - start || !m_ReplayCommandBuffer)
+     start > buffer->length() || data.size() > buffer->length() - start)
     return false;
   if(IsLoading(m_State))
   {
@@ -1623,12 +2044,13 @@ bool WrappedMTLDevice::ReplayCPUBufferUpdate(WrappedMTLBuffer *wrapped, uint64_t
       m_ReplayBufferInitialContents[id] = bytebuf((byte *)buffer->contents(), buffer->length());
     m_ReplayCPUUpdatedBuffers.insert(id);
     CPUBufferUpdate update = {id, start, data};
-    m_ReplayCPUBufferUpdates[GetResID(m_ReplayCommandBuffer)].push_back(update);
+    m_PendingReplayCPUBufferUpdates.push_back(update);
     memcpy((byte *)buffer->contents() + start, data.data(), data.size());
     if(!GetReplay()->RestoreArgumentBufferResources(id))
       return false;
   }
-  // Active replay has already applied the validated update at command-buffer creation.
+  // Active replay uses the loading pass's submission-owned snapshot before the corresponding
+  // command buffer is committed. The in-stream update chunk only validates its payload here.
   return true;
 }
 
@@ -1636,17 +2058,37 @@ bool WrappedMTLDevice::ResetReplayCPUUpdatedBuffers()
 {
   for(ResourceId id : m_ReplayCPUUpdatedBuffers)
   {
+    // Frame-created placement buffers are released before each seek and recreated by their
+    // creation chunk. Their cached CPU writes are applied at command-buffer submission, so
+    // there is no frame-start native allocation to restore here.
+    if(IsFramePlacementResource(id))
+      continue;
     WrappedMTLObject *object = GetResourceManager()->GetResource(id, true);
     if(!object || object->m_Type != eResBuffer || !object->m_Real)
+    {
+      RDCERR("Metal Shared reset missing buffer %s (object=%p type=%u real=%p framePlacement=%u snapshot=%u)",
+             ToStr(id).c_str(), object, object ? (uint32_t)object->m_Type : 0,
+             object ? object->m_Real : NULL, IsFramePlacementResource(id) ? 1U : 0U,
+             m_ReplayBufferInitialContents.count(id) ? 1U : 0U);
       return false;
+    }
     MTL::Buffer *buffer = Unwrap((WrappedMTLBuffer *)object);
     auto it = m_ReplayBufferInitialContents.find(id);
     if(it == m_ReplayBufferInitialContents.end() || buffer->storageMode() != MTL::StorageModeShared ||
        !buffer->contents() || it->second.size() != buffer->length())
+    {
+      RDCERR("Metal Shared reset invalid buffer %s (snapshot=%llu mode=%u contents=%p length=%llu)",
+             ToStr(id).c_str(),
+             it == m_ReplayBufferInitialContents.end() ? 0ULL : (uint64_t)it->second.size(),
+             (uint32_t)buffer->storageMode(), buffer->contents(), (uint64_t)buffer->length());
       return false;
+    }
     memcpy(buffer->contents(), it->second.data(), it->second.size());
     if(!GetReplay()->RestoreArgumentBufferResources(id))
+    {
+      RDCERR("Metal Shared reset argument buffer relocation failed for %s", ToStr(id).c_str());
       return false;
+    }
   }
   return true;
 }
@@ -1787,7 +2229,8 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
   }
   if(bbId == ResourceId())
   {
-    RDCERR("Invalid Capture backbuffer");
+    RDCERR("Invalid Capture backbuffer; discarding controlled Metal capture");
+    DiscardFrameCapture(devWnd);
     return false;
   }
   GetResourceManager()->MarkResourceFrameReferenced(bbId, eFrameRef_Read);
@@ -1804,10 +2247,9 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
     // wait for the GPU to be idle
     for(MetalResourceRecord *record : m_CaptureCommandBuffersSubmitted)
     {
-      WrappedMTLCommandBuffer *commandBuffer = (WrappedMTLCommandBuffer *)(record->m_Resource);
-      Unwrap(commandBuffer)->waitUntilCompleted();
-      // Remove the reference on the real resource added during commit()
-      Unwrap(commandBuffer)->release();
+      RDCASSERT(record->m_Type == eResCommandBuffer && record->cmdInfo &&
+                record->cmdInfo->retainedNative);
+      record->cmdInfo->retainedNative->waitUntilCompleted();
     }
 
     if(m_CaptureCommandBuffersSubmitted.empty())
@@ -1901,6 +2343,14 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
     }
 
     RDCDEBUG("Inserting Resource Serialisers");
+    // Creation during this frame must remain in the frame stream. Resource records retain
+    // the same chunk for later captures if the object survives beyond this frame.
+    {
+      SCOPED_LOCK(m_CapturedFrameResourcesLock);
+      for(ResourceId id : m_CapturedFrameResources)
+        if(MetalResourceRecord *record = GetResourceManager()->GetResourceRecord(id))
+          record->DataWritten = true;
+    }
     GetResourceManager()->InsertReferencedChunks(ser);
     GetResourceManager()->InsertInitialContentsChunks(ser);
 
@@ -1965,6 +2415,10 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
 
   GetResourceManager()->ResetLastWriteTimes();
   GetResourceManager()->MarkUnwrittenResources();
+  {
+    SCOPED_LOCK(m_CapturedFrameResourcesLock);
+    m_CapturedFrameResources.clear();
+  }
 
   // TODO: handle memory resources in the resource manager
 
@@ -1996,6 +2450,10 @@ bool WrappedMTLDevice::DiscardFrameCapture(DeviceOwnedWindow devWnd)
   CaptureClearSubmittedCmdBuffers();
 
   GetResourceManager()->MarkUnwrittenResources();
+  {
+    SCOPED_LOCK(m_CapturedFrameResourcesLock);
+    m_CapturedFrameResources.clear();
+  }
 
   // TODO: handle memory resources in the resource manager
 
@@ -2103,8 +2561,7 @@ void WrappedMTLDevice::CaptureCmdBufSubmit(MetalResourceRecord *record)
   }
   else
   {
-    // Remove the reference on the real resource added during commit()
-    Unwrap(commandBuffer)->release();
+    ReleaseCapturedCommandBuffer(record);
   }
   if(record->cmdInfo->presented)
   {
@@ -2212,15 +2669,77 @@ void WrappedMTLDevice::Present(MetalResourceRecord *record)
   }
 }
 
+void WrappedMTLDevice::PresentDrawable(CA::MetalDrawable *drawable)
+{
+  if(!IsCaptureMode(m_State)) return;
+  MetalDrawableInfo info = UnregisterDrawableInfo(drawable);
+  if(!info.texture || !info.mtlLayer) return;
+  {
+    SCOPED_LOCK(m_CapturePotentialBackBuffersLock);
+    if(m_CapturePotentialBackBuffers.count(info.texture) == 0) return;
+  }
+  AdvanceFrame();
+  DeviceOwnedWindow window(this, info.mtlLayer);
+  RenderDoc::Inst().AddActiveDriver(RDCDriver::Metal, true);
+  if(!RenderDoc::Inst().IsActiveWindow(window)) return;
+  if(IsActiveCapturing(m_State))
+  {
+    if(m_CapturedBackbuffer == NULL)
+      m_CapturedBackbuffer = info.texture;
+    if(!m_AppControlledCapture && !m_DirectPresentEndPending.exchange(true))
+    {
+      // CAMetalDrawable::present may run inside the command buffer's scheduled
+      // callback. EndFrameCapture waits for submitted command buffers, including
+      // that callback's buffer, so finish on another queue after returning here.
+      struct PendingEnd
+      {
+        WrappedMTLDevice *device;
+        DeviceOwnedWindow window;
+      };
+      PendingEnd *pending = new PendingEnd{this, window};
+      dispatch_async_f(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), pending,
+                       [](void *context) {
+                         PendingEnd *end = (PendingEnd *)context;
+                         RenderDoc::Inst().EndFrameCapture(end->window);
+                         end->device->m_DirectPresentEndPending.store(false);
+                         delete end;
+                       });
+    }
+  }
+  if(RenderDoc::Inst().ShouldTriggerCapture(m_FrameCounter) && IsBackgroundCapturing(m_State))
+  {
+    RenderDoc::Inst().StartFrameCapture(window);
+    m_AppControlledCapture = false;
+    m_CapturedFrames.back().frameNumber = m_FrameCounter;
+  }
+}
+
 void WrappedMTLDevice::CaptureClearSubmittedCmdBuffers()
 {
   SCOPED_LOCK(m_CaptureCommandBuffersLock);
   for(MetalResourceRecord *record : m_CaptureCommandBuffersSubmitted)
   {
+    ReleaseCapturedCommandBuffer(record);
     record->Delete(GetResourceManager());
   }
 
   m_CaptureCommandBuffersSubmitted.clear();
+}
+
+void WrappedMTLDevice::ReleaseCapturedCommandBuffer(MetalResourceRecord *record)
+{
+  RDCASSERT(record && record->m_Type == eResCommandBuffer && record->cmdInfo);
+  MetalCmdBufferRecordingInfo *info = record->cmdInfo;
+  MTL::CommandBuffer *native = info->retainedNative;
+  NS::Object *proxy = info->retainedProxy;
+  info->retainedNative = NULL;
+  info->retainedProxy = NULL;
+  if(native)
+    native->release();
+  // The proxy's dealloc may delete the wrapper and drop the record's application reference.
+  // Callers keep their own record reference until after this release returns.
+  if(proxy)
+    proxy->release();
 }
 
 void WrappedMTLDevice::RegisterMetalLayer(CA::MetalLayer *mtlLayer)
@@ -2249,13 +2768,28 @@ void WrappedMTLDevice::UnregisterMetalLayer(CA::MetalLayer *mtlLayer)
 void WrappedMTLDevice::RegisterDrawableInfo(CA::MetalDrawable *caMtlDrawable,
                                             MTL::Texture *realTexture)
 {
+  const NS::UInteger drawableID = caMtlDrawable->drawableID();
+  {
+    SCOPED_LOCK(m_CaptureDrawablesLock);
+    auto existing = m_CaptureDrawableInfos.find(caMtlDrawable);
+    if(existing != m_CaptureDrawableInfos.end())
+    {
+      if(existing->second.drawableID == drawableID)
+        return;
+      // CAMetalLayer can recycle a drawable pointer when an earlier acquisition was
+      // not presented through this command buffer. The pointer now denotes the new
+      // acquisition; retain its current texture rather than the stale lookup entry.
+      RDCWARN("Replacing stale Metal drawable registration %p (ID %llu -> %llu)",
+              caMtlDrawable, (uint64_t)existing->second.drawableID, (uint64_t)drawableID);
+      m_CaptureDrawableInfos.erase(existing);
+    }
+  }
   MetalDrawableInfo drawableInfo;
   drawableInfo.mtlLayer = caMtlDrawable->layer();
   drawableInfo.texture = WrapDrawableTexture(realTexture);
-  drawableInfo.drawableID = caMtlDrawable->drawableID();
+  drawableInfo.drawableID = drawableID;
   {
     SCOPED_LOCK(m_CaptureDrawablesLock);
-    RDCASSERTEQUAL(m_CaptureDrawableInfos.find(caMtlDrawable), m_CaptureDrawableInfos.end());
     m_CaptureDrawableInfos[caMtlDrawable] = drawableInfo;
   }
   {
@@ -2290,6 +2824,7 @@ MetalDrawableInfo WrappedMTLDevice::UnregisterDrawableInfo(MTL::Drawable *mtlDra
   }
   // Not found by pointer fall back and check by drawableID
   NS::UInteger drawableID = mtlDrawable->drawableID();
+  SCOPED_LOCK(m_CaptureDrawablesLock);
   for(auto it = m_CaptureDrawableInfos.begin(); it != m_CaptureDrawableInfos.end(); ++it)
   {
     drawableInfo = it->second;

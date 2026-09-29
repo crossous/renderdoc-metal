@@ -380,8 +380,6 @@ void PythonContext::GenerateStubs(const rdcarray<rdcstr> &extraPaths)
       continue;
     }
 
-    SetStubsVersion(target, cur);
-
     if(gen == NULL)
     {
       QByteArray stubgen;
@@ -394,33 +392,67 @@ void PythonContext::GenerateStubs(const rdcarray<rdcstr> &extraPaths)
       }
 
       PyObject *stubgen_compiled = Py_CompileString(stubgen.data(), "stubgen.py", Py_file_input);
+      if(!stubgen_compiled)
+      {
+        PyErr_Print();
+        qCritical() << "Could not compile Python stub generator";
+        continue;
+      }
       stubgen_module = PyImport_ExecCodeModule("__rd_stubgen", stubgen_compiled);
       Py_XDECREF(stubgen_compiled);
-
+      if(!stubgen_module)
+      {
+        PyErr_Print();
+        qCritical() << "Could not import Python stub generator";
+        continue;
+      }
       gen = PyObject_GetAttrString(stubgen_module, "gen");
+      if(!gen)
+      {
+        PyErr_Print();
+        qCritical() << "Python stub generator has no gen function";
+        continue;
+      }
     }
 
-    PyObject *args =
-        Py_BuildValue("(Os)", PyDict_GetItemString(main_dict, "renderdoc"), target.toUtf8().data());
-    PyObject *retval = PyObject_CallObject(gen, args);
+    PyObject *renderdoc_module = PyDict_GetItemString(main_dict, "renderdoc");
+    PyObject *qrenderdoc_module = PyDict_GetItemString(main_dict, "qrenderdoc");
+    if(!renderdoc_module || !qrenderdoc_module)
+    {
+      if(PyErr_Occurred()) PyErr_Print();
+      qCritical() << "Python modules are unavailable for stub generation";
+      continue;
+    }
+    PyObject *args = Py_BuildValue("(Os)", renderdoc_module, target.toUtf8().data());
+    PyObject *retval = args ? PyObject_CallObject(gen, args) : NULL;
 
     if(!retval)
+    {
+      if(PyErr_Occurred()) PyErr_Print();
       qCritical() << "Didn't generate renderdoc stubs";
+    }
 
+    const bool renderdocGenerated = retval != NULL;
     Py_XDECREF(retval);
     Py_XDECREF(args);
-
-    args =
-        Py_BuildValue("(Os)", PyDict_GetItemString(main_dict, "qrenderdoc"), target.toUtf8().data());
-    retval = PyObject_CallObject(gen, args);
+    args = Py_BuildValue("(Os)", qrenderdoc_module, target.toUtf8().data());
+    retval = args ? PyObject_CallObject(gen, args) : NULL;
 
     if(!retval)
+    {
+      if(PyErr_Occurred()) PyErr_Print();
       qCritical() << "Didn't generate qrenderdoc stubs";
+    }
 
+    const bool qrenderdocGenerated = retval != NULL;
     Py_XDECREF(retval);
     Py_XDECREF(args);
 
-    qInfo() << "Generated stubs for " << cur << "into" << target;
+    if(renderdocGenerated && qrenderdocGenerated)
+    {
+      SetStubsVersion(target, cur);
+      qInfo() << "Generated stubs for " << cur << "into" << target;
+    }
   }
 
   Py_XDECREF(gen);
@@ -489,7 +521,13 @@ void PythonContext::GlobalInit(PersistentConfig &config)
 
   pyconfig.use_environment = 0;
 
-  Py_InitializeFromConfig(&pyconfig);
+  PyStatus initStatus = Py_InitializeFromConfig(&pyconfig);
+  if(PyStatus_Exception(initStatus))
+  {
+    qCritical() << "Python initialization failed:"
+                << (initStatus.err_msg ? initStatus.err_msg : "unknown error");
+    return;
+  }
 #else
   Py_SetProgramName(program_name);
 
@@ -516,11 +554,38 @@ void PythonContext::GlobalInit(PersistentConfig &config)
   OutputRedirector_methods[1].ml_meth = &PythonContext::outstream_flush;
 
   PyObject *main_module = PyImport_AddModule("__main__");
+  if(!main_module)
+  {
+    if(PyErr_Occurred()) PyErr_Print();
+    qCritical() << "Failed to initialize Python main module";
+    return;
+  }
 
-  PyModule_AddObject(main_module, "renderdoc", PyImport_ImportModule("renderdoc"));
-  PyModule_AddObject(main_module, "qrenderdoc", PyImport_ImportModule("qrenderdoc"));
+  PyObject *renderdocModule = PyImport_ImportModule("renderdoc");
+  PyObject *qrenderdocModule = PyImport_ImportModule("qrenderdoc");
+  if(!renderdocModule || !qrenderdocModule)
+  {
+    if(PyErr_Occurred()) PyErr_Print();
+    qCritical() << "Failed to import qrenderdoc Python modules";
+    Py_XDECREF(renderdocModule);
+    Py_XDECREF(qrenderdocModule);
+    return;
+  }
+  if(PyModule_AddObject(main_module, "renderdoc", renderdocModule) < 0 ||
+     PyModule_AddObject(main_module, "qrenderdoc", qrenderdocModule) < 0)
+  {
+    if(PyErr_Occurred()) PyErr_Print();
+    qCritical() << "Failed to register qrenderdoc Python modules";
+    return;
+  }
 
   main_dict = PyModule_GetDict(main_module);
+  if(!main_dict)
+  {
+    if(PyErr_Occurred()) PyErr_Print();
+    qCritical() << "Failed to initialize Python main dictionary";
+    return;
+  }
 
   GenerateStubs(config.Python_StubDirs);
 
@@ -529,6 +594,13 @@ void PythonContext::GlobalInit(PersistentConfig &config)
 
   // import sys
   PyObject *sysobj = PyImport_ImportModule("sys");
+  if(!sysobj)
+  {
+    if(PyErr_Occurred()) PyErr_Print();
+    qCritical() << "Failed to import Python sys module";
+    main_dict = NULL;
+    return;
+  }
   PyDict_SetItemString(main_dict, "sys", sysobj);
 
   // try to import threading library to make debuggers happier, leak it deliberately

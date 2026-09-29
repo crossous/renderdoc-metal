@@ -1,0 +1,6 @@
+Source: /Library/Logs/DiagnosticReports/panic-full-2026-09-29-204338.0002.panic
+panic(cpu 0 caller 0xfffffe003b1b4324): userspace watchdog timeout: no successful checkins from WindowServer (2 induced crashes) in 120 seconds
+service: logd, total successful checkins in 22401 seconds: 2239, last successful checkin: 0 seconds ago
+service: WindowServer (2 induced crashes), total successful checkins in 22350 seconds: 2219, last successful checkin: 120 seconds ago
+service: opendirectoryd, total successful checkins in 22401 seconds: 2238, last successful checkin: 0 seconds ago
+service: configd, total successful checkins in 22401 seconds: 2239, last successful checkin: 0 seconds ago

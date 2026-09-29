@@ -49,6 +49,7 @@ id<MTLTexture> MetalSharedTextureHandleSource(MTLSharedTextureHandle *handle);
 void MetalAssociateSharedEventHandle(MTLSharedEventHandle *handle, id<MTLSharedEvent> source);
 id<MTLSharedEvent> MetalSharedEventHandleSource(MTLSharedEventHandle *handle);
 id<MTLHeap> MetalWrappedHeap(id<MTLHeap> real);
+id<MTLResource> MetalWrappedResource(id<MTLResource> resource);
 
 // clang-format off
 #define DECLARE_OBJC_WRAPPED_INTERFACES(CPPTYPE)                              \

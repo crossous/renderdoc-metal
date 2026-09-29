@@ -25,6 +25,7 @@
 #include <fstream>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include "renderdoc/api/replay/renderdoc_replay.h"
@@ -108,7 +109,7 @@ static bool ValidateCounterStageFixture(IReplayController *renderer, ResourceId 
     if(chunk->name == "MTLCommandBuffer::renderCommandEncoderWithDescriptor") pass = chunk;
     if(chunk->name == "MTLBlitCommandEncoder::resolveCounters") resolve = chunk;
   }
-  if(!creation && !resolve) return true;
+  if((!creation && !resolve) || !pass) return true;
   auto fail = [](const char *message) {
     fprintf(stderr, "T101 counter stage validation failed: %s\n", message);
     return false;
@@ -180,6 +181,337 @@ static bool ValidateCounterStageFixture(IReplayController *renderer, ResourceId 
     if(!values[0] || values[0] >= values[1] || values[1] >= values[2] ||
        values[2] >= values[3])
       return fail("resolved timestamps");
+  }
+  return true;
+}
+
+static bool ValidateUEBlitCounterFixture(IReplayController *renderer)
+{
+  const SDChunk *pass = NULL, *creation = NULL, *resolve = NULL;
+  for(const SDChunk *chunk : renderer->GetStructuredFile().chunks)
+  {
+    if(chunk->name == "MTLCommandBuffer::blitCommandEncoderWithDescriptor" &&
+       chunk->FindChild("hasSampleBuffers") && chunk->FindChild("hasSampleBuffers")->AsBool())
+      pass = chunk;
+    if(chunk->name == "MTLDevice::newCounterSampleBufferWithDescriptor") creation = chunk;
+    if(chunk->name == "MTLBlitCommandEncoder::resolveCounters") resolve = chunk;
+  }
+  if(!pass) return true;
+  auto fail = [](const char *message) {
+    fprintf(stderr, "UE blit counter validation failed: %s\n", message);
+    return false;
+  };
+  const SDObject *attachments = pass->FindChild("attachments");
+  const SDObject *first = attachments && attachments->NumChildren() == 4 ?
+      attachments->GetChild(0) : NULL;
+  const SDObject *sample = first ? first->FindChild("sampleBuffer") : NULL;
+  const SDObject *sampleId = first ? first->FindChild("sampleBufferId") : NULL;
+  const SDObject *start = first ? first->FindChild("startOfEncoderSampleIndex") : NULL;
+  const SDObject *end = first ? first->FindChild("endOfEncoderSampleIndex") : NULL;
+  if(!creation || !resolve || !first || !sample || sample->AsResourceId() == ResourceId() ||
+     !sampleId || sampleId->AsResourceId() != sample->AsResourceId() ||
+     !start || start->AsUInt64() != 1 || !end || end->AsUInt64() != 2 ||
+     !creation->FindChild("CounterSampleBuffer") ||
+     creation->FindChild("CounterSampleBuffer")->AsResourceId() != sample->AsResourceId() ||
+     !resolve->FindChild("sampleBuffer") ||
+     resolve->FindChild("sampleBuffer")->AsResourceId() != sample->AsResourceId())
+    return fail("descriptor identity or indices");
+  const SDObject *destination = resolve->FindChild("destinationBuffer");
+  if(!destination || destination->AsResourceId() == ResourceId())
+    return fail("resolve destination");
+  rdcarray<const ActionDescription *> actions;
+  FindActions(renderer->GetRootActions(), actions);
+  const ActionDescription *copy = NULL;
+  for(const ActionDescription *action : actions)
+    if(action->customName.contains("resolveCounters")) copy = action;
+  if(!copy || copy->copySource != sample->AsResourceId() ||
+     copy->copyDestination != destination->AsResourceId())
+    return fail("resolve action");
+  renderer->SetFrameEvent(copy->eventId, true);
+  const bytebuf bytes = renderer->GetBufferData(destination->AsResourceId(), 0, 16);
+  if(bytes.size() != 16) return fail("resolved timestamp size");
+  uint64_t times[2];
+  memcpy(times, bytes.data(), 16);
+  return times[0] && times[0] < times[1] ? true : fail("resolved timestamp order");
+}
+
+static bool ValidateUEComputeCounterFixture(IReplayController *renderer)
+{
+  const SDChunk *pass = NULL, *creation = NULL, *resolve = NULL;
+  for(const SDChunk *chunk : renderer->GetStructuredFile().chunks)
+  {
+    if(chunk->name == "MTLCommandBuffer::computeCommandEncoderWithDescriptor" &&
+       chunk->FindChild("attachments")) pass = chunk;
+    if(chunk->name == "MTLDevice::newCounterSampleBufferWithDescriptor") creation = chunk;
+    if(chunk->name == "MTLBlitCommandEncoder::resolveCounters") resolve = chunk;
+  }
+  if(!pass) return true;
+  auto fail = [](const char *message) {
+    fprintf(stderr, "UE compute counter validation failed: %s\n", message);
+    return false;
+  };
+  const SDObject *attachments = pass->FindChild("attachments");
+  const SDObject *first = attachments && attachments->NumChildren() == 4 ?
+      attachments->GetChild(0) : NULL;
+  const SDObject *sample = first ? first->FindChild("sampleBuffer") : NULL;
+  const SDObject *sampleId = first ? first->FindChild("sampleBufferId") : NULL;
+  const SDObject *start = first ? first->FindChild("startOfEncoderSampleIndex") : NULL;
+  const SDObject *end = first ? first->FindChild("endOfEncoderSampleIndex") : NULL;
+  const SDObject *sampleCount = creation ? creation->FindChild("sampleCount") : NULL;
+  const uint64_t expectedStart = sampleCount && sampleCount->AsUInt64() == 4096 ? 4093 : 1;
+  if(!creation || !resolve || !first || !sample || sample->AsResourceId() == ResourceId() ||
+     !sampleId || sampleId->AsResourceId() != sample->AsResourceId() ||
+     !sampleCount || (sampleCount->AsUInt64() != 4 && sampleCount->AsUInt64() != 4096) ||
+     !start || start->AsUInt64() != expectedStart ||
+     !end || end->AsUInt64() != expectedStart + 1 ||
+     !creation->FindChild("CounterSampleBuffer") ||
+     creation->FindChild("CounterSampleBuffer")->AsResourceId() != sample->AsResourceId() ||
+     !resolve->FindChild("sampleBuffer") ||
+     resolve->FindChild("sampleBuffer")->AsResourceId() != sample->AsResourceId())
+    return fail("descriptor identity or indices");
+  const SDObject *destination = resolve->FindChild("destinationBuffer");
+  if(!destination || destination->AsResourceId() == ResourceId())
+    return fail("resolve destination");
+  rdcarray<const ActionDescription *> actions;
+  FindActions(renderer->GetRootActions(), actions);
+  const ActionDescription *copy = NULL;
+  for(const ActionDescription *action : actions)
+    if(action->customName.contains("resolveCounters")) copy = action;
+  if(!copy || copy->copySource != sample->AsResourceId() ||
+     copy->copyDestination != destination->AsResourceId())
+    return fail("resolve action");
+  renderer->SetFrameEvent(copy->eventId, true);
+  const bytebuf bytes = renderer->GetBufferData(destination->AsResourceId(), 0, 16);
+  if(bytes.size() != 16) return fail("resolved timestamp size");
+  uint64_t times[2];
+  memcpy(times, bytes.data(), 16);
+  return times[0] && times[0] < times[1] ? true : fail("resolved timestamp order");
+}
+
+static bool ValidateUEParallelRenderFixture(IReplayController *renderer, ResourceId colorTarget)
+{
+  const SDChunk *parent = NULL, *creation = NULL, *resolve = NULL, *store = NULL;
+  uint32_t children = 0, parentEnds = 0;
+  for(const SDChunk *chunk : renderer->GetStructuredFile().chunks)
+  {
+    if(chunk->name == "MTLCommandBuffer::parallelRenderCommandEncoderWithDescriptor")
+      parent = chunk;
+    if(chunk->name == "MTLDevice::newCounterSampleBufferWithDescriptor") creation = chunk;
+    if(chunk->name == "MTLBlitCommandEncoder::resolveCounters") resolve = chunk;
+    if(chunk->name == "MTLParallelRenderCommandEncoder::setColorStoreAction") store = chunk;
+    children += chunk->name == "MTLParallelRenderCommandEncoder::renderCommandEncoder";
+    parentEnds += chunk->name == "MTLParallelRenderCommandEncoder::endEncoding";
+  }
+  if(!parent) return true;
+  auto fail = [](const char *message) {
+    fprintf(stderr, "UE parallel render validation failed: %s\n", message);
+    return false;
+  };
+  if(children != 2 || parentEnds != 1 || !creation || !resolve || !store)
+    return fail("parent/child encoder chunk structure");
+  const SDObject *descriptor = parent->FindChild("descriptor");
+  const SDObject *attachments = descriptor ? descriptor->FindChild("sampleBufferAttachments") : NULL;
+  const SDObject *first = attachments && attachments->NumChildren() == 1 ?
+      attachments->GetChild(0) : NULL;
+  const SDObject *sample = first ? first->FindChild("sampleBuffer") : NULL;
+  const SDObject *sampleId = first ? first->FindChild("sampleBufferId") : NULL;
+  if(!sample || sample->AsResourceId() == ResourceId() || !sampleId ||
+     sampleId->AsResourceId() != sample->AsResourceId() ||
+     !first->FindChild("startOfVertexSampleIndex") ||
+     first->FindChild("startOfVertexSampleIndex")->AsUInt64() != 1 ||
+     !first->FindChild("endOfFragmentSampleIndex") ||
+     first->FindChild("endOfFragmentSampleIndex")->AsUInt64() != 2 ||
+     !creation->FindChild("CounterSampleBuffer") ||
+     creation->FindChild("CounterSampleBuffer")->AsResourceId() != sample->AsResourceId() ||
+     !resolve->FindChild("sampleBuffer") ||
+     resolve->FindChild("sampleBuffer")->AsResourceId() != sample->AsResourceId())
+    return fail("parallel counter attachment identity or indices");
+  const SDObject *colorAttachments = descriptor->FindChild("colorAttachments");
+  const SDObject *firstColor = colorAttachments && colorAttachments->NumChildren() ?
+      colorAttachments->GetChild(0) : NULL;
+  if(!firstColor || !firstColor->FindChild("storeAction") ||
+     firstColor->FindChild("storeAction")->AsUInt64() != MTL::StoreActionUnknown ||
+     !store->FindChild("storeAction") ||
+     store->FindChild("storeAction")->AsUInt64() != MTL::StoreActionStore)
+    return fail("deferred store action");
+  rdcarray<const ActionDescription *> draws;
+  FindDrawActions(renderer->GetRootActions(), draws);
+  if(draws.size() != 2)
+    return fail("expected two draw actions");
+  for(uint32_t event : {10000000U, draws[0]->eventId, 10000000U})
+  {
+    renderer->SetFrameEvent(event, true);
+    if(!PixelMatches(renderer, colorTarget, event, 100, 150, 1.0f, 0.0f, 0.0f))
+      return fail("left draw output");
+    const bool rightDrawn = event == 10000000U;
+    if(rightDrawn && !PixelMatches(renderer, colorTarget, event, 300, 150, 0.0f, 1.0f, 0.0f))
+    {
+      PixelValue pixel = renderer->PickPixel(colorTarget, 300, 150, {0, 0, 0}, CompType::Typeless);
+      fprintf(stderr, "UE parallel render event %u right pixel %.3f %.3f %.3f %.3f\n",
+              event, pixel.floatValue[0], pixel.floatValue[1], pixel.floatValue[2], pixel.floatValue[3]);
+      return fail("right draw output or event seek");
+    }
+  }
+  const SDObject *destination = resolve->FindChild("destinationBuffer");
+  if(!destination || destination->AsResourceId() == ResourceId())
+    return fail("counter resolve destination");
+  renderer->SetFrameEvent(10000000U, true);
+  const bytebuf bytes = renderer->GetBufferData(destination->AsResourceId(), 0, 16);
+  if(bytes.size() != 16) return fail("resolved counter data size");
+  uint64_t times[2]; memcpy(times, bytes.data(), 16);
+  if(!times[0] || times[0] >= times[1]) return fail("resolved counter order");
+  return true;
+}
+
+static bool ValidateUEComputeHeapFixture(IReplayController *renderer)
+{
+  rdcarray<const SDChunk *> singles, arrays;
+  rdcarray<ResourceId> createdHeaps;
+  const SDChunk *computeResources = NULL, *renderResources = NULL;
+  const SDChunk *computeResource = NULL, *renderResource = NULL;
+  for(const SDChunk *chunk : renderer->GetStructuredFile().chunks)
+  {
+    if(chunk->name == "MTLComputeCommandEncoder::useHeap") singles.push_back(chunk);
+    if(chunk->name == "MTLComputeCommandEncoder::useHeaps") arrays.push_back(chunk);
+    if(chunk->name == "MTLDevice::newHeapWithDescriptor")
+    {
+      const SDObject *created = chunk->FindChild("Heap");
+      if(created && created->AsResourceId() != ResourceId())
+        createdHeaps.push_back(created->AsResourceId());
+    }
+    if(chunk->name == "MTLComputeCommandEncoder::useResources") computeResources = chunk;
+    if(chunk->name == "MTLRenderCommandEncoder::useResources") renderResources = chunk;
+    if(chunk->name == "MTLComputeCommandEncoder::useResource") computeResource = chunk;
+    if(chunk->name == "MTLRenderCommandEncoder::useResource") renderResource = chunk;
+  }
+  if(singles.empty() && arrays.empty()) return true;
+  auto fail = [](const char *message) {
+    fprintf(stderr, "UE compute heap validation failed: %s\n", message);
+    return false;
+  };
+  if(createdHeaps.empty() || singles.empty() || arrays.empty())
+    return fail("heap creation or declaration chunks");
+  ResourceId arrayHeap;
+  for(const SDChunk *chunk : arrays)
+  {
+    const SDObject *heaps = chunk->FindChild("heaps");
+    if(!heaps || heaps->NumChildren() != 1)
+      return fail("heap declaration identity");
+    const ResourceId id = heaps->GetChild(0)->AsResourceId();
+    bool found = false;
+    for(ResourceId created : createdHeaps) found |= created == id;
+    if(!found)
+      return fail("heap declaration identity");
+    arrayHeap = id;
+  }
+  bool matchingSingle = false;
+  for(const SDChunk *chunk : singles)
+  {
+    const SDObject *heaps = chunk->FindChild("heaps");
+    if(!heaps || heaps->NumChildren() != 1)
+      return fail("heap declaration identity");
+    const ResourceId id = heaps->GetChild(0)->AsResourceId();
+    bool found = false;
+    for(ResourceId created : createdHeaps) found |= created == id;
+    if(!found) return fail("heap declaration identity");
+    matchingSingle |= id == arrayHeap;
+  }
+  if(!matchingSingle) return fail("compute single/array heap identity");
+  if(computeResources || renderResources)
+  {
+    if(!computeResources || !renderResources || !computeResource || !renderResource)
+      return fail("native resource residency chunk set");
+    const SDObject *computeArray = computeResources->FindChild("resources");
+    const SDObject *renderArray = renderResources->FindChild("resources");
+    if(!computeArray || !renderArray || computeArray->NumChildren() != 2 ||
+       renderArray->NumChildren() != 2)
+      return fail("native resource residency array size");
+    for(size_t i = 0; i < 2; i++)
+      if(computeArray->GetChild(i)->AsResourceId() == ResourceId() ||
+         computeArray->GetChild(i)->AsResourceId() != renderArray->GetChild(i)->AsResourceId())
+        return fail("native resource residency identity");
+    const SDObject *computeSingle = computeResource->FindChild("resource");
+    const SDObject *renderSingle = renderResource->FindChild("resource");
+    if(!computeSingle || !renderSingle || computeSingle->AsResourceId() == ResourceId() ||
+       computeSingle->AsResourceId() != renderSingle->AsResourceId())
+      return fail("native single resource residency identity");
+  }
+  ResourceId output;
+  for(const BufferDescription &buffer : renderer->GetBuffers())
+    if(buffer.length == 256 && buffer.resourceId != ResourceId())
+    {
+      const bytebuf bytes = renderer->GetBufferData(buffer.resourceId, 0, 16);
+      if(bytes.size() == 16)
+      {
+        uint32_t values[4]; memcpy(values, bytes.data(), 16);
+        if(values[0] == 0x600d0000u && values[1] == 0x600d0001u &&
+           values[2] == 0x600d0002u && values[3] == 0x600d0003u)
+          output = buffer.resourceId;
+      }
+    }
+  if(output == ResourceId()) return fail("GPU compute write or blit readback");
+  return true;
+}
+
+static bool ValidateUEInterleavedCommandBuffers(IReplayController *renderer)
+{
+  const SDFile &structured = renderer->GetStructuredFile();
+  ResourceId first, second;
+  bool interleaved = false, firstCommitted = false, secondCommitted = false;
+  for(const SDChunk *chunk : structured.chunks)
+  {
+    if(chunk->name != "MTLCommandQueue::commandBuffer" &&
+       chunk->name != "MTLCommandBuffer::computeCommandEncoder" &&
+       chunk->name != "MTLCommandBuffer::commit")
+      continue;
+    const SDObject *commandBuffer = chunk->FindChild("CommandBuffer");
+    if(!commandBuffer) continue;
+    const ResourceId id = commandBuffer->AsResourceId();
+    if(chunk->name == "MTLCommandQueue::commandBuffer")
+    {
+      if(first == ResourceId()) first = id;
+      else if(second == ResourceId()) second = id;
+    }
+    else if(chunk->name == "MTLCommandBuffer::computeCommandEncoder" &&
+            second != ResourceId() && id == first)
+      interleaved = true;
+    else if(chunk->name == "MTLCommandBuffer::commit")
+    {
+      if(id == first) firstCommitted = true;
+      if(id == second) secondCommitted = true;
+    }
+  }
+  if(!interleaved) return std::getenv("RENDERDOC_METAL_REQUIRE_INTERLEAVED") == NULL;
+  if(!firstCommitted || !secondCommitted)
+  {
+    fprintf(stderr, "UE interleaved command buffer validation failed: commit identity\n");
+    return false;
+  }
+  rdcarray<const ActionDescription *> actions;
+  FindActions(renderer->GetRootActions(), actions);
+  const ActionDescription *dispatch = NULL;
+  for(const ActionDescription *action : actions)
+    if(action->flags & ActionFlags::Dispatch) { dispatch = action; break; }
+  if(!dispatch) return false;
+  for(uint32_t event : {dispatch->eventId, 10000000U, dispatch->eventId})
+  {
+    renderer->SetFrameEvent(event, true);
+    bool found = false;
+    for(const BufferDescription &buffer : renderer->GetBuffers())
+    {
+      if(buffer.length != 256) continue;
+      const bytebuf bytes = renderer->GetBufferData(buffer.resourceId, 0, 16);
+      if(bytes.size() != 16) continue;
+      uint32_t values[4]; memcpy(values, bytes.data(), sizeof(values));
+      found |= values[0] == 0x600d0000u && values[1] == 0x600d0001u &&
+               values[2] == 0x600d0002u && values[3] == 0x600d0003u;
+    }
+    if(!found)
+    {
+      fprintf(stderr, "UE interleaved command buffer validation failed: GPU data at event %u\n",
+              event);
+      return false;
+    }
   }
   return true;
 }
@@ -700,7 +1032,8 @@ static bool ValidatePrivateBufferFixture(IReplayController *renderer, ResourceId
 {
   ResourceId gpu;
   for(const BufferDescription &buffer : renderer->GetBuffers())
-    if(buffer.length == 516 && HasUsage(renderer, buffer.resourceId, ResourceUsage::CopySrc))
+    if(gpu == ResourceId() && buffer.length == 516 &&
+       HasUsage(renderer, buffer.resourceId, ResourceUsage::CopySrc))
       gpu = buffer.resourceId;
   if(gpu == ResourceId()) return true;
   auto fail = [](const char *message) {
@@ -713,7 +1046,7 @@ static bool ValidatePrivateBufferFixture(IReplayController *renderer, ResourceId
   for(const ActionDescription *action : actions)
   {
     if(action->customName.contains("fillBuffer")) fill = action;
-    if(action->flags & ActionFlags::Dispatch) dispatch = action;
+    if((action->flags & ActionFlags::Dispatch) && !dispatch) dispatch = action;
     if(action->flags & ActionFlags::Drawcall) draw = action;
   }
   if(!fill || !dispatch || !draw) return fail("required actions missing");
@@ -2141,7 +2474,7 @@ static bool ValidateBlitOptimizationFixture(IReplayController *renderer)
 {
   bool fixture = false;
   for(const SDChunk *chunk : renderer->GetStructuredFile().chunks)
-    fixture |= chunk->name == "MTLCommandBuffer::blitCommandEncoderWithDescriptor";
+    fixture |= strstr(chunk->name.c_str(), "optimizeContentsForGPUAccess") != NULL;
   if(!fixture) return true;
   ResourceId hintOnly;
   for(const TextureDescription &texture : renderer->GetTextures())
@@ -4270,10 +4603,17 @@ static bool ValidateNoCopyBufferFixture(IReplayController *renderer, ResourceId 
 static bool ValidatePurgeableStateFixture(IReplayController *renderer, ResourceId colorTarget)
 {
   unsigned buffers = 0, textures = 0;
+  unsigned emptyBuffers = 0, emptyTextures = 0;
   for(const SDChunk *chunk : renderer->GetStructuredFile().chunks)
   {
     buffers += chunk->metadata.chunkID == 1189;
     textures += chunk->metadata.chunkID == 1070;
+    const SDObject *state = chunk->FindChild("State");
+    if(state && state->AsUInt64() == MTL::PurgeableStateEmpty)
+    {
+      emptyBuffers += chunk->metadata.chunkID == 1189;
+      emptyTextures += chunk->metadata.chunkID == 1070;
+    }
   }
   if(!buffers && !textures) return true;
   auto fail = [](const char *message) {
@@ -4281,6 +4621,8 @@ static bool ValidatePurgeableStateFixture(IReplayController *renderer, ResourceI
   };
   if(buffers < 2 || textures < 2 || buffers != textures)
     return fail("buffer and texture state chunks");
+  if(emptyBuffers != emptyTextures)
+    return fail("buffer and texture discard state pairing");
   rdcarray<const ActionDescription *> draws;
   FindDrawActions(renderer->GetRootActions(),draws);
   if(draws.size() != 1) return fail("draw count");
@@ -4404,6 +4746,63 @@ static bool ValidateSharedTextureFixture(IReplayController *renderer, ResourceId
 static bool ValidateHeapAliasFixture(IReplayController *renderer)
 {
   const SDFile &file = renderer->GetStructuredFile();
+  ResourceId firstPlacement, secondPlacement, placementHeap;
+  uint64_t placementOffset = UINT64_MAX;
+  bool frameStarted = false;
+  for(const SDChunk *chunk : file.chunks)
+  {
+    if(chunk->name == "Internal::Beginning of Capture") frameStarted = true;
+    if(chunk->name != "MTLHeap::newBuffer(offset)") continue;
+    const SDObject *length = chunk->FindChild("length");
+    const SDObject *parent = chunk->FindChild("Heap");
+    const SDObject *offset = chunk->FindChild("offset");
+    const SDObject *child = chunk->FindChild("Buffer");
+    if(!length || !parent || !offset || !child || length->AsUInt64() != 516)
+      continue;
+    if(!frameStarted && firstPlacement == ResourceId())
+    {
+      firstPlacement = child->AsResourceId();
+      placementHeap = parent->AsResourceId();
+      placementOffset = offset->AsUInt64();
+    }
+    else if(frameStarted && firstPlacement != ResourceId() &&
+            parent->AsResourceId() == placementHeap &&
+            offset->AsUInt64() == placementOffset)
+      secondPlacement = child->AsResourceId();
+  }
+  if(secondPlacement != ResourceId())
+  {
+    auto failPlacement = [](const char *message) {
+      fprintf(stderr, "T133 placement reuse seek failed: %s\n", message);
+      return false;
+    };
+    rdcarray<const ActionDescription *> actions;
+    FindActions(renderer->GetRootActions(), actions);
+    const ActionDescription *fill = NULL, *firstDispatch = NULL, *lastDispatch = NULL;
+    for(const ActionDescription *action : actions)
+    {
+      if(!fill && action->customName.contains("fillBuffer")) fill = action;
+      if(action->flags & ActionFlags::Dispatch)
+      {
+        if(!firstDispatch) firstDispatch = action;
+        lastDispatch = action;
+      }
+    }
+    if(!fill || !firstDispatch || !lastDispatch || firstDispatch == lastDispatch)
+      return failPlacement("missing actions");
+    for(unsigned repetition = 0; repetition < 2; repetition++)
+    {
+      renderer->SetFrameEvent(fill->eventId, true);
+      const bytebuf before = renderer->GetBufferData(firstPlacement, 0, 8);
+      if(before.size() != 8 || before[0] != 0xa5 ||
+         !renderer->GetBufferData(secondPlacement, 0, 8).empty())
+        return failPlacement("new resource visible before creation");
+      renderer->SetFrameEvent(lastDispatch->eventId, true);
+      const bytebuf after = renderer->GetBufferData(secondPlacement, 0, 8);
+      if(after.size() != 8 || after[0] != 3 || after[1] != 10)
+        return failPlacement("new resource contents incorrect");
+    }
+  }
   ResourceId aliased, heap;
   bool texture = false;
   size_t aliasIndex = 0;
@@ -8188,6 +8587,31 @@ static bool ValidateIndirectFixture(IReplayController *renderer, ResourceId colo
   if(draws.size() != 1)
     return fail("expected one indirect draw action");
   const ActionDescription *draw = draws[0];
+  if(draw->customName.contains("GPU-defined arguments"))
+  {
+    if((draw->flags & ActionFlags::Indexed) || !(draw->flags & ActionFlags::Indirect) ||
+       draw->numIndices != 0 || draw->numInstances != 0)
+      return fail("Private indirect draw must report unknown CPU-side counts");
+    renderer->SetFrameEvent(draw->eventId, true);
+    const PipeState &pipe = renderer->GetPipelineState();
+    const MetalPipe::State *state = pipe.GetMetalPipelineState();
+    if(!state || state->indirectBuffer.resourceId == ResourceId() ||
+       state->indirectBuffer.byteOffset != 16 || state->indirectBuffer.byteSize != 16 ||
+       !HasUsage(renderer, state->indirectBuffer.resourceId, ResourceUsage::Indirect))
+      return fail("Private indirect draw buffer binding or usage is wrong");
+    static const uint32_t expected[] = {3, 2, 1, 1};
+    const bytebuf arguments = renderer->GetBufferData(state->indirectBuffer.resourceId, 16, 16);
+    if(arguments.size() != sizeof(expected) ||
+       memcmp(arguments.data(), expected, sizeof(expected)) != 0)
+      return fail("Private indirect GPU-written arguments are unavailable");
+    const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+    if(!clear ||
+       !PixelMatches(renderer, colorTarget, clear->eventId, 100, 150, 0.025f, 0.035f, 0.055f) ||
+       !PixelMatches(renderer, colorTarget, draw->eventId, 100, 150, 1.0f, 0.125f, 0.0625f) ||
+       !PixelMatches(renderer, colorTarget, draw->eventId, 300, 150, 0.09375f, 0.25f, 1.0f))
+      return fail("Private indirect draw event seek or output pixels are wrong");
+    return true;
+  }
   if(!(draw->flags & ActionFlags::Instanced) || (draw->flags & ActionFlags::Indexed) ||
      draw->numIndices != 3 || draw->numInstances != 2 || draw->vertexOffset != 1 ||
      draw->instanceOffset != 1)
@@ -9141,6 +9565,33 @@ static bool ValidateIndexedIndirectFixture(IReplayController *renderer, Resource
      !draws[0]->customName.contains("drawIndexedPrimitives(indirect"))
     return fail("expected exactly one indexed indirect action");
   const ActionDescription *draw = draws[0];
+  if(draw->customName.contains("GPU-defined arguments"))
+  {
+    if(!(draw->flags & ActionFlags::Indexed) || !(draw->flags & ActionFlags::Indirect) ||
+       draw->numIndices != 0 || draw->numInstances != 0)
+      return fail("Private indexed indirect draw must report unknown CPU-side counts");
+    renderer->SetFrameEvent(draw->eventId, true);
+    const PipeState &pipe = renderer->GetPipelineState();
+    const MetalPipe::State *state = pipe.GetMetalPipelineState();
+    const BoundVBuffer index = pipe.GetIBuffer();
+    if(!state || state->indirectBuffer.resourceId == ResourceId() ||
+       state->indirectBuffer.byteOffset != 16 || state->indirectBuffer.byteSize != 20 ||
+       index.resourceId == ResourceId() || index.byteOffset != 4 || index.byteStride != 2 ||
+       !HasUsage(renderer, state->indirectBuffer.resourceId, ResourceUsage::Indirect))
+      return fail("Private indexed indirect bindings or usage are wrong");
+    static const uint32_t expected[] = {3, 2, 1, 1, 1};
+    const bytebuf arguments = renderer->GetBufferData(state->indirectBuffer.resourceId, 16, 20);
+    if(arguments.size() != sizeof(expected) ||
+       memcmp(arguments.data(), expected, sizeof(expected)) != 0)
+      return fail("Private indexed indirect GPU-written arguments are unavailable");
+    const ActionDescription *clear = FindAction(renderer->GetRootActions(), ActionFlags::Clear);
+    if(!clear ||
+       !PixelMatches(renderer, colorTarget, clear->eventId, 100, 150, 0.025f, 0.035f, 0.055f) ||
+       !PixelMatches(renderer, colorTarget, draw->eventId, 100, 150, 1.0f, 0.125f, 0.0625f) ||
+       !PixelMatches(renderer, colorTarget, draw->eventId, 300, 150, 0.09375f, 0.25f, 1.0f))
+      return fail("Private indexed indirect event seek or output pixels are wrong");
+    return true;
+  }
   if(!(draw->flags & ActionFlags::Indexed) ||
      !(draw->flags & ActionFlags::Indirect) ||
      !(draw->flags & ActionFlags::Instanced) ||
@@ -9940,6 +10391,56 @@ int main(int argc, char **argv)
 
   output->SetTextureDisplay(display);
 
+  // A real UE frame does not have the fixed counter indices or texture contents of a demo.
+  // Probe API opening and per-draw pipeline/encoder state without demo-specific pixel values.
+  if(std::getenv("RENDERDOC_METAL_UE_FRAME_PROBE"))
+  {
+    rdcarray<const ActionDescription *> draws;
+    FindDrawActions(renderer->GetRootActions(), draws);
+    bool valid = !draws.empty();
+    const SDFile &file = renderer->GetStructuredFile();
+    std::map<ResourceId, ResourceId> encoderPipelines;
+    std::map<uint32_t, ResourceId> expectedAtDraw;
+    for(uint32_t index = 0; index < file.chunks.size(); index++)
+    {
+      const SDChunk *chunk = file.chunks[index];
+      if(chunk->name != "MTLRenderCommandEncoder::setRenderPipelineState" &&
+         chunk->name != "MTLRenderCommandEncoder::drawIndexedPrimitives")
+        continue;
+      const SDObject *encoder = chunk->FindChild("RenderCommandEncoder");
+      if(!encoder) continue;
+      if(chunk->name == "MTLRenderCommandEncoder::setRenderPipelineState")
+      {
+        const SDObject *pipeline = chunk->FindChild("pipelineState");
+        if(pipeline) encoderPipelines[encoder->AsResourceId()] = pipeline->AsResourceId();
+      }
+      else
+        expectedAtDraw[index] = encoderPipelines[encoder->AsResourceId()];
+    }
+    if(valid)
+    {
+      const size_t positions[] = {0, draws.size() / 4, draws.size() / 2,
+                                  3 * draws.size() / 4, draws.size() - 1, 0};
+      for(size_t position : positions)
+      {
+        renderer->SetFrameEvent(draws[position]->eventId, true);
+        const MetalPipe::State *state = renderer->GetPipelineState().GetMetalPipelineState();
+        auto expected = expectedAtDraw.find(draws[position]->events.back().chunkIndex);
+        valid = state && expected != expectedAtDraw.end() &&
+                state->pipelineResourceId == expected->second &&
+                renderer->GetFatalErrorStatus().OK();
+        if(!valid) break;
+      }
+    }
+    fprintf(stderr, "UE frame API probe: forward/rewind draw seek %s, draws=%zu\n",
+            valid ? "passed" : "failed", draws.size());
+    output->Shutdown();
+    renderer->Shutdown();
+    pool->release();
+    RENDERDOC_ShutdownReplay();
+    return valid ? 0 : 7;
+  }
+
   bool success = false;
   if(argc == 3 || argc == 4)
   {
@@ -9980,9 +10481,30 @@ int main(int argc, char **argv)
     }
     else
     {
+    bool ueBlitCounterFixture = false;
+    bool ueComputeCounterFixture = false;
+    bool ueComputeHeapFixture = false;
+    bool ueParallelRenderFixture = false;
+    for(const SDChunk *chunk : renderer->GetStructuredFile().chunks)
+    {
+      ueBlitCounterFixture |= chunk->name == "MTLCommandBuffer::blitCommandEncoderWithDescriptor" &&
+                              chunk->FindChild("hasSampleBuffers") &&
+                              chunk->FindChild("hasSampleBuffers")->AsBool();
+      ueComputeHeapFixture |= chunk->name == "MTLComputeCommandEncoder::useHeaps";
+      ueComputeCounterFixture |= chunk->name == "MTLCommandBuffer::computeCommandEncoderWithDescriptor" &&
+                                 chunk->FindChild("attachments") &&
+                                 chunk->FindChild("attachments")->NumChildren() == 4;
+      ueParallelRenderFixture |= chunk->name == "MTLCommandBuffer::parallelRenderCommandEncoderWithDescriptor";
+    }
     const bool commandCreationFixture = IsCommandCreationFixture(renderer);
-    success = ValidateMetalEventSequence(renderer) &&
+    success = ueBlitCounterFixture ? ValidateUEBlitCounterFixture(renderer) :
+              ueComputeCounterFixture ? ValidateUEComputeCounterFixture(renderer) :
+              ueComputeHeapFixture ? (ValidateUEComputeHeapFixture(renderer) &&
+                                      ValidateUEInterleavedCommandBuffers(renderer)) :
+              ueParallelRenderFixture ? ValidateUEParallelRenderFixture(renderer, display.resourceId) :
+              ValidateMetalEventSequence(renderer) &&
               ValidateCounterStageFixture(renderer, display.resourceId) &&
+              ValidateUEBlitCounterFixture(renderer) &&
               ValidateDynamicLibraryFixture(renderer, display.resourceId) &&
               ValidateCommandCreationFixture(renderer) &&
               ValidateRenderInlineBatchFixture(renderer, display.resourceId) &&
@@ -10084,7 +10606,9 @@ int main(int argc, char **argv)
                      chunk->name == "MTLDevice::newRenderPipelineStateWithObjectMeshDescriptor" ||
                      chunk->name ==
                          "MTLDevice::newRenderPipelineStateWithObjectMeshDescriptor(completionHandler)";
-    if(success && !commandCreationFixture && !meshFixture)
+    if(success && !ueBlitCounterFixture && !ueComputeCounterFixture &&
+       !ueParallelRenderFixture &&
+       !ueComputeHeapFixture && !commandCreationFixture && !meshFixture)
     {
       rdcarray<const ActionDescription *> draws;
       FindDrawActions(renderer->GetRootActions(), draws);
@@ -10128,7 +10652,10 @@ int main(int argc, char **argv)
   }
 
   if(success)
+  {
     success = ValidateFakePassMarkers(renderer);
+    if(!success) fprintf(stderr, "Fake pass marker validation failed\n");
+  }
 
   output->Shutdown();
   renderer->Shutdown();

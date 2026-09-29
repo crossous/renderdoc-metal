@@ -16,6 +16,25 @@ id<MTLHeap> MetalWrappedHeap(id<MTLHeap> real)
   return proxy ? id<MTLHeap>(proxy) : real;
 }
 
+id<MTLResource> MetalWrappedResource(id<MTLResource> resource)
+{
+  if(!resource) return nil;
+  id proxy = resource;
+  if(![proxy isKindOfClass:[ObjCBridgeMTLBuffer class]] &&
+     ![proxy isKindOfClass:[ObjCBridgeMTLTexture class]] &&
+     ![proxy isKindOfClass:[ObjCBridgeMTLVisibleFunctionTable class]] &&
+     ![proxy isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]] &&
+     ![proxy isKindOfClass:[ObjCBridgeMTLAccelerationStructure class]])
+    proxy = objc_getAssociatedObject(resource, resource);
+  if([proxy isKindOfClass:[ObjCBridgeMTLBuffer class]] ||
+     [proxy isKindOfClass:[ObjCBridgeMTLTexture class]] ||
+     [proxy isKindOfClass:[ObjCBridgeMTLVisibleFunctionTable class]] ||
+     [proxy isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]] ||
+     [proxy isKindOfClass:[ObjCBridgeMTLAccelerationStructure class]])
+    return id<MTLResource>(proxy);
+  return nil;
+}
+
 @implementation ObjCBridgeMTLHeap
 - (id<MTLHeap>)real { return id<MTLHeap>(Unwrap(GetWrapped(self))); }
 #pragma clang diagnostic push

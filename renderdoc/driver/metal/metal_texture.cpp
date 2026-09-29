@@ -163,9 +163,12 @@ bool WrappedMTLTexture::Serialise_setPurgeableState(SerialiserType &ser, MTL::Pu
   if(IsReplayingAndReading())
   {
     if(!Texture || Texture->m_Type != eResTexture || !Texture->m_Real ||
-       (State != MTL::PurgeableStateKeepCurrent && State != MTL::PurgeableStateNonVolatile))
+       (State != MTL::PurgeableStateKeepCurrent && State != MTL::PurgeableStateNonVolatile &&
+        State != MTL::PurgeableStateEmpty) ||
+       (m_Device->GetReplayEpoch() != 0 &&
+        (State == MTL::PurgeableStateVolatile || State == MTL::PurgeableStateEmpty)))
     {
-      RDCERR("Invalid or unsupported Metal texture purgeable state");
+      RDCERR("Invalid or unsupported Metal texture purgeable state or replay lifetime");
       return false;
     }
     Unwrap(Texture)->setPurgeableState((MTL::PurgeableState)State);
@@ -202,11 +205,57 @@ static bool ValidTextureView(MTL::Texture *source, MTL::PixelFormat format,
                              MTL::TextureType type, NS::Range levels, NS::Range slices,
                              MTL::TextureSwizzleChannels swizzle, uint32_t variant)
 {
-  if(!source || variant > 2 ||
+  if(!source || variant > 2 || source->sampleCount() != 1 || source->framebufferOnly() ||
+     source->parentTexture())
+    return false;
+  // Metal permits a stencil aspect view of a Private depth/stencil texture with
+  // PixelFormatView usage. Keep this separate from ordinary same-format Shared views.
+  if(source->pixelFormat() == MTL::PixelFormatDepth32Float_Stencil8 &&
+     format == MTL::PixelFormatX32_Stencil8 && variant <= 1 &&
+     source->textureType() == MTL::TextureType2D &&
+     source->storageMode() == MTL::StorageModePrivate &&
+     (source->usage() & MTL::TextureUsagePixelFormatView) &&
+     (variant == 0 || (type == MTL::TextureType2D && levels.location == 0 &&
+                      levels.length == source->mipmapLevelCount() && slices.location == 0 &&
+                      slices.length == 1)))
+    return true;
+  if(source->storageMode() == MTL::StorageModePrivate && variant == 1 &&
+     (source->pixelFormat() == format ||
+      (source->pixelFormat() == MTL::PixelFormatBGRA8Unorm_sRGB &&
+       format == MTL::PixelFormatBGRA8Unorm)) &&
+     (format == MTL::PixelFormatR8Unorm || format == MTL::PixelFormatR8Uint ||
+      format == MTL::PixelFormatR16Float || format == MTL::PixelFormatR32Uint ||
+      format == MTL::PixelFormatR32Float || format == MTL::PixelFormatRGBA8Unorm ||
+      format == MTL::PixelFormatBGRA8Unorm || format == MTL::PixelFormatRGB10A2Unorm ||
+      format == MTL::PixelFormatRG11B10Float) &&
+     levels.length && levels.location < source->mipmapLevelCount() &&
+     levels.length <= source->mipmapLevelCount() - levels.location && slices.length)
+  {
+    uint64_t availableSlices = 0;
+    switch(source->textureType())
+    {
+      case MTL::TextureType2D:
+        if(type == MTL::TextureType2D) availableSlices = 1;
+        break;
+      case MTL::TextureType2DArray:
+        if(type == MTL::TextureType2D || type == MTL::TextureType2DArray)
+          availableSlices = source->arrayLength();
+        break;
+      case MTL::TextureTypeCube:
+        if(type == MTL::TextureType2DArray) availableSlices = 6;
+        break;
+      default: break;
+    }
+    if(availableSlices && slices.location < availableSlices &&
+       slices.length <= availableSlices - slices.location &&
+       (type != MTL::TextureType2D || slices.length == 1))
+      return true;
+  }
+  if(
      (source->pixelFormat() != MTL::PixelFormatRGBA8Unorm &&
       source->pixelFormat() != MTL::PixelFormatBGRA8Unorm) ||
      format != source->pixelFormat() || source->storageMode() != MTL::StorageModeShared ||
-     source->sampleCount() != 1 || source->framebufferOnly() || source->parentTexture())
+     source->sampleCount() != 1)
     return false;
   if(source->textureType() != MTL::TextureType2D &&
      source->textureType() != MTL::TextureType2DArray)
@@ -253,6 +302,13 @@ bool WrappedMTLTexture::Serialise_newTextureView(SerialiserType &ser, WrappedMTL
        !ValidTextureView(Unwrap(Source), format, type, levels, slices, swizzle, variant))
     {
       RDCERR("Invalid or unsupported Metal texture view source, format or subresource range");
+      if(Source && Source->m_Type == eResTexture && Source->m_Real)
+        fprintf(stderr, "Metal texture view rejected: sourceFmt=%llu viewFmt=%llu variant=%u type=%llu storage=%llu usage=%llu samples=%llu framebuffer=%d parent=%d\n",
+                (uint64_t)Unwrap(Source)->pixelFormat(), (uint64_t)format, variant,
+                (uint64_t)Unwrap(Source)->textureType(), (uint64_t)Unwrap(Source)->storageMode(),
+                (uint64_t)Unwrap(Source)->usage(), (uint64_t)Unwrap(Source)->sampleCount(),
+                Unwrap(Source)->framebufferOnly() ? 1 : 0,
+                Unwrap(Source)->parentTexture() ? 1 : 0);
       return false;
     }
     MTL::Texture *real = NULL;

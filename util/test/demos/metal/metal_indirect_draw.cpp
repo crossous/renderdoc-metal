@@ -86,6 +86,20 @@ fragment float4 fs_main(VSOut input [[stage_in]])
 {
   return input.colour;
 }
+
+kernel void write_indirect_arguments(device uint *arguments [[buffer(0)]],
+                                     uint position [[thread_position_in_grid]])
+{
+  const uint values[4] = {3, 2, 1, 1};
+  if(position < 4)
+    arguments[position] = values[position];
+}
+
+kernel void buffer_indirect_dispatch(device const uint *input [[buffer(0)]],
+                                     device uint *output [[buffer(1)]])
+{
+  output[0] = input[0] + input[1];
+}
 )EOSHADER";
 
     // vertexStart=1 skips the off-screen first record. The final record is deliberately unused.
@@ -123,6 +137,22 @@ fragment float4 fs_main(VSOut input [[stage_in]])
 
     MTL::Function *vertexFunction = library->newFunction(MTLSTR("vs_main"));
     MTL::Function *fragmentFunction = library->newFunction(MTLSTR("fs_main"));
+    const bool privateInitialIndirect =
+        !GetEnvVar("RENDERDOC_METAL_TEST_PRIVATE_INITIAL_INDIRECT").empty();
+    const bool privateIndirect = privateInitialIndirect ||
+                                 !GetEnvVar("RENDERDOC_METAL_TEST_PRIVATE_INDIRECT").empty();
+    MTL::Function *writerFunction = privateIndirect && !privateInitialIndirect
+                                        ? library->newFunction(MTLSTR("write_indirect_arguments"))
+                                        : NULL;
+    MTL::Function *bufferFunction = privateIndirect && !privateInitialIndirect
+                                        ? library->newFunction(MTLSTR("buffer_indirect_dispatch"))
+                                        : NULL;
+    MTL::ComputePipelineState *writerPipeline = writerFunction
+                                                    ? device->newComputePipelineState(writerFunction, &error)
+                                                    : NULL;
+    MTL::ComputePipelineState *bufferPipeline = bufferFunction
+                                                    ? device->newComputePipelineState(bufferFunction, &error)
+                                                    : NULL;
 
     MTL::VertexDescriptor *vertexDesc = MTL::VertexDescriptor::alloc()->init();
     vertexDesc->attributes()->object(0)->setFormat(MTL::VertexFormatFloat2);
@@ -156,13 +186,45 @@ fragment float4 fs_main(VSOut input [[stage_in]])
         device->newBuffer(positions, sizeof(positions), MTL::ResourceStorageModeShared);
     MTL::Buffer *instanceBuffer =
         device->newBuffer(instances, sizeof(instances), MTL::ResourceStorageModeShared);
-    MTL::Buffer *indirectBuffer =
-        device->newBuffer(&packet, sizeof(packet), MTL::ResourceStorageModeShared);
+    MTL::Buffer *indirectBuffer = privateIndirect
+                                      ? device->newBuffer(sizeof(packet),
+                                                          MTL::ResourceStorageModePrivate)
+                                      : device->newBuffer(&packet, sizeof(packet),
+                                                          MTL::ResourceStorageModeShared);
+    const MTL::DispatchThreadgroupsIndirectArguments dispatchArgs = {{1, 1, 1}};
+    MTL::Buffer *dispatchBuffer = privateIndirect && !privateInitialIndirect
+                                      ? device->newBuffer(&dispatchArgs, sizeof(dispatchArgs),
+                                                          MTL::ResourceStorageModeShared)
+                                      : NULL;
+    MTL::Buffer *computeOutput = privateIndirect && !privateInitialIndirect
+                                     ? device->newBuffer(sizeof(uint32_t),
+                                                         MTL::ResourceStorageModeShared)
+                                     : NULL;
     if(pipeline == NULL || positionBuffer == NULL || instanceBuffer == NULL ||
-       indirectBuffer == NULL)
+       indirectBuffer == NULL ||
+       (privateIndirect && !privateInitialIndirect &&
+        (!writerPipeline || !bufferPipeline || !dispatchBuffer || !computeOutput)))
     {
       TEST_WARN("Failed to create T13 Metal resources");
       return 4;
+    }
+
+    if(privateInitialIndirect)
+    {
+      // Seed a Private indirect argument buffer before the capture begins. The frame must
+      // restore these GPU-local bytes from Initial Contents; it never writes this buffer.
+      MTL::Buffer *upload = device->newBuffer(&packet, sizeof(packet),
+                                               MTL::ResourceStorageModeShared);
+      if(!upload) return 4;
+      MTL::CommandBuffer *seed = queue->commandBuffer();
+      MTL::BlitCommandEncoder *blit = seed->blitCommandEncoder();
+      blit->copyFromBuffer(upload, 0, indirectBuffer, 0, sizeof(packet));
+      blit->endEncoding();
+      seed->commit();
+      seed->waitUntilCompleted();
+      bool seeded = seed->error() == NULL;
+      upload->release();
+      if(!seeded) return 4;
     }
 
     bool validationFailed = false;
@@ -179,6 +241,20 @@ fragment float4 fs_main(VSOut input [[stage_in]])
       }
 
       MTL::CommandBuffer *commandBuffer = queue->commandBuffer();
+      if(privateIndirect && !privateInitialIndirect)
+      {
+        MTL::ComputeCommandEncoder *compute = commandBuffer->computeCommandEncoder();
+        compute->setComputePipelineState(writerPipeline);
+        compute->setBuffer(indirectBuffer, offsetof(IndirectPacket, arguments), 0);
+        compute->dispatchThreadgroups(MTL::Size::Make(1, 1, 1), MTL::Size::Make(4, 1, 1));
+        compute->endEncoding();
+        compute = commandBuffer->computeCommandEncoder();
+        compute->setComputePipelineState(bufferPipeline);
+        compute->setBuffer(indirectBuffer, offsetof(IndirectPacket, arguments), 0);
+        compute->setBuffer(computeOutput, 0, 1);
+        compute->dispatchThreadgroups(dispatchBuffer, 0, MTL::Size::Make(1, 1, 1));
+        compute->endEncoding();
+      }
       MTL::RenderPassDescriptor *pass =
           MakeBackbufferRenderPass(drawable, MTL::ClearColor::Make(0.025, 0.035, 0.055, 1.0));
       MTL::RenderCommandEncoder *render = commandBuffer->renderCommandEncoder(pass);
@@ -209,6 +285,13 @@ fragment float4 fs_main(VSOut input [[stage_in]])
       commandBuffer->waitUntilCompleted();
       EndCaptureFrame();
 
+      if(validateNative && privateIndirect && !privateInitialIndirect &&
+         *(const uint32_t *)computeOutput->contents() != 5)
+      {
+        TEST_WARN("Private buffer indirect compute result was not 5");
+        validationFailed = true;
+      }
+
       if(readback)
       {
         const byte *pixels = (const byte *)readback->contents();
@@ -228,6 +311,12 @@ fragment float4 fs_main(VSOut input [[stage_in]])
     }
 
     indirectBuffer->release();
+    if(computeOutput) computeOutput->release();
+    if(dispatchBuffer) dispatchBuffer->release();
+    if(bufferPipeline) bufferPipeline->release();
+    if(bufferFunction) bufferFunction->release();
+    if(writerPipeline) writerPipeline->release();
+    if(writerFunction) writerFunction->release();
     instanceBuffer->release();
     positionBuffer->release();
     pipeline->release();

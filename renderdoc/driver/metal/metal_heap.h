@@ -33,11 +33,14 @@ public:
                                       NS::UInteger offset);
 
   enum { TypeEnum = eResHeap };
+  void ResetFramePlacementRanges();
 
 private:
   struct PlacementRange
   {
     uint64_t begin, end;
+    ResourceId resource;
+    bool frameResource;
   };
   rdcarray<PlacementRange> m_PlacementRanges;
 };

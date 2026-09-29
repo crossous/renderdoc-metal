@@ -1310,16 +1310,37 @@
 - (void)useResource:(id<MTLResource>)resource
               usage:(MTLResourceUsage)usage API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  GetWrapped(self)->useResource(GetWrapped(resource), (MTL::ResourceUsage)usage);
+  id<MTLResource> proxy = MetalWrappedResource(resource);
+  if(!proxy)
+  {
+    RDCERR("Cannot capture Metal render resource %p class %s without a wrapper",
+           resource, resource ? object_getClassName(resource) : "nil");
+    return;
+  }
+  GetWrapped(self)->useResource(GetWrapped(proxy), (MTL::ResourceUsage)usage);
 }
 
 - (void)useResources:(const id<MTLResource> __nonnull[__nonnull])resources
                count:(NSUInteger)count
                usage:(MTLResourceUsage)usage API_AVAILABLE(macos(10.13), ios(11.0))
 {
+  if(count > 4096 || (count && !resources))
+  {
+    RDCERR("Invalid Metal render resource array");
+    return;
+  }
   rdcarray<WrappedMTLResource *> wrapped;
   for(NSUInteger i = 0; i < count; i++)
-    wrapped.push_back(GetWrapped(resources[i]));
+  {
+    id<MTLResource> proxy = MetalWrappedResource(resources[i]);
+    if(!proxy)
+    {
+      RDCERR("Cannot capture Metal render resource array entry %lu: %p class %s without a wrapper",
+             (unsigned long)i, resources[i], resources[i] ? object_getClassName(resources[i]) : "nil");
+      return;
+    }
+    wrapped.push_back(GetWrapped(proxy));
+  }
   GetWrapped(self)->useResources(wrapped, (MTL::ResourceUsage)usage);
 }
 
@@ -1327,7 +1348,14 @@
               usage:(MTLResourceUsage)usage
              stages:(MTLRenderStages)stages API_AVAILABLE(macos(10.15), ios(13.0))
 {
-  GetWrapped(self)->useResourceWithStages(GetWrapped(resource), (MTL::ResourceUsage)usage,
+  id<MTLResource> proxy = MetalWrappedResource(resource);
+  if(!proxy)
+  {
+    RDCERR("Cannot capture staged Metal render resource %p class %s without a wrapper",
+           resource, resource ? object_getClassName(resource) : "nil");
+    return;
+  }
+  GetWrapped(self)->useResourceWithStages(GetWrapped(proxy), (MTL::ResourceUsage)usage,
                                           (MTL::RenderStages)stages);
 }
 
@@ -1336,30 +1364,73 @@
                usage:(MTLResourceUsage)usage
               stages:(MTLRenderStages)stages API_AVAILABLE(macos(10.15), ios(13.0))
 {
+  if(count > 4096 || (count && !resources))
+  {
+    RDCERR("Invalid staged Metal render resource array");
+    return;
+  }
   rdcarray<WrappedMTLResource *> wrapped;
   for(NSUInteger i = 0; i < count; i++)
-    wrapped.push_back(GetWrapped(resources[i]));
+  {
+    id<MTLResource> proxy = MetalWrappedResource(resources[i]);
+    if(!proxy)
+    {
+      RDCERR("Cannot capture staged Metal render resource array entry %lu: %p class %s without a wrapper",
+             (unsigned long)i, resources[i], resources[i] ? object_getClassName(resources[i]) : "nil");
+      return;
+    }
+    wrapped.push_back(GetWrapped(proxy));
+  }
   GetWrapped(self)->useResourcesWithStages(wrapped, (MTL::ResourceUsage)usage,
                                            (MTL::RenderStages)stages);
 }
 
 - (void)useHeap:(id<MTLHeap>)heap API_AVAILABLE(macos(10.13), ios(11.0))
 {
-  GetWrapped(self)->declareHeaps({GetWrapped(heap)}, MTL::RenderStageVertex, 0);
+  id<MTLHeap> proxy = MetalWrappedHeap(heap);
+  if(!proxy || ![proxy isKindOfClass:[ObjCBridgeMTLHeap class]])
+  {
+    RDCERR("Cannot capture Metal render heap %p class %s without a wrapper",
+           heap, heap ? object_getClassName(heap) : "nil");
+    return;
+  }
+  GetWrapped(self)->declareHeaps({GetWrapped((ObjCBridgeMTLHeap *)proxy)}, MTL::RenderStageVertex, 0);
 }
 
 - (void)useHeaps:(const id<MTLHeap> __nonnull[__nonnull])heaps
            count:(NSUInteger)count API_AVAILABLE(macos(10.13), ios(11.0))
 {
   rdcarray<WrappedMTLHeap *> wrapped;
-  for(NSUInteger i = 0; i < count; i++) wrapped.push_back(GetWrapped(heaps[i]));
+  if(count > 32 || (count && !heaps))
+  {
+    RDCERR("Invalid Metal render heap array shape");
+    return;
+  }
+  for(NSUInteger i = 0; i < count; i++)
+  {
+    id<MTLHeap> proxy = MetalWrappedHeap(heaps[i]);
+    if(!proxy || ![proxy isKindOfClass:[ObjCBridgeMTLHeap class]])
+    {
+      RDCERR("Cannot capture Metal render heap array entry %lu: %p class %s without a wrapper",
+             (unsigned long)i, heaps[i], heaps[i] ? object_getClassName(heaps[i]) : "nil");
+      return;
+    }
+    wrapped.push_back(GetWrapped((ObjCBridgeMTLHeap *)proxy));
+  }
   GetWrapped(self)->declareHeaps(wrapped, MTL::RenderStageVertex, 2);
 }
 
 - (void)useHeap:(id<MTLHeap>)heap
          stages:(MTLRenderStages)stages API_AVAILABLE(macos(10.15), ios(13.0))
 {
-  GetWrapped(self)->declareHeaps({GetWrapped(heap)}, (MTL::RenderStages)stages, 1);
+  id<MTLHeap> proxy = MetalWrappedHeap(heap);
+  if(!proxy || ![proxy isKindOfClass:[ObjCBridgeMTLHeap class]])
+  {
+    RDCERR("Cannot capture Metal render heap %p class %s without a wrapper",
+           heap, heap ? object_getClassName(heap) : "nil");
+    return;
+  }
+  GetWrapped(self)->declareHeaps({GetWrapped((ObjCBridgeMTLHeap *)proxy)}, (MTL::RenderStages)stages, 1);
 }
 
 - (void)useHeaps:(const id<MTLHeap> __nonnull[__nonnull])heaps
@@ -1367,7 +1438,22 @@
           stages:(MTLRenderStages)stages API_AVAILABLE(macos(10.15), ios(13.0))
 {
   rdcarray<WrappedMTLHeap *> wrapped;
-  for(NSUInteger i = 0; i < count; i++) wrapped.push_back(GetWrapped(heaps[i]));
+  if(count > 32 || (count && !heaps))
+  {
+    RDCERR("Invalid Metal render heap array shape");
+    return;
+  }
+  for(NSUInteger i = 0; i < count; i++)
+  {
+    id<MTLHeap> proxy = MetalWrappedHeap(heaps[i]);
+    if(!proxy || ![proxy isKindOfClass:[ObjCBridgeMTLHeap class]])
+    {
+      RDCERR("Cannot capture Metal render heap array entry %lu: %p class %s without a wrapper",
+             (unsigned long)i, heaps[i], heaps[i] ? object_getClassName(heaps[i]) : "nil");
+      return;
+    }
+    wrapped.push_back(GetWrapped((ObjCBridgeMTLHeap *)proxy));
+  }
   GetWrapped(self)->declareHeaps(wrapped, (MTL::RenderStages)stages, 3);
 }
 

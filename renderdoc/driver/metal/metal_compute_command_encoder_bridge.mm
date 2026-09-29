@@ -68,16 +68,72 @@
 
 - (void)useResource:(id<MTLResource>)resource usage:(MTLResourceUsage)usage
 {
-  GetWrapped(self)->useResource(GetWrapped(resource), (MTL::ResourceUsage)usage);
+  id<MTLResource> proxy = MetalWrappedResource(resource);
+  if(!proxy)
+  {
+    RDCERR("Cannot capture Metal compute resource %p class %s without a wrapper",
+           resource, resource ? object_getClassName(resource) : "nil");
+    return;
+  }
+  GetWrapped(self)->useResource(GetWrapped(proxy), (MTL::ResourceUsage)usage);
 }
 
 - (void)useResources:(const id<MTLResource> _Nonnull [_Nonnull])resources
                count:(NSUInteger)count usage:(MTLResourceUsage)usage
 {
+  if(count > 4096 || (count && !resources))
+  {
+    RDCERR("Invalid Metal compute resource array");
+    return;
+  }
   rdcarray<WrappedMTLResource *> wrapped;
   for(NSUInteger i = 0; i < count; i++)
-    wrapped.push_back(GetWrapped(resources[i]));
+  {
+    id<MTLResource> proxy = MetalWrappedResource(resources[i]);
+    if(!proxy)
+    {
+      RDCERR("Cannot capture Metal compute resource array entry %lu: %p class %s without a wrapper",
+             (unsigned long)i, resources[i], resources[i] ? object_getClassName(resources[i]) : "nil");
+      return;
+    }
+    wrapped.push_back(GetWrapped(proxy));
+  }
   GetWrapped(self)->useResources(wrapped, (MTL::ResourceUsage)usage);
+}
+
+- (void)useHeap:(id<MTLHeap>)heap API_AVAILABLE(macos(10.13), ios(11.0))
+{
+  id<MTLHeap> proxy = MetalWrappedHeap(heap);
+  if(!proxy || ![proxy isKindOfClass:[ObjCBridgeMTLHeap class]])
+  {
+    RDCERR("Cannot capture Metal compute heap %p class %s without a wrapper",
+           heap, heap ? object_getClassName(heap) : "nil");
+    return;
+  }
+  GetWrapped(self)->declareHeaps({GetWrapped((ObjCBridgeMTLHeap *)proxy)}, false);
+}
+
+- (void)useHeaps:(const id<MTLHeap> _Nonnull [_Nonnull])heaps
+           count:(NSUInteger)count API_AVAILABLE(macos(10.13), ios(11.0))
+{
+  if(count > 32 || (count && !heaps))
+  {
+    RDCERR("Invalid Metal compute heap array");
+    return;
+  }
+  rdcarray<WrappedMTLHeap *> wrapped;
+  for(NSUInteger i = 0; i < count; i++)
+  {
+    id<MTLHeap> proxy = MetalWrappedHeap(heaps[i]);
+    if(!proxy || ![proxy isKindOfClass:[ObjCBridgeMTLHeap class]])
+    {
+      RDCERR("Cannot capture Metal compute heap array entry %lu: %p class %s without a wrapper",
+             (unsigned long)i, heaps[i], heaps[i] ? object_getClassName(heaps[i]) : "nil");
+      return;
+    }
+    wrapped.push_back(GetWrapped((ObjCBridgeMTLHeap *)proxy));
+  }
+  GetWrapped(self)->declareHeaps(wrapped, true);
 }
 
 - (void)memoryBarrierWithScope:(MTLBarrierScope)scope

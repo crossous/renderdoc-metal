@@ -4,7 +4,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+SOURCE_DIR="${RENDERDOC_METAL_SOURCE_DIR:-${REPO_ROOT}}"
 BUILD_DIR="${RENDERDOC_METAL_BUILD_DIR:-${REPO_ROOT}/build-macos-debug}"
+
+# Apple's linker splits -force_load paths containing spaces. Keep the build in
+# the repository, but address it through a stable path without spaces.
+if [[ "${BUILD_DIR}" == *" "* ]]; then
+  BUILD_LINK="/tmp/renderdoc-metal-$(printf '%s' "${REPO_ROOT}" | shasum -a 256 | cut -c1-12)"
+  if [ ! -e "${BUILD_LINK}" ]; then
+    ln -s "${REPO_ROOT}" "${BUILD_LINK}"
+  fi
+  BUILD_DIR="${BUILD_LINK}/$(basename "${BUILD_DIR}")"
+fi
 
 if ! command -v brew >/dev/null 2>&1; then
   echo "Homebrew is required to locate the Qt 5 development tools." >&2
@@ -23,7 +34,7 @@ fi
 
 export PATH="${QT5_PREFIX}/bin:${BISON_PREFIX}/bin:${PATH}"
 
-cmake -S "${REPO_ROOT}" -B "${BUILD_DIR}" -G Ninja \
+cmake -S "${SOURCE_DIR}" -B "${BUILD_DIR}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DQMAKE_QT5_COMMAND="${QMAKE}" \
   -DENABLE_METAL=ON \
@@ -32,7 +43,8 @@ cmake -S "${REPO_ROOT}" -B "${BUILD_DIR}" -G Ninja \
   -DENABLE_EGL=OFF \
   -DENABLE_VULKAN=OFF \
   -DENABLE_PYRENDERDOC=OFF \
-  -DENABLE_RENDERDOCCMD=ON
+  -DENABLE_RENDERDOCCMD=ON \
+  -DCMAKE_REQUIRED_INCLUDES="$(brew --prefix pcre)/include"
 
 cmake --build "${BUILD_DIR}" --target build-qrenderdoc renderdoccmd -j "$(sysctl -n hw.ncpu)"
 

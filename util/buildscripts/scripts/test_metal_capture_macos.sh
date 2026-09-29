@@ -15,7 +15,8 @@ LIFECYCLE_SMOKE="${RENDERDOC_BUILD_DIR}/metal_replay_lifecycle_smoke"
 TARGET_ARCH="$(uname -m)"
 
 cmake -S "${REPO_ROOT}/util/test/demos" -B "${DEMO_BUILD_DIR}" -G Ninja \
-  -DCMAKE_BUILD_TYPE=Debug
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_FLAGS=-Wno-deprecated-literal-operator
 cmake --build "${DEMO_BUILD_DIR}" -j "$(sysctl -n hw.ncpu)"
 
 "${SCRIPT_DIR}/build_metal_dev_macos.sh"

@@ -95,6 +95,9 @@ set(sources
     metal_render_command_encoder.cpp
     metal_render_command_encoder.h
     metal_render_command_encoder_bridge.mm
+    metal_parallel_render_command_encoder.cpp
+    metal_parallel_render_command_encoder.h
+    metal_parallel_render_command_encoder_bridge.mm
     metal_core.cpp
     metal_core.h
     metal_manager.cpp

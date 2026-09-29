@@ -50,6 +50,7 @@ fragment float4 fs_purgeable(constant uint4 *offset [[buffer(0)]],
 
     bool failed = false;
     const bool native = GetEnvVar("RENDERDOC_METAL_CAPTURE_PATH").empty();
+    const bool discardAndRefill = !GetEnvVar("RENDERDOC_METAL_PURGEABLE_EMPTY").empty();
     while(Running())
     {
       NS::AutoreleasePool *pool = NS::AutoreleasePool::alloc()->init();
@@ -59,6 +60,15 @@ fragment float4 fs_purgeable(constant uint4 *offset [[buffer(0)]],
       BeginCaptureFrame();
       CA::MetalDrawable *drawable = AcquireDrawable();
       if(!drawable) { pool->drain(); continue; }
+      if(discardAndRefill)
+      {
+        buffer->setPurgeableState(MTL::PurgeableStateEmpty);
+        texture->setPurgeableState(MTL::PurgeableStateEmpty);
+        buffer->setPurgeableState(MTL::PurgeableStateNonVolatile);
+        texture->setPurgeableState(MTL::PurgeableStateNonVolatile);
+        memcpy(buffer->contents(), offset, sizeof(offset));
+        texture->replaceRegion(MTL::Region::Make2D(0,0,1,1),0,pixel,4);
+      }
       buffer->setPurgeableState(MTL::PurgeableStateNonVolatile);
       texture->setPurgeableState(MTL::PurgeableStateNonVolatile);
       MTL::CommandBuffer *cb = queue->commandBuffer();

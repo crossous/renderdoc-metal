@@ -29,30 +29,19 @@
 
 struct MetalInitialContents
 {
-  MetalInitialContents()
-  {
-    RDCCOMPILE_ASSERT(std::is_standard_layout<MetalInitialContents>::value,
-                      "MetalInitialContents must be POD");
-    memset(this, 0, sizeof(*this));
-  }
+  MetalInitialContents() : type(eResUnknown) {}
 
-  MetalInitialContents(MetalResourceType t)
-  {
-    memset(this, 0, sizeof(*this));
-    type = t;
-  }
+  MetalInitialContents(MetalResourceType t) : type(t) {}
 
   MetalInitialContents(MetalResourceType t, bytebuf data)
-  {
-    memset(this, 0, sizeof(*this));
-    type = t;
-    resourceContents = data;
-  }
+      : resourceContents(data), type(t) {}
 
   template <typename Configuration>
   void Free(ResourceManager<Configuration> *rm)
   {
-    RDCASSERT(false);
+    // Initial buffer bytes are owned by bytebuf. ResourceManager calls Free when
+    // replacing or discarding a snapshot; there is no Metal object to release.
+    resourceContents.clear();
   }
   bytebuf resourceContents;
 

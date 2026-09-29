@@ -52,7 +52,8 @@ public:
   template <typename SerialiserType>
   bool Serialise_blitCommandEncoderWithDescriptor(SerialiserType &ser,
                                                    WrappedMTLBlitCommandEncoder *encoder,
-                                                   bool hasSampleBuffers);
+                                                   bool hasSampleBuffers,
+                                                   rdcarray<RDMTL::BlitPassSampleBufferAttachmentDescriptor> attachments);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLComputeCommandEncoder *,
                                           computeCommandEncoder);
   WrappedMTLComputeCommandEncoder *computeCommandEncoderWithDescriptor(
@@ -60,12 +61,19 @@ public:
   template <typename SerialiserType>
   bool Serialise_computeCommandEncoderWithDescriptor(
       SerialiserType &ser, WrappedMTLComputeCommandEncoder *encoder,
-      MTL::DispatchType dispatchType);
+      MTL::DispatchType dispatchType,
+      rdcarray<RDMTL::ComputePassSampleBufferAttachmentDescriptor> attachments);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLComputeCommandEncoder *,
                                           computeCommandEncoder, MTL::DispatchType dispatchType);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLRenderCommandEncoder *,
                                           renderCommandEncoderWithDescriptor,
                                           RDMTL::RenderPassDescriptor &descriptor);
+  WrappedMTLParallelRenderCommandEncoder *parallelRenderCommandEncoderWithDescriptor(
+      RDMTL::RenderPassDescriptor &descriptor);
+  template <typename SerialiserType>
+  bool Serialise_parallelRenderCommandEncoderWithDescriptor(
+      SerialiserType &ser, WrappedMTLParallelRenderCommandEncoder *encoder,
+      RDMTL::RenderPassDescriptor &descriptor);
   void presentDrawable(MTL::Drawable *drawable);
   void presentDrawable(MTL::Drawable *drawable, double time, bool minimumDuration);
   template <typename SerialiserType>

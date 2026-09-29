@@ -64,6 +64,7 @@ enum MetalResourceType
   eResAccelerationStructure,
   eResAccelerationStructureCommandEncoder,
   eResBinaryArchive,
+  eResParallelRenderCommandEncoder,
   eResMax
 };
 
@@ -162,6 +163,12 @@ struct MetalCmdBufferRecordingInfo
   MetalCmdBufferRecordingInfo &operator=(const MetalCmdBufferRecordingInfo &) = delete;
   ~MetalCmdBufferRecordingInfo() {}
   WrappedMTLCommandQueue *queue;
+
+  // A submitted command buffer's record can outlive the application's autorelease pool.
+  // Keep both the proxy (and therefore its wrapper) and the native buffer alive until the
+  // record has been serialised or submitted outside a capture.
+  NS::Object *retainedProxy = NULL;
+  MTL::CommandBuffer *retainedNative = NULL;
 
   // The MetalLayer to present
   CA::MetalLayer *outputLayer = NULL;

@@ -85,7 +85,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentAccelerationStructure(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !Unwrap(RenderCommandEncoder) ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        index >= 31 ||
        (structure && (structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
                       !structure->m_LastBuildKind)))
@@ -137,7 +137,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexAccelerationStructure(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !Unwrap(RenderCommandEncoder) ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        index >= 31 ||
        (structure && (structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
                       !structure->m_LastBuildKind)))
@@ -189,7 +189,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTileAccelerationStructure(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !Unwrap(RenderCommandEncoder) ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        index >= 31 ||
        (structure && (structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
                       !structure->m_LastBuildKind)))
@@ -241,7 +241,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentVisibleFunctionTable(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() || index >= 31 ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) || index >= 31 ||
        (table && (table->m_Type != eResVisibleFunctionTable || !table->m_Real ||
                   table->m_Stage != MTL::RenderStageFragment ||
                   table->m_Pipeline != m_EncoderPipeline)))
@@ -286,7 +286,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentIntersectionFunctionTa
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() || index >= 31 ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) || index >= 31 ||
        !table || table->m_Type != eResIntersectionFunctionTable || !table->m_Real ||
        table->m_Stage != MTL::RenderStageFragment ||
        table->m_Pipeline != m_EncoderPipeline)
@@ -331,7 +331,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexIntersectionFunctionTabl
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() || index >= 31 ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) || index >= 31 ||
        !table || table->m_Type != eResIntersectionFunctionTable || !table->m_Real ||
        table->m_Stage != MTL::RenderStageVertex || table->m_Pipeline != m_EncoderPipeline)
     {
@@ -375,7 +375,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTileIntersectionFunctionTable(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() || index >= 31 ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) || index >= 31 ||
        !table || table->m_Type != eResIntersectionFunctionTable || !table->m_Real ||
        table->m_Stage != MTL::RenderStageTile || table->m_Pipeline != m_EncoderPipeline)
     {
@@ -420,7 +420,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setIntersectionFunctionTables(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        range.length == 0 || range.length > 31 || range.location > 31 - range.length ||
        tables.size() != range.length)
     {
@@ -514,7 +514,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTileVisibleFunctionTable(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() || index >= 31 ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) || index >= 31 ||
        (table && (table->m_Type != eResVisibleFunctionTable || !table->m_Real ||
                   table->m_Stage != MTL::RenderStageTile ||
                   table->m_Pipeline != m_EncoderPipeline)))
@@ -559,7 +559,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTileVisibleFunctionTables(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        range.length == 0 || range.length > 31 || range.location > 31 - range.length ||
        tables.size() != range.length)
     {
@@ -625,7 +625,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexVisibleFunctionTable(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() || index >= 31 ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) || index >= 31 ||
        (table && (table->m_Type != eResVisibleFunctionTable || !table->m_Real ||
                   table->m_Stage != MTL::RenderStageVertex ||
                   table->m_Pipeline != m_EncoderPipeline)))
@@ -670,7 +670,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexVisibleFunctionTables(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        range.length == 0 || range.length > 31 || range.location > 31 - range.length ||
        tables.size() != range.length)
     {
@@ -736,7 +736,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentVisibleFunctionTables(
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        range.length == 0 || range.length > 31 || range.location > 31 - range.length ||
        tables.size() != range.length)
     {
@@ -797,6 +797,16 @@ bool WrappedMTLRenderCommandEncoder::Serialise_insertDebugSignpost(SerialiserTyp
   SERIALISE_ELEMENT_LOCAL(RenderCommandEncoder, this);
   SERIALISE_ELEMENT(string).Important();
   SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading() &&
+     (!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
+      !Unwrap(RenderCommandEncoder) ||
+      RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder)))
+    return false;
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::SetMarker);
+  }
   return true;
 }
 
@@ -819,6 +829,16 @@ bool WrappedMTLRenderCommandEncoder::Serialise_pushDebugGroup(SerialiserType &se
   SERIALISE_ELEMENT_LOCAL(RenderCommandEncoder, this);
   SERIALISE_ELEMENT(string).Important();
   SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading() &&
+     (!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
+      !Unwrap(RenderCommandEncoder) ||
+      RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder)))
+    return false;
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::PushMarker);
+  }
   return true;
 }
 
@@ -839,6 +859,16 @@ bool WrappedMTLRenderCommandEncoder::Serialise_popDebugGroup(SerialiserType &ser
 {
   SERIALISE_ELEMENT_LOCAL(RenderCommandEncoder, this);
   SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading() &&
+     (!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
+      !Unwrap(RenderCommandEncoder) ||
+      RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder)))
+    return false;
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(NULL, ActionFlags::PopMarker);
+  }
   return true;
 }
 
@@ -866,7 +896,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setRenderPipelineState(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || !pipelineState || pipelineState->m_Type != eResRenderPipelineState ||
        !Unwrap(pipelineState))
     {
@@ -915,7 +945,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTileBuffer(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) ||
        (buffer && (buffer->m_Type != eResBuffer || !buffer->m_Real ||
                    buffer->m_Device != m_Device || offset > Unwrap(buffer)->length() ||
@@ -959,7 +989,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setObjectBuffer(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) ||
        (buffer && (buffer->m_Type != eResBuffer || !buffer->m_Real ||
                    buffer->m_Device != m_Device || offset > Unwrap(buffer)->length() ||
@@ -1009,7 +1039,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setObjectBinding(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 2 ||
        range.location >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS || !range.length ||
        range.length > MAX_RENDER_PASS_BUFFER_ATTACHMENTS - range.location ||
@@ -1130,7 +1160,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setObjectTextures(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 1 ||
        range.location >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS || !range.length ||
        range.length > MAX_RENDER_PASS_BUFFER_ATTACHMENTS - range.location ||
@@ -1206,7 +1236,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setObjectSamplers(
   {
     const bool clamped = variant >= 2;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 3 || range.location >= 16 ||
        !range.length || range.length > 16 - range.location ||
        (variant % 2 == 0 && range.length != 1) || samplers.size() != range.length ||
@@ -1304,7 +1334,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setObjectThreadgroupMemoryLength(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || index >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS ||
        (length & 15) != 0 || length > Unwrap(m_Device)->maxThreadgroupMemoryLength())
     {
@@ -1347,7 +1377,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTileBinding(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 2 ||
        range.location >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS ||
        !range.length || range.length > MAX_RENDER_PASS_BUFFER_ATTACHMENTS - range.location ||
@@ -1465,7 +1495,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setMeshBinding(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 3 ||
        range.location >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS || !range.length ||
        range.length > MAX_RENDER_PASS_BUFFER_ATTACHMENTS - range.location ||
@@ -1611,7 +1641,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setMeshTextures(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 1 ||
        range.location >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS || !range.length ||
        range.length > MAX_RENDER_PASS_BUFFER_ATTACHMENTS - range.location ||
@@ -1687,7 +1717,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setMeshSamplers(
   {
     const bool clamped = variant >= 2;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 3 || range.location >= 16 ||
        !range.length || range.length > 16 - range.location ||
        (variant % 2 == 0 && range.length != 1) || samplers.size() != range.length ||
@@ -1786,7 +1816,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTileTextures(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 1 ||
        range.location >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS || !range.length ||
        range.length > MAX_RENDER_PASS_BUFFER_ATTACHMENTS - range.location ||
@@ -1862,7 +1892,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTileSamplers(
   {
     const bool clamped = variant >= 2;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 3 || range.location >= 16 ||
        !range.length || range.length > 16 - range.location ||
        (variant % 2 == 0 && range.length != 1) || samplers.size() != range.length ||
@@ -1962,7 +1992,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setThreadgroupMemoryLength(
   {
     const RDMTL::RenderPassDescriptor &pass = m_Device->GetReplay()->GetRenderPassDescriptor();
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || index >= 31 || (!length && offset != 0) ||
        (length & 15) != 0 || (offset & 15) != 0 ||
        offset > pass.threadgroupMemoryLength ||
@@ -2011,7 +2041,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawMeshThreadgroups(
     const uint64_t objectLimit = pipeline ? pipeline->maxTotalThreadsPerObjectThreadgroup() : 0;
     const uint64_t gridLimit = pipeline ? pipeline->maxTotalThreadgroupsPerMeshGrid() : 0;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || !pipeline ||
        !m_Device->GetReplay()->IsMeshPipeline(GetResID(m_EncoderPipeline)) ||
        !threadgroupsPerGrid.width || !threadgroupsPerGrid.height ||
@@ -2105,7 +2135,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawMeshThreadgroups(
     const uint64_t objectLimit = pipeline ? pipeline->maxTotalThreadsPerObjectThreadgroup() : 0;
     const uint64_t argumentSize = sizeof(MTL::DispatchThreadgroupsIndirectArguments);
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || !pipeline ||
        !m_Device->GetReplay()->IsMeshPipeline(GetResID(m_EncoderPipeline)) || !realBuffer ||
        (indirectBufferOffset & 3) != 0 || indirectBufferOffset > realBuffer->length() ||
@@ -2199,7 +2229,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawMeshThreads(
     const uint64_t gz = threadsPerMeshThreadgroup.depth ?
         1 + (threadsPerGrid.depth - 1) / threadsPerMeshThreadgroup.depth : 0;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || !pipeline ||
        !m_Device->GetReplay()->IsMeshPipeline(GetResID(m_EncoderPipeline)) ||
        !threadsPerGrid.width || !threadsPerGrid.height || !threadsPerGrid.depth ||
@@ -2292,7 +2322,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_dispatchThreadsPerTile(
       if(!targetHeight) targetHeight = target->height();
     }
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || !m_EncoderPipeline ||
        !m_Device->GetReplay()->IsTilePipeline(GetResID(m_EncoderPipeline)) ||
        !tileWidth || !tileHeight || !targetWidth || !targetHeight ||
@@ -2359,6 +2389,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexAmplificationCount(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     // Multi-view amplification needs render-target array state and separate output QA.
     if(!RenderCommandEncoder || count != 1 ||
        (hasMappings && (viewportOffsets.size() != 1 || targetOffsets.size() != 1 ||
@@ -2408,6 +2442,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexBuffer(SerialiserType &s
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || buffer == NULL)
     {
       RDCERR("Missing Metal vertex buffer at slot %llu", (uint64_t)index);
@@ -2471,6 +2509,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexBytes(SerialiserType &se
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || index >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS ||
        data.size() > 4096)
     {
@@ -2513,6 +2555,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexBufferOffset(SerialiserT
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || index >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS ||
        (m_EncoderVertexBuffers[index] != NULL &&
         offset >= Unwrap(m_EncoderVertexBuffers[index])->length()))
@@ -2574,6 +2620,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexBuffers(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || buffers.size() != range.length ||
        offsets.size() != range.length || bound.size() != range.length)
     {
@@ -2652,6 +2702,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexBindingWithStride(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(!RenderCommandEncoder || variant > 3 || range.location >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS ||
        !range.length || range.length > MAX_RENDER_PASS_BUFFER_ATTACHMENTS - range.location ||
        (variant != 1 && range.length != 1) || strides.size() != range.length ||
@@ -2825,6 +2879,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexTexture(SerialiserType &
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(index >= 128 || texture == NULL || RenderCommandEncoder == NULL)
     {
       RDCERR("Cannot replay Metal vertex texture slot %llu with a null resource or encoder",
@@ -2867,6 +2925,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexSamplerState(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(index >= 128 || sampler == NULL || RenderCommandEncoder == NULL)
     {
       RDCERR("Cannot replay Metal vertex sampler slot %llu with a null resource or encoder",
@@ -2923,6 +2985,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexTextures(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || textures.size() != range.length ||
        bound.size() != range.length)
     {
@@ -2999,6 +3065,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexSamplerStates(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || samplers.size() != range.length ||
        bound.size() != range.length)
     {
@@ -3075,6 +3145,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentTextures(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || textures.size() != range.length ||
        bound.size() != range.length)
     {
@@ -3151,6 +3225,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentSamplerStates(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || samplers.size() != range.length ||
        bound.size() != range.length)
     {
@@ -3214,6 +3292,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentBytes(SerialiserType &
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || index >= MAX_RENDER_PASS_BUFFER_ATTACHMENTS ||
        data.size() > 4096)
     {
@@ -3261,7 +3343,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentBuffer(SerialiserType 
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() || index >= 31 ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) || index >= 31 ||
        (!buffer && offset != 0) || (buffer &&
         (buffer->m_Type != eResBuffer || !buffer->m_Real || offset >= Unwrap(buffer)->length() || offset % 4)))
     {
@@ -3289,7 +3371,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentBufferOffset(Serialise
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !m_Device->GetReplay()->IsFragmentBufferOffsetValid((uint32_t)index, offset) || index >= 31)
     {
       RDCERR("Invalid Metal fragment buffer offset or encoder");
@@ -3372,6 +3454,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentBuffers(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || buffers.size() != range.length ||
        offsets.size() != range.length || bound.size() != range.length)
     {
@@ -3441,6 +3527,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentTexture(SerialiserType
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     Unwrap(RenderCommandEncoder)->setFragmentTexture(Unwrap(texture), index);
     m_Device->GetReplay()->BindFragmentTexture((uint32_t)index, GetResID(texture));
   }
@@ -3482,6 +3572,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentSamplerState(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     Unwrap(RenderCommandEncoder)->setFragmentSamplerState(Unwrap(sampler), index);
     m_Device->GetReplay()->BindFragmentSampler((uint32_t)index, GetResID(sampler));
   }
@@ -3525,7 +3619,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResource(SerialiserType &ser,
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) ||
        !ValidMetalResidencyResource(m_Device, resource) ||
        !ValidMetalResourceUsage(usageValue))
@@ -3567,6 +3661,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setViewport(SerialiserType &ser,
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     Unwrap(RenderCommandEncoder)->setViewport(viewport);
     m_Device->GetReplay()->SetViewport(viewport);
   }
@@ -3605,6 +3703,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setViewports(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || viewports.empty() || viewports.size() > 16)
     {
       RDCERR("Invalid Metal viewport array count %llu", (uint64_t)viewports.size());
@@ -3639,6 +3741,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setScissorRect(SerialiserType &se
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     Unwrap(RenderCommandEncoder)->setScissorRect(rect);
     m_Device->GetReplay()->SetScissor(rect);
   }
@@ -3672,6 +3778,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setScissorRects(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || scissors.empty() || scissors.size() > 16)
     {
       RDCERR("Invalid Metal scissor array count %llu", (uint64_t)scissors.size());
@@ -3706,6 +3816,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFrontFacingWinding(SerialiserT
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     Unwrap(RenderCommandEncoder)->setFrontFacingWinding(winding);
     m_Device->GetReplay()->SetFrontFacingWinding(winding);
   }
@@ -3740,6 +3854,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setCullMode(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     Unwrap(RenderCommandEncoder)->setCullMode(cullMode);
     m_Device->GetReplay()->SetCullMode(cullMode);
   }
@@ -3773,6 +3891,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setDepthClipMode(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL ||
        (depthClipMode != MTL::DepthClipModeClip && depthClipMode != MTL::DepthClipModeClamp))
     {
@@ -3808,6 +3930,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setDepthBias(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL)
       return false;
     Unwrap(RenderCommandEncoder)->setDepthBias(depthBias, slopeScale, clamp);
@@ -3837,6 +3963,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTriangleFillMode(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL ||
        (fillMode != MTL::TriangleFillModeFill && fillMode != MTL::TriangleFillModeLines))
     {
@@ -3873,6 +4003,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setBlendColor(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL)
       return false;
     Unwrap(RenderCommandEncoder)->setBlendColor(red, green, blue, alpha);
@@ -3903,6 +4037,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setDepthStencilState(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     Unwrap(RenderCommandEncoder)->setDepthStencilState(Unwrap(depthStencilState));
     m_Device->GetReplay()->BindDepthStencilState(GetResID(depthStencilState));
   }
@@ -3940,6 +4078,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setStencilReferenceValue(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     Unwrap(RenderCommandEncoder)->setStencilReferenceValue(referenceValue);
     m_Device->GetReplay()->SetStencilReferenceValue(referenceValue);
   }
@@ -3975,6 +4117,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setStencilReferenceValues(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     Unwrap(RenderCommandEncoder)
         ->setStencilReferenceValues(frontReferenceValue, backReferenceValue);
     m_Device->GetReplay()->SetStencilReferenceValues(frontReferenceValue, backReferenceValue);
@@ -4024,6 +4170,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVisibilityResultMode(
   mode = (MTL::VisibilityResultMode)modeValue;
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     MTL::Buffer *buffer =
         Unwrap(m_Device->GetReplay()->GetRenderPassDescriptor().visibilityResultBuffer);
     if(RenderCommandEncoder == NULL || modeValue > MTL::VisibilityResultModeCounting ||
@@ -4064,6 +4214,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setColorStoreAction(
   storeAction = (MTL::StoreAction)storeActionValue;
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || !ValidStoreAction(storeAction) || colorAttachmentIndex >= 8)
     {
       RDCERR("Invalid Metal color store action %llu or attachment %llu", (uint64_t)storeAction,
@@ -4101,6 +4255,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setDepthStoreAction(SerialiserTyp
   storeAction = (MTL::StoreAction)storeActionValue;
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || !ValidStoreAction(storeAction))
     {
       RDCERR("Invalid Metal depth store action %llu", (uint64_t)storeAction);
@@ -4136,6 +4294,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setStencilStoreAction(SerialiserT
   storeAction = (MTL::StoreAction)storeActionValue;
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || !ValidStoreAction(storeAction))
     {
       RDCERR("Invalid Metal stencil store action %llu", (uint64_t)storeAction);
@@ -4173,6 +4335,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setColorStoreActionOptions(
   storeActionOptions = (MTL::StoreActionOptions)storeActionOptionsValue;
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || !ValidStoreActionOptions(storeActionOptions) ||
        colorAttachmentIndex >= 8)
     {
@@ -4213,6 +4379,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setDepthStoreActionOptions(
   storeActionOptions = (MTL::StoreActionOptions)storeActionOptionsValue;
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || !ValidStoreActionOptions(storeActionOptions))
     {
       RDCERR("Invalid Metal depth store options %llu", (uint64_t)storeActionOptions);
@@ -4248,6 +4418,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setStencilStoreActionOptions(
   storeActionOptions = (MTL::StoreActionOptions)storeActionOptionsValue;
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(RenderCommandEncoder == NULL || !ValidStoreActionOptions(storeActionOptions))
     {
       RDCERR("Invalid Metal stencil store options %llu", (uint64_t)storeActionOptions);
@@ -4281,7 +4455,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_textureBarrier(SerialiserType &se
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        RenderCommandEncoder->HasGPUWork())
     {
       RDCERR("Unsupported Metal texture barrier after render GPU work");
@@ -4322,6 +4496,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawPrimitives(
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     const char *primitiveName = NULL;
     switch(primitiveType)
     {
@@ -4383,23 +4561,46 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawPrimitives(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     static const uint64_t IndirectArgumentSize = sizeof(uint32_t) * 4;
-    MTL::Buffer *realBuffer = Unwrap(indirectBuffer);
-    if(realBuffer == NULL || (indirectBufferOffset & 3) != 0 ||
+    MTL::Buffer *realBuffer = indirectBuffer && indirectBuffer->m_Type == eResBuffer
+                                  ? Unwrap(indirectBuffer) : NULL;
+    if((primitiveType != MTL::PrimitiveTypePoint &&
+        primitiveType != MTL::PrimitiveTypeLine &&
+        primitiveType != MTL::PrimitiveTypeLineStrip &&
+        primitiveType != MTL::PrimitiveTypeTriangle &&
+        primitiveType != MTL::PrimitiveTypeTriangleStrip) ||
+       realBuffer == NULL || (indirectBufferOffset & 3) != 0 ||
        indirectBufferOffset > realBuffer->length() ||
-       IndirectArgumentSize > realBuffer->length() - indirectBufferOffset ||
-       realBuffer->contents() == NULL)
+       IndirectArgumentSize > realBuffer->length() - indirectBufferOffset)
     {
       RDCERR("Invalid Metal drawPrimitives indirect argument buffer or offset");
       return false;
     }
 
-    const uint32_t *arguments = (const uint32_t *)((const byte *)realBuffer->contents() +
-                                                   indirectBufferOffset);
-    const uint32_t vertexCount = arguments[0];
-    const uint32_t instanceCount = arguments[1];
-    const uint32_t vertexStart = arguments[2];
-    const uint32_t baseInstance = arguments[3];
+    // Metal reads indirect arguments at GPU execution time. Private buffers cannot be read
+    // with contents(); preserve the GPU draw and report unknown counts in the action tree.
+    const bool privateArguments = realBuffer->storageMode() == MTL::StorageModePrivate;
+    if(!privateArguments && realBuffer->contents() == NULL)
+    {
+      RDCERR("Metal drawPrimitives indirect arguments are not CPU accessible");
+      return false;
+    }
+
+    uint32_t vertexCount = 0, instanceCount = 0, vertexStart = 0, baseInstance = 0;
+    if(!privateArguments)
+    {
+      const uint32_t *arguments = (const uint32_t *)((const byte *)realBuffer->contents() +
+                                                     indirectBufferOffset);
+      vertexCount = arguments[0];
+      instanceCount = arguments[1];
+      vertexStart = arguments[2];
+      baseInstance = arguments[3];
+    }
+
     MetalReplay *replay = m_Device->GetReplay();
     if(!m_Device->GetReplay()->ValidateArgumentBufferBindings())
       return false;
@@ -4413,8 +4614,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawPrimitives(
     {
       AddEvent();
       ActionDescription action;
-      action.customName = StringFormat::Fmt("drawPrimitives(indirect, %u vertices, %u instances)",
-                                             vertexCount, instanceCount);
+      action.customName = privateArguments
+                              ? "drawPrimitives(indirect, GPU-defined arguments)"
+                              : StringFormat::Fmt("drawPrimitives(indirect, %u vertices, %u instances)",
+                                                  vertexCount, instanceCount);
       action.flags = ActionFlags::Drawcall | ActionFlags::Indirect;
       if(instanceCount > 1 || baseInstance > 0)
         action.flags |= ActionFlags::Instanced;
@@ -4492,6 +4695,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPrimitives(
 
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(!m_Device->GetReplay()->ValidateArgumentBufferBindings())
       return false;
     m_Device->GetReplay()->SetPrimitiveTopology(primitiveType);
@@ -4574,7 +4781,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPrimitives(
     const uint64_t indexStride = indexType == MTL::IndexTypeUInt16 ? 2 : 4;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        primitiveType > MTL::PrimitiveTypeTriangleStrip || realBuffer == NULL ||
        (indexType != MTL::IndexTypeUInt16 && indexType != MTL::IndexTypeUInt32) ||
        indexBufferOffset % indexStride != 0 || indexBufferOffset > realBuffer->length() ||
@@ -4683,7 +4890,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResourceWithStages(SerialiserT
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || !ValidMetalResourceUsage(usageValue) ||
        !ValidMetalResidencyResource(m_Device, resource) ||
        !ValidMetalGraphicsStages(stagesValue))
@@ -4722,7 +4929,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResources(SerialiserType &ser,
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || !ValidMetalResourceUsage(usageValue) ||
        !ValidMetalResidencyResources(m_Device, resources))
     {
@@ -4767,7 +4974,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResourcesWithStages(Serialiser
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || !ValidMetalResourceUsage(usageValue) ||
        !ValidMetalResidencyResources(m_Device, resources) ||
        !ValidMetalGraphicsStages(stagesValue))
@@ -4814,7 +5021,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_declareHeaps(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !Unwrap(RenderCommandEncoder) || variant > 3 || heaps.size() > 32 ||
        ((variant == 0 || variant == 1) && heaps.size() != 1) ||
        ((variant == 0 || variant == 2) && stagesValue != MTL::RenderStageVertex) ||
@@ -4910,6 +5117,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_memoryBarrierWithScope(Serialiser
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(!RenderCommandEncoder || scopeValue == 0 || (scopeValue & ~uint64_t(MTL::BarrierScopeBuffers | MTL::BarrierScopeTextures | MTL::BarrierScopeRenderTargets)) != 0 ||
        !ValidMetalGraphicsStages(afterValue) || !ValidMetalGraphicsStages(beforeValue))
     {
@@ -4946,6 +5157,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_memoryBarrierWithResources(Serial
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(!RenderCommandEncoder || !ValidMetalCommandResources(m_Device, resources) ||
        !ValidMetalGraphicsStages(afterValue) || !ValidMetalGraphicsStages(beforeValue))
     {
@@ -4989,7 +5204,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_updateFence(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!RenderCommandEncoder || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+    if(!RenderCommandEncoder || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real || !ValidMetalFence(fence) ||
        !ValidMetalGraphicsStages(stagesValue))
@@ -5030,7 +5245,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_waitForFence(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!RenderCommandEncoder || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+    if(!RenderCommandEncoder || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !RenderCommandEncoder->m_Real || !ValidMetalFence(fence) ||
        !ValidMetalGraphicsStages(stagesValue) ||
@@ -5071,9 +5286,27 @@ bool WrappedMTLRenderCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
-    RenderCommandEncoder->ResolveDeferredStoreActions();
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
+       !Unwrap(RenderCommandEncoder))
+      return false;
+    if(!RenderCommandEncoder->GetParallelParent())
+      RenderCommandEncoder->ResolveDeferredStoreActions();
     Unwrap(RenderCommandEncoder)->endEncoding();
     m_Device->SetReplayRenderCommandEncoder(NULL);
+
+    if(RenderCommandEncoder->GetParallelParent())
+    {
+      if(IsLoading(m_State))
+      {
+        AddEvent();
+        ActionDescription childEnd;
+        childEnd.customName = "End Metal Parallel Render Child";
+        childEnd.flags = ActionFlags::PassBoundary | ActionFlags::EndPass;
+        AddAction(childEnd);
+      }
+      return true;
+    }
 
     ActionDescription action;
     if(IsLoading(m_State))
@@ -5143,7 +5376,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTessellationFactorBuffer(
         (WrappedMTLBuffer *)GetResourceManager()->GetResource(bufferId);
     MTL::Buffer *real = buffer && buffer->m_Type == eResBuffer ? Unwrap(buffer) : NULL;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        (buffer && (!real || offset >= real->length())) ||
        instanceStride > UINT32_MAX)
     {
@@ -5182,7 +5415,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setTessellationFactorScale(Serial
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !std::isfinite(scale) || scale < 0.0f)
     {
       RDCERR("Invalid Metal tessellation factor scale");
@@ -5235,7 +5468,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawPatches(
     MTL::Buffer *indices = patchIndexBuffer && patchIndexBuffer->m_Type == eResBuffer
                                ? Unwrap(patchIndexBuffer) : NULL;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        controlPoints == 0 || controlPoints > 32 || patchCount == 0 ||
        patchCount > UINT32_MAX / controlPoints || patchStart > UINT32_MAX ||
        instanceCount == 0 || instanceCount > UINT32_MAX || baseInstance > UINT32_MAX ||
@@ -5322,7 +5555,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawPatchesIndirect(
     MTL::Buffer *args = indirectBuffer && indirectBuffer->m_Type == eResBuffer
                             ? Unwrap(indirectBuffer) : NULL;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        controlPoints == 0 || controlPoints > 32 ||
        (patchIndexBuffer && (!indices || patchIndexBufferOffset >= indices->length())) ||
        (!patchIndexBuffer && patchIndexBufferOffset != 0) || !args ||
@@ -5420,7 +5653,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPatches(
                                    controlPointIndexBuffer->m_Type == eResBuffer
                                        ? Unwrap(controlPointIndexBuffer) : NULL;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        controlPoints == 0 || controlPoints > 32 || patchCount == 0 ||
        patchCount > UINT32_MAX / controlPoints || patchStart > UINT32_MAX ||
        instanceCount == 0 || instanceCount > UINT32_MAX || baseInstance > UINT32_MAX ||
@@ -5525,7 +5758,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPatchesIndirect(
     MTL::Buffer *args = indirectBuffer && indirectBuffer->m_Type == eResBuffer
                             ? Unwrap(indirectBuffer) : NULL;
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       !RenderCommandEncoder->m_Real || RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        controlPoints == 0 || controlPoints > 32 ||
        (patchIndexBuffer && (!patchIndices || patchIndexBufferOffset >= patchIndices->length())) ||
        (!patchIndexBuffer && patchIndexBufferOffset != 0) || !controlIndices ||
@@ -5656,6 +5889,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexSamplerStateWithLOD(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(!RenderCommandEncoder || index >= 16 || bound != (sampler != NULL) ||
        !std::isfinite(lodMinClamp) || !std::isfinite(lodMaxClamp) ||
        lodMinClamp < 0.0f || lodMaxClamp < lodMinClamp)
@@ -5712,6 +5949,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexSamplerStatesWithLOD(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(!RenderCommandEncoder || samplers.size() != range.length || bound.size() != range.length ||
        lodMinClamps.size() != range.length || lodMaxClamps.size() != range.length)
     {
@@ -5805,6 +6046,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentSamplerStateWithLOD(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(!RenderCommandEncoder || index >= 16 || bound != (sampler != NULL) ||
        !std::isfinite(lodMinClamp) || !std::isfinite(lodMaxClamp) ||
        lodMinClamp < 0.0f || lodMaxClamp < lodMinClamp)
@@ -5861,6 +6106,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentSamplerStatesWithLOD(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(!RenderCommandEncoder || samplers.size() != range.length || bound.size() != range.length ||
        lodMinClamps.size() != range.length || lodMaxClamps.size() != range.length)
     {
@@ -5997,32 +6246,48 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPrimitives(
 
   if(IsReplayingAndReading())
   {
-    MTL::Buffer *realIndex = Unwrap(indexBuffer);
-    MTL::Buffer *realIndirect = Unwrap(indirectBuffer);
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
+    MTL::Buffer *realIndex = indexBuffer && indexBuffer->m_Type == eResBuffer
+                                 ? Unwrap(indexBuffer) : NULL;
+    MTL::Buffer *realIndirect = indirectBuffer && indirectBuffer->m_Type == eResBuffer
+                                    ? Unwrap(indirectBuffer) : NULL;
     const uint64_t indexStride = indexType == MTL::IndexTypeUInt16 ? 2 : 4;
     const uint64_t argumentSize = sizeof(MTL::DrawIndexedPrimitivesIndirectArguments);
     if(!RenderCommandEncoder || !realIndex || !realIndirect ||
        (indexType != MTL::IndexTypeUInt16 && indexType != MTL::IndexTypeUInt32) ||
        indexBufferOffset % indexStride != 0 || indexBufferOffset > realIndex->length() ||
        (indirectBufferOffset & 3) != 0 || indirectBufferOffset > realIndirect->length() ||
-       argumentSize > realIndirect->length() - indirectBufferOffset ||
-       realIndirect->contents() == NULL)
+       argumentSize > realIndirect->length() - indirectBufferOffset)
     {
       RDCERR("Invalid Metal indexed indirect buffers, alignment or argument offset");
       return false;
     }
 
-    MTL::DrawIndexedPrimitivesIndirectArguments args;
-    memcpy(&args, (const byte *)realIndirect->contents() + indirectBufferOffset, sizeof(args));
-    if(!args.indexCount || !args.instanceCount ||
-       args.indexStart > (realIndex->length() - indexBufferOffset) / indexStride ||
-       args.indexCount > (realIndex->length() - indexBufferOffset) / indexStride - args.indexStart)
+    const bool privateArguments = realIndirect->storageMode() == MTL::StorageModePrivate;
+    if(!privateArguments && realIndirect->contents() == NULL)
     {
-      RDCERR("Invalid Metal indexed indirect indexStart/indexCount range");
+      RDCERR("Metal indexed indirect arguments are not CPU accessible");
       return false;
     }
 
+    MTL::DrawIndexedPrimitivesIndirectArguments args = {};
+    if(!privateArguments)
+    {
+      memcpy(&args, (const byte *)realIndirect->contents() + indirectBufferOffset, sizeof(args));
+      if(!args.indexCount || !args.instanceCount ||
+         args.indexStart > (realIndex->length() - indexBufferOffset) / indexStride ||
+         args.indexCount > (realIndex->length() - indexBufferOffset) / indexStride - args.indexStart)
+      {
+        RDCERR("Invalid Metal indexed indirect indexStart/indexCount range");
+        return false;
+      }
+    }
+
     const uint64_t selectedOffset = indexBufferOffset + uint64_t(args.indexStart) * indexStride;
+
     MetalReplay *replay = m_Device->GetReplay();
     if(!m_Device->GetReplay()->ValidateArgumentBufferBindings())
       return false;
@@ -6037,10 +6302,12 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPrimitives(
     {
       AddEvent();
       ActionDescription action;
-      action.customName = StringFormat::Fmt(
-          "drawIndexedPrimitives(indirect, %u indices, %u instances, indexStart %u, baseVertex %d, baseInstance %u)",
-          args.indexCount, args.instanceCount, args.indexStart, args.baseVertex,
-          args.baseInstance);
+      action.customName = privateArguments
+                              ? "drawIndexedPrimitives(indirect, GPU-defined arguments)"
+                              : StringFormat::Fmt(
+                                    "drawIndexedPrimitives(indirect, %u indices, %u instances, indexStart %u, baseVertex %d, baseInstance %u)",
+                                    args.indexCount, args.instanceCount, args.indexStart,
+                                    args.baseVertex, args.baseInstance);
       action.flags = ActionFlags::Drawcall | ActionFlags::Indexed | ActionFlags::Indirect;
       if(args.instanceCount > 1 || args.baseInstance > 0)
         action.flags |= ActionFlags::Instanced;
@@ -6092,6 +6359,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_executeCommandsMarker(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
        !icb || icb->m_Type != eResIndirectCommandBuffer || !range.length || range.location >= icb->Count() ||
        range.length > icb->Count() - range.location)
@@ -6125,7 +6396,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_executeCommandsInBuffer(
   if(IsReplayingAndReading())
   {
     if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder ||
-       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder() ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder) ||
        !icb || icb->m_Type != eResIndirectCommandBuffer || !icb->SupportedDescriptor() ||
        range.length != 1 || range.location >= icb->Count() || !icb->PrepareReplay())
     {
@@ -6271,6 +6542,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_executeCommandsInBufferIndirect(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(!RenderCommandEncoder || RenderCommandEncoder->m_Type != eResRenderCommandEncoder || !RenderCommandEncoder->m_Real ||
+       RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
+      return false;
+
     // The buffer may be written by the GPU after CPU encoding. No captured CPU value can prove
     // the executed range or the number and identity of child actions at this execution point.
     RDCERR("Unsupported Metal ICB GPU indirect execution range: execution-point range is unavailable");

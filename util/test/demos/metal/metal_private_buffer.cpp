@@ -211,7 +211,10 @@ fragment float4 fs_main(const device uchar *bytes [[buffer(0)]])
       }
       else table->setFunction(handle, 0);
     }
-    const bool aliasReuse = !GetEnvVar("RENDERDOC_METAL_T133_ALIAS_REUSE_PROBE").empty();
+    const bool releaseReuse =
+        !GetEnvVar("RENDERDOC_METAL_T133_RELEASE_REUSE_PROBE").empty();
+    const bool aliasReuse = releaseReuse ||
+        !GetEnvVar("RENDERDOC_METAL_T133_ALIAS_REUSE_PROBE").empty();
     const bool placementBuffer = aliasReuse ||
         !GetEnvVar("RENDERDOC_METAL_T116_PLACEMENT_BUFFER").empty();
     const bool aliasBuffer = !GetEnvVar("RENDERDOC_METAL_T131_ALIAS_BUFFER").empty();
@@ -557,7 +560,13 @@ fragment float4 fs_main(const device uchar *bytes [[buffer(0)]])
       }
       if(aliasReuse && frameIndex == 2)
       {
-        gpu->makeAliasable();
+        if(releaseReuse)
+        {
+          gpu->release();
+          gpu = NULL;
+        }
+        else
+          gpu->makeAliasable();
         MTL::Buffer *reused = heap->newBuffer(516, MTL::ResourceStorageModePrivate,
                                                placementOffset);
         if(!reused || reused->heapOffset() != placementOffset) return 7;
@@ -608,7 +617,7 @@ fragment float4 fs_main(const device uchar *bytes [[buffer(0)]])
       }
       pool->drain();
     }
-    gpu->release(); cpu->release();
+    if(gpu) gpu->release(); cpu->release();
     if(as) as->release();
     if(asCopied) asCopied->release();
     if(asCompactDestination) asCompactDestination->release();

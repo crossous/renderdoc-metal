@@ -35,6 +35,7 @@
 #include "metal_library.h"
 #include "metal_manager.h"
 #include "metal_render_command_encoder.h"
+#include "metal_parallel_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
 #include "metal_fence.h"
@@ -433,6 +434,15 @@ void DoSerialise(SerialiserType &ser, RDMTL::RenderPassSampleBufferAttachmentDes
 };
 
 template <typename SerialiserType>
+void DoSerialise(SerialiserType &ser, RDMTL::BlitPassSampleBufferAttachmentDescriptor &el)
+{
+  SERIALISE_MEMBER(sampleBuffer).Important();
+  SERIALISE_MEMBER(sampleBufferId).Important();
+  SERIALISE_MEMBER(startOfEncoderSampleIndex);
+  SERIALISE_MEMBER(endOfEncoderSampleIndex);
+}
+
+template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, RDMTL::RenderPassDescriptor &el)
 {
   SERIALISE_MEMBER(colorAttachments);
@@ -459,8 +469,11 @@ void DoSerialise(SerialiserType &ser, RDMTL::RenderPassDescriptor &el)
 template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, RDMTL::ComputePassSampleBufferAttachmentDescriptor &el)
 {
-  // TODO: when WrappedCounterSampleBuffer exists
-  // SERIALISE_MEMBER(sampleBuffer);
+  if(ser.VersionAtLeast(0xE))
+  {
+    SERIALISE_MEMBER(sampleBuffer).Important();
+    SERIALISE_MEMBER(sampleBufferId).Important();
+  }
   SERIALISE_MEMBER(startOfEncoderSampleIndex);
   SERIALISE_MEMBER(endOfEncoderSampleIndex);
 }
@@ -522,6 +535,7 @@ INSTANTIATE_SERIALISE_TYPE(RDMTL::RenderPassAttachmentDescriptor);
 INSTANTIATE_SERIALISE_TYPE(RDMTL::RenderPassColorAttachmentDescriptor);
 INSTANTIATE_SERIALISE_TYPE(RDMTL::RenderPassDepthAttachmentDescriptor);
 INSTANTIATE_SERIALISE_TYPE(RDMTL::RenderPassStencilAttachmentDescriptor);
+INSTANTIATE_SERIALISE_TYPE(RDMTL::BlitPassSampleBufferAttachmentDescriptor);
 INSTANTIATE_SERIALISE_TYPE(RDMTL::RenderPassDescriptor);
 INSTANTIATE_SERIALISE_TYPE(RDMTL::ComputePassSampleBufferAttachmentDescriptor);
 INSTANTIATE_SERIALISE_TYPE(RDMTL::ComputePipelineDescriptor);

@@ -1,8 +1,40 @@
-# 集中 GUI QA 总入口（尚未执行）
+# 集中 GUI QA 总入口
+
+2026-09-29 BATCH321 增量：`UE58_capture.rdc` 人工开启失败，终端定位 buffer
+view 顺序和下一处 purgeable/GPU 完成阻塞；远程机 WindowServer watchdog
+重启后停止 GPU/GUI 验证。累计成功 UI QA 增量 **0**；见
+[BATCH321](BATCH321_UE58_CAPTURE_VIEW_ORDER_AND_WATCHDOG.md)。
+
+2026-09-29 BATCH320 增量：用户已人工打开 UE `frame1770`，文件打开成功，
+但无 UE scope 且 RT 黑色，**内容验收失败**。新版 viewer 的 scope 仅由
+终端 API 证实；受控 viewport 按钮尚未人工点击，新版 UI 尚未验收。
+累计成功 UI QA 增量仍为 **0**；见 [BATCH320](BATCH320.md)。
+
+2026-09-29 BATCH319 增量：UE v0x10 `frame1770` 的有界 API/CLI 单次打开
+通过；待人工检查 `Lvl_FirstPerson` PIE 画面、事件树、资源与回跳。
+T319 帧内 Shared placement buffer 的 8/12→9/13→8/12→9/13 已由终端
+GPU 读回验证，亦待 UI 抽看。当前库/app 内嵌库 SHA256 均为
+`c9bdc6bea56256140df635a65c30d5b56531c78a233b24a23568a5a372acfd6a`。
+累计 UI QA 增量 **0**；见 [BATCH319](BATCH319.md)。
+
+2026-09-29 BATCH315–318 增量：T317/T318 BC1/BC1 sRGB/BC5 placement
+纹理待人工 UI 核对资源身份、帧首状态和事件 seek。旧 v0xF UE
+`frame5394` 安全拒绝，不能列为 viewer 通过。库/app 内嵌库 SHA256
+`c13816cf6485ab945aa08ba476bc173613d5fbd609cb15518a6e65aabee49354`。
+累计 UI QA 增量 **0**；见 [批次证据](BATCH315-318.md)。
+
+2026-09-29 M7 增量：单次回放脚本的 T313 终端检查通过，未运行 GUI；
+累计 UI QA 增量 **0**。见 [M7 记录](UE58_M7_RECAPTURE_GATE_2026-09-29.md)。
 
 本单合并此前所有未验功能，供额度重置后由用户要求时集中检查。现在不用执行。
 T34–T69、T71–T132、T135–T153、T156–T157、T159–T312 与 T10 marker 共274份 capture；同一个 qrenderdoc 进程即可，
-不重复旧批已验功能。T70与T133是预期回放拒绝负例，不打开。
+不重复旧批已验功能。T70与旧版 T133 是预期回放拒绝负例，不打开。
+
+2026-09-29 增量：T313/T314 新版 placement 复用截帧待人工 UI 验收；
+终端已检查 GPU 字节及两轮事件回跳，累计 UI QA 增量 **0**。
+当前可用 app 为 `/tmp/rdm-t312-build/bin/qrenderdoc.app`，
+库与 app 内嵌库 SHA256 均为 `243043fb9dc1459afd3e1c2a6571dd7b880e1b76bf5b2122156a28a695fa1337`。
+旧版 T133 不计入待验；详见 [BATCH313–314](BATCH313-314.md)。
 
 ## 固定版本与准备（只做一次）
 

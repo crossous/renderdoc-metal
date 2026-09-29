@@ -99,7 +99,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildFormattedTria
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidFormattedTriangleBuild(structure, vertices, vertexOffset, vertexStride,
            vertexFormat, triangleCount, scratch, scratchOffset, tableOffset, opaque,
@@ -264,7 +264,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildRefittableInd
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidIndexedFormattedTriangleBuild(structure, vertices, vertexOffset, vertexStride,
            vertexFormat, indices, indexType, indexOffset, triangleCount, scratch,
@@ -405,7 +405,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_refitIndexedTriang
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidIndexedTriangleRefit(source, destination, vertices, vertexOffset, vertexStride,
            vertexFormat, indices, indexType, indexOffset, triangleCount, tableOffset,
@@ -514,7 +514,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildIndexedFormat
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidIndexedFormattedTriangleBuild(structure, vertices, vertexOffset, vertexStride,
            vertexFormat, indices, indexType, indexOffset, triangleCount, scratch,
@@ -612,7 +612,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildRefittableFor
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidFormattedTriangleBuild(structure, vertices, 0, vertexStride, vertexFormat,
            triangleCount, scratch, 0, 0, false, allowDuplicate, Unwrap(m_Device), true))
@@ -734,7 +734,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_refitFormattedTria
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidFormattedTriangleRefit(source, destination, vertices, vertexStride,
            vertexFormat, triangleCount, scratch, scratchOffset, allowDuplicate,
@@ -864,7 +864,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildTriangle(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
        !Unwrap(Encoder) || (opaque && (nonOpaque || refittable)) ||
        !ValidTriangleBuild(structure, vertices, vertexOffset, triangleCount, scratch,
@@ -1007,7 +1007,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_refitTriangle(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
        !Unwrap(Encoder) || !ValidTriangleRefit(structure, vertices, triangleCount, scratch,
            Unwrap(m_Device), GetResID(Encoder->m_CommandBuffer)))
@@ -1087,7 +1087,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_refitTriangleExten
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidTriangleRefitExtended(source, destination, vertices, triangleCount, scratch,
                                    scratchOffset, Unwrap(m_Device),
@@ -1177,7 +1177,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildRefittableTri
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidTriangleBuild(structure, vertices, 0, triangleCount, scratch, 0,
                            Unwrap(m_Device), true, false, false, false, 0, false))
@@ -1267,7 +1267,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_refitTriangleNoDup
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder))
     {
       RDCERR("Invalid no-duplicate Metal triangle refit encoder");
@@ -1425,7 +1425,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildInstance(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
        !Unwrap(Encoder) || descriptorBytes.size() !=
            sizeof(MTL::AccelerationStructureInstanceDescriptor) ||
@@ -1514,7 +1514,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildInstances(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
        !Unwrap(Encoder) || count < 2 || count > 65536 || descriptorBytes.size() !=
            count * sizeof(MTL::AccelerationStructureInstanceDescriptor) ||
@@ -1663,7 +1663,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildDistinctInsta
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
        !Unwrap(Encoder) || descriptorBytes.size() !=
            2 * sizeof(MTL::AccelerationStructureInstanceDescriptor) ||
@@ -1822,7 +1822,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildMultipleDisti
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        descriptorBytes.size() !=
            children.size() * sizeof(MTL::AccelerationStructureInstanceDescriptor) ||
@@ -1921,7 +1921,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildRepeatedDisti
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        count > 65536 || descriptorBytes.size() !=
            count * sizeof(MTL::AccelerationStructureInstanceDescriptor) ||
@@ -2052,7 +2052,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildIndexedTriang
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
        !Unwrap(Encoder) || !ValidIndexedTriangleBuild(
            structure, vertices, indices, indexType, triangleCount, scratch, Unwrap(m_Device), opaque))
@@ -2141,7 +2141,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildIndexedTriang
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !indexOffset || !ValidIndexedTriangleBuild(structure, vertices, indices, indexType,
            triangleCount, scratch, Unwrap(m_Device), opaque, indexOffset))
@@ -2231,7 +2231,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildIndexedTriang
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        (!vertexOffset && !scratchOffset) ||
        !ValidIndexedTriangleBuild(structure, vertices, indices, indexType, triangleCount,
@@ -2348,7 +2348,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildTriangleTable
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidTriangleTableOffsetBuild(structure, vertices, vertexOffset, indices, indexType,
                                       indexOffset, triangleCount, scratch, scratchOffset,
@@ -2464,7 +2464,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildTriangleNoDup
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidTriangleNoDuplicateBuild(structure, vertices, vertexOffset, indices, indexType,
                                       indexOffset, triangleCount, scratch, scratchOffset,
@@ -2632,7 +2632,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildRefittableBou
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidBoundingBoxBuild(structure, boxes, boxCount, scratch, Unwrap(m_Device),
           boxOffset, scratchOffset, boxStride, tableOffset, opaque, allowDuplicate, true))
@@ -2748,7 +2748,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_refitBoundingBox(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidBoundingBoxRefit(source, destination, boxes, boxOffset, boxStride,
            boxCount, tableOffset, scratch, scratchOffset, opaque, allowDuplicate,
@@ -2833,7 +2833,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildBoundingBox(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
        !Unwrap(Encoder) || !ValidBoundingBoxBuild(
            structure, boxes, boxCount, scratch, Unwrap(m_Device)))
@@ -2911,7 +2911,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildBoundingBoxEx
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        (!boxOffset && !scratchOffset) ||
        !ValidBoundingBoxBuild(structure, boxes, boxCount, scratch, Unwrap(m_Device),
@@ -2996,7 +2996,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildBoundingBoxSt
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        boxStride == 6 * sizeof(float) ||
        !ValidBoundingBoxBuild(structure, boxes, boxCount, scratch, Unwrap(m_Device),
@@ -3082,7 +3082,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildBoundingBoxTa
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        tableOffset == 0 ||
        !ValidBoundingBoxBuild(structure, boxes, boxCount, scratch, Unwrap(m_Device),
@@ -3168,7 +3168,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildBoundingBoxOp
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidBoundingBoxBuild(structure, boxes, boxCount, scratch, Unwrap(m_Device),
                               boxOffset, scratchOffset, boxStride, tableOffset, true))
@@ -3254,7 +3254,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildBoundingBoxNo
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !ValidBoundingBoxBuild(structure, boxes, boxCount, scratch, Unwrap(m_Device),
                               boxOffset, scratchOffset, boxStride, tableOffset, opaque, false))
@@ -3374,7 +3374,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_copyAccelerationSt
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
        !Unwrap(Encoder) || !ValidAccelerationStructureCopy(source, destination))
     {
@@ -3471,7 +3471,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_copyAndCompactAcce
   {
     sizeType = (MTL::DataType)sizeDataType;
     uint64_t actualSize = 0;
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
        !Unwrap(Encoder) || !source || !destination || source == destination ||
        source->m_Type != eResAccelerationStructure ||
@@ -3563,7 +3563,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_writeCompactedSize
   {
     type = (MTL::DataType)sizeDataType;
     uint64_t bytes = type == MTL::DataTypeUInt ? 4 : type == MTL::DataTypeULong ? 8 : 0;
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
        !structure || structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
        !buffer || buffer->m_Type != eResBuffer || !Unwrap(buffer) || !bytes ||
@@ -3634,7 +3634,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_endEncoding(Serial
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder() ||
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
        Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder))
       return false;
     Unwrap(Encoder)->endEncoding();

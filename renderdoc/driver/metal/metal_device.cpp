@@ -37,6 +37,7 @@
 #include "metal_binary_archive.h"
 #include "metal_manager.h"
 #include "metal_render_command_encoder.h"
+#include "metal_parallel_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_visible_function_table.h"
 #include "metal_sampler_state.h"
@@ -462,6 +463,8 @@ WrappedMTLDevice::WrappedMTLDevice(MTL::Device *realMTLDevice, ResourceId objId)
         new WrappedMTLIntersectionFunctionTable(NULL, ResourceId(), this);
     m_DummyReplayRenderCommandEncoder =
         new WrappedMTLRenderCommandEncoder(NULL, ResourceId(), this);
+    m_DummyReplayParallelRenderCommandEncoder =
+        new WrappedMTLParallelRenderCommandEncoder(NULL, ResourceId(), this);
     m_DummyReplayBlitCommandEncoder = new WrappedMTLBlitCommandEncoder(NULL, ResourceId(), this);
     m_DummyReplayAccelerationStructureCommandEncoder =
         new WrappedMTLAccelerationStructureCommandEncoder(NULL, ResourceId(), this);
@@ -524,7 +527,8 @@ WrappedMTLDevice::~WrappedMTLDevice()
   // A malformed capture can abort initial replay before its pending command buffer reaches the
   // normal completion path. Keep the encoders and their resources alive until the GPU is done.
   if(m_ReplayCommandBuffer || m_ReplayRenderCommandEncoder || m_ReplayComputeCommandEncoder ||
-     m_ReplayBlitCommandEncoder || m_ReplayAccelerationStructureCommandEncoder)
+     m_ReplayBlitCommandEncoder || m_ReplayAccelerationStructureCommandEncoder ||
+     m_ReplayParallelRenderCommandEncoder)
     FinishReplayCommands();
   SAFE_DELETE(m_FrameReader);
   SAFE_DELETE(m_DummyReplayArgumentEncoder);
@@ -534,6 +538,7 @@ WrappedMTLDevice::~WrappedMTLDevice()
   SAFE_DELETE(m_DummyReplayAccelerationStructureCommandEncoder);
   SAFE_DELETE(m_DummyReplayComputeCommandEncoder);
   SAFE_DELETE(m_DummyReplayRenderCommandEncoder);
+  SAFE_DELETE(m_DummyReplayParallelRenderCommandEncoder);
   SAFE_DELETE(m_DummyReplayVisibleFunctionTable);
   SAFE_DELETE(m_DummyReplayIntersectionFunctionTable);
   SAFE_DELETE(m_DummyReplayRenderPipelineState);
@@ -560,6 +565,7 @@ WrappedMTLDevice::~WrappedMTLDevice()
 
 IMP WrappedMTLDevice::g_real_CAMetalLayer_nextDrawable;
 IMP WrappedMTLDevice::g_real_CAMetalDrawable_texture;
+IMP WrappedMTLDevice::g_real_CAMetalDrawable_present;
 uint64_t WrappedMTLDevice::g_nextDrawableTLSSlot;
 
 MTL::Texture *hooked_CAMetalDrawable_texture(id self, SEL _cmd)
@@ -570,6 +576,16 @@ MTL::Texture *hooked_CAMetalDrawable_texture(id self, SEL _cmd)
 
   return ((MTL::Texture * (*)(id, SEL))WrappedMTLDevice::g_real_CAMetalDrawable_texture)(self,
                                                                                        _cmd);
+}
+
+void hooked_CAMetalDrawable_present(id self, SEL _cmd)
+{
+  WrappedMTLTexture *texture = WrappedMTLDevice::GetDrawableTexture((MTL::Drawable *)self);
+  ((void (*)(id, SEL))WrappedMTLDevice::g_real_CAMetalDrawable_present)(self, _cmd);
+  // commandBuffer.presentDrawable already records its presentation and removes this
+  // drawable from the lookup. Only handle applications that call drawable.present().
+  if(texture)
+    texture->m_Device->PresentDrawable((CA::MetalDrawable *)self);
 }
 
 CA::MetalDrawable *hooked_CAMetalLayer_nextDrawable(id self, SEL _cmd)
@@ -603,6 +619,10 @@ CA::MetalDrawable *hooked_CAMetalLayer_nextDrawable(id self, SEL _cmd)
                                                      sel_registerName("texture"));
       WrappedMTLDevice::g_real_CAMetalDrawable_texture =
           method_setImplementation(textureMethod, (IMP)hooked_CAMetalDrawable_texture);
+      Method presentMethod = class_getInstanceMethod(object_getClass(caMtlDrawable),
+                                                    sel_registerName("present"));
+      WrappedMTLDevice::g_real_CAMetalDrawable_present =
+          method_setImplementation(presentMethod, (IMP)hooked_CAMetalDrawable_present);
       s_hookDrawableTexture = true;
     }
 

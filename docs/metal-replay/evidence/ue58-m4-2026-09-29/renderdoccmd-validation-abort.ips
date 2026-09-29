@@ -1,0 +1,196 @@
+{"app_name":"renderdoccmd","timestamp":"2026-09-29 01:22:42.00 +0800","app_version":"","slice_uuid":"64881365-e482-3924-8780-8fd2346b3477","build_version":"","platform":1,"share_with_app_devs":0,"is_first_party":1,"bug_type":"309","os_version":"macOS 26.6 (25G72)","roots_installed":0,"incident_id":"AF730493-3B86-44E9-AA0B-06A12B670377","name":"renderdoccmd"}
+{
+  "uptime" : 830000,
+  "procRole" : "Unspecified",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "Mac16,5",
+  "coalitionID" : 94457,
+  "osVersion" : {
+    "train" : "macOS 26.6",
+    "build" : "25G72",
+    "releaseType" : "User"
+  },
+  "captureTime" : "2026-09-29 01:22:39.2863 +0800",
+  "codeSigningMonitor" : 2,
+  "incident" : "AF730493-3B86-44E9-AA0B-06A12B670377",
+  "pid" : 52593,
+  "translated" : false,
+  "cpuType" : "ARM-64",
+  "procLaunch" : "2026-09-29 01:22:39.1234 +0800",
+  "procStartAbsTime" : 19959705828182,
+  "procExitAbsTime" : 19959709726647,
+  "procName" : "renderdoccmd",
+  "procPath" : "\/Users\/USER\/Documents\/*\/renderdoccmd",
+  "parentProc" : "Exited process",
+  "parentPid" : 52583,
+  "coalitionName" : "com.openai.codex",
+  "crashReporterKey" : "7D985376-9654-76BF-065D-4246D7290DCB",
+  "appleIntelligenceStatus" : {"state":"unavailable","reasons":["regionIneligible"]},
+  "developerMode" : 1,
+  "responsiblePid" : 37742,
+  "responsibleProc" : "ChatGPT",
+  "codeSigningID" : "renderdoccmd",
+  "codeSigningTeamID" : "",
+  "codeSigningFlags" : 570556929,
+  "codeSigningValidationCategory" : 10,
+  "codeSigningTrustLevel" : 4294967295,
+  "codeSigningAuxiliaryInfo" : 0,
+  "instructionByteStream" : {"beforePC":"fyMD1f17v6n9AwCRCuD\/l78DAJH9e8Go\/w9f1sADX9YQKYDSARAA1A==","atPC":"AwEAVH8jA9X9e7+p\/QMAkf\/f\/5e\/AwCR\/XvBqP8PX9bAA1\/WcAqA0g=="},
+  "bootSessionUUID" : "35D892FD-0304-422D-B7B4-CC2F52F5D38A",
+  "wakeTime" : 383070,
+  "sleepWakeUUID" : "0DA88B03-04D7-43DE-BDD7-223C73FA3964",
+  "sip" : "enabled",
+  "exception" : {"codes":"0x0000000000000000, 0x0000000000000000","rawCodes":[0,0],"type":"EXC_CRASH","signal":"SIGABRT"},
+  "termination" : {"flags":0,"code":6,"namespace":"SIGNAL","indicator":"Abort trap: 6","byProc":"renderdoccmd","byPid":52593},
+  "asi" : {"libsystem_c.dylib":["abort() called"]},
+  "extMods" : {"caller":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"system":{"thread_create":0,"thread_set_state":0,"task_for_pid":10},"targeted":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"warnings":0},
+  "faultingThread" : 0,
+  "threads" : [{"triggered":true,"id":11433567,"threadState":{"x":[{"value":0},{"value":0},{"value":0},{"value":0},{"value":54006205824},{"value":6134798272},{"value":48},{"value":18446726482597246976},{"value":11795745103198213782},{"value":11795745105137628950},{"value":2},{"value":4294967293},{"value":0},{"value":0},{"value":0},{"value":0},{"value":328},{"value":8443999232},{"value":0},{"value":6},{"value":259},{"value":8420663904,"symbolLocation":224,"symbol":"_main_thread"},{"value":0},{"value":8305397760},{"value":4353531904,"symbolLocation":40,"symbol":"_OBJC_PROTOCOL_$_MTLTextureSPI"},{"value":0},{"value":4353531904,"symbolLocation":40,"symbol":"_OBJC_PROTOCOL_$_MTLTextureSPI"},{"value":0},{"value":1}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6597982424},"cpsr":{"value":1073741824},"fp":{"value":6134798864},"sp":{"value":6134798832},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6597740008,"matchesCrashFrame":1},"far":{"value":0}},"queue":"com.apple.main-thread","frames":[{"imageOffset":38376,"symbol":"__pthread_kill","symbolLocation":8,"imageIndex":3},{"imageOffset":26840,"symbol":"pthread_kill","symbolLocation":296,"imageIndex":4},{"imageOffset":493944,"symbol":"abort","symbolLocation":148,"imageIndex":5},{"imageOffset":1977136,"symbol":"MTLReleaseAssertionFailure","symbolLocation":188,"imageIndex":6},{"imageOffset":166736,"symbol":"-[IOGPUMetalCommandBuffer setCurrentCommandEncoder:].cold.1","symbolLocation":40,"imageIndex":7},{"imageOffset":14136,"symbol":"-[IOGPUMetalCommandBuffer setCurrentCommandEncoder:]","symbolLocation":220,"imageIndex":7},{"imageOffset":94728,"symbol":"-[_MTLCommandEncoder initWithCommandBuffer:]","symbolLocation":728,"imageIndex":6},{"imageOffset":19816,"symbol":"-[IOGPUMetalCommandEncoder initWithCommandBuffer:]","symbolLocation":96,"imageIndex":7},{"imageOffset":2515952,"symbol":"-[AGXG16XFamilyBlitContext initWithCommandBuffer:descriptor:]","symbolLocation":72,"imageIndex":2},{"imageOffset":2630544,"symbol":"-[AGXG16XFamilyCommandBuffer blitCommandEncoderCommon:]","symbolLocation":292,"imageIndex":2},{"imageOffset":680624,"symbol":"-[MTLDebugCommandBuffer blitCommandEncoderWithDescriptor:]","symbolLocation":244,"imageIndex":8},{"symbol":"MTL::BlitCommandEncoder* NS::Object::sendMessage<MTL::BlitCommandEncoder*, MTL::BlitPassDescriptor const*>(void const*, objc_selector*, MTL::BlitPassDescriptor const*)","inline":true,"imageIndex":1,"imageOffset":902716,"symbolLocation":28,"sourceLine":787,"sourceFile":"metal-cpp.h"},{"symbol":"MTL::CommandBuffer::blitCommandEncoder(MTL::BlitPassDescriptor const*)","inline":true,"imageIndex":1,"imageOffset":902716,"symbolLocation":56,"sourceLine":11628,"sourceFile":"metal-cpp.h"},{"imageOffset":902716,"sourceLine":351,"sourceFile":"metal_command_buffer.cpp","symbol":"bool WrappedMTLCommandBuffer::Serialise_blitCommandEncoderWithDescriptor<ReadSerialiser>(ReadSerialiser&, WrappedMTLBlitCommandEncoder*, bool, rdcarray<RDMTL::BlitPassSampleBufferAttachmentDescriptor>)","imageIndex":1,"symbolLocation":3872},{"imageOffset":2752368,"sourceLine":350,"sourceFile":"metal_core.cpp","symbol":"WrappedMTLDevice::ProcessChunk(ReadSerialiser&, MetalChunk)","imageIndex":1,"symbolLocation":7196},{"imageOffset":2805480,"sourceLine":1511,"sourceFile":"metal_core.cpp","symbol":"WrappedMTLDevice::ContextReplayLog(CaptureState, unsigned int, ReplayLogType)","imageIndex":1,"symbolLocation":2436},{"imageOffset":2800300,"sourceLine":1388,"sourceFile":"metal_core.cpp","symbol":"WrappedMTLDevice::ReadLogInitialisation(RDCFile*, bool)","imageIndex":1,"symbolLocation":4760},{"imageOffset":3302352,"sourceLine":2616,"sourceFile":"metal_replay.cpp","symbol":"MetalReplay::ReadLogInitialisation(RDCFile*, bool)","imageIndex":1,"symbolLocation":336},{"imageOffset":8576524,"sourceLine":2233,"sourceFile":"replay_controller.cpp","symbol":"ReplayController::PostCreateInit(IReplayDriver*, RDCFile*)","imageIndex":1,"symbolLocation":892},{"imageOffset":8575328,"sourceLine":2200,"sourceFile":"replay_controller.cpp","symbol":"ReplayController::CreateDevice(RDCFile*, ReplayOptions const&)","imageIndex":1,"symbolLocation":912},{"imageOffset":8307900,"sourceLine":383,"sourceFile":"capture_file.cpp","symbol":"CaptureFile::OpenCapture(ReplayOptions const&, std::__1::function<void (float)>)","imageIndex":1,"symbolLocation":704},{"imageOffset":188280,"sourceLine":634,"sourceFile":"renderdoccmd.cpp","symbol":"ReplayCommand::Execute(CaptureOptions const&)","imageIndex":0,"symbolLocation":1904},{"imageOffset":105328,"sourceLine":1707,"sourceFile":"renderdoccmd.cpp","symbol":"renderdoccmd(GlobalEnvironment&, std::__1::vector<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>&)","imageIndex":0,"symbolLocation":7872},{"imageOffset":112664,"sourceLine":1731,"sourceFile":"renderdoccmd.cpp","symbol":"renderdoccmd(GlobalEnvironment&, int, char**)","imageIndex":0,"symbolLocation":176},{"imageOffset":272040,"sourceLine":136,"sourceFile":"renderdoccmd_apple.cpp","symbol":"main","imageIndex":0,"symbolLocation":248},{"imageOffset":132324,"symbol":"start","symbolLocation":6992,"imageIndex":9}]},{"id":11433568,"frames":[],"threadState":{"x":[{"value":6135394304},{"value":3843},{"value":6134857728},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":6135394304},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6597962760},"far":{"value":0}}},{"id":11433569,"frames":[],"threadState":{"x":[{"value":6135967744},{"value":8195},{"value":6135431168},{"value":6135966592},{"value":5193730},{"value":1},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":6135966464},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6597962760},"far":{"value":0}}},{"id":11433573,"frames":[],"threadState":{"x":[{"value":6137114624},{"value":14851},{"value":6136578048},{"value":6137113472},{"value":5193730},{"value":1},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":6137113360},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6597962760},"far":{"value":0}}}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4332044288,
+    "size" : 327680,
+    "uuid" : "64881365-e482-3924-8780-8fd2346b3477",
+    "path" : "\/Users\/USER\/Documents\/*\/renderdoccmd",
+    "name" : "renderdoccmd"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4361109504,
+    "size" : 14450688,
+    "uuid" : "125c00d1-ac2a-3eaf-9d35-a6d4d14a079e",
+    "path" : "\/Users\/USER\/Documents\/*\/librenderdoc.dylib",
+    "name" : "librenderdoc.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4344463360,
+    "CFBundleShortVersionString" : "353.14",
+    "CFBundleIdentifier" : "com.apple.AGXMetalG16X",
+    "size" : 8880128,
+    "uuid" : "6bc19bf9-f698-33d8-baac-7ee1d1b745ab",
+    "path" : "\/System\/Library\/Extensions\/AGXMetalG16X.bundle\/Contents\/MacOS\/AGXMetalG16X",
+    "name" : "AGXMetalG16X",
+    "CFBundleVersion" : "353.14"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6597701632,
+    "size" : 250600,
+    "uuid" : "7cfb3a10-adb2-32c4-99b5-922a111b3224",
+    "path" : "\/usr\/lib\/system\/libsystem_kernel.dylib",
+    "name" : "libsystem_kernel.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6597955584,
+    "size" : 52028,
+    "uuid" : "12342372-0084-37a5-9ea6-2e4dc940c685",
+    "path" : "\/usr\/lib\/system\/libsystem_pthread.dylib",
+    "name" : "libsystem_pthread.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6596464640,
+    "size" : 528872,
+    "uuid" : "fdc4e366-5c14-3a1e-bc35-d933d28cdcf3",
+    "path" : "\/usr\/lib\/system\/libsystem_c.dylib",
+    "name" : "libsystem_c.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6806077440,
+    "CFBundleShortVersionString" : "373.7",
+    "CFBundleIdentifier" : "com.apple.Metal",
+    "size" : 2989600,
+    "uuid" : "e62b6554-ca42-3d79-b048-c5f6defa20cc",
+    "path" : "\/System\/Library\/Frameworks\/Metal.framework\/Versions\/A\/Metal",
+    "name" : "Metal",
+    "CFBundleVersion" : "373.7"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 7225708544,
+    "CFBundleShortVersionString" : "130.16.4",
+    "CFBundleIdentifier" : "com.apple.IOGPU",
+    "size" : 332736,
+    "uuid" : "f08f0073-2f35-30d9-9c3e-261cc6b9af60",
+    "path" : "\/System\/Library\/PrivateFrameworks\/IOGPU.framework\/Versions\/A\/IOGPU",
+    "name" : "IOGPU",
+    "CFBundleVersion" : "130.16.4"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6607130624,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.gpusw.MetalTools",
+    "size" : 2001248,
+    "uuid" : "828164d8-1d9c-3284-beb6-94e4a14d789f",
+    "path" : "\/System\/Library\/PrivateFrameworks\/MetalTools.framework\/Versions\/A\/MetalTools",
+    "name" : "MetalTools",
+    "CFBundleVersion" : "1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6593871872,
+    "size" : 734464,
+    "uuid" : "df42dd9d-ad11-33a7-8849-9ad5df30a274",
+    "path" : "\/usr\/lib\/dyld",
+    "name" : "dyld"
+  },
+  {
+    "size" : 0,
+    "source" : "A",
+    "base" : 0,
+    "uuid" : "00000000-0000-0000-0000-000000000000"
+  }
+],
+  "sharedCache" : {
+  "base" : 6592741376,
+  "size" : 6010716160,
+  "uuid" : "d64a142b-8533-3e09-968a-6ad3e176e3f6"
+},
+  "legacyInfo" : {
+  "threadTriggered" : {
+    "queue" : "com.apple.main-thread"
+  }
+},
+  "logWritingSignature" : "faa839ab11c72d5806de94c5c0a7e48825f45d3a",
+  "roots_installed" : 0,
+  "bug_type" : "309",
+  "trmStatus" : 1,
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "645eb1d0417dab722a215927",
+      "factorPackIds" : [
+
+      ],
+      "deploymentId" : 240000005
+    },
+    {
+      "rolloutId" : "63f9578e238e7b23a1f3030a",
+      "factorPackIds" : [
+
+      ],
+      "deploymentId" : 240000005
+    }
+  ],
+  "experiments" : [
+
+  ]
+}
+}

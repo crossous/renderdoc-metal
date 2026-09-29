@@ -79,6 +79,13 @@ vertex VSOut vs_main(VertexIn input [[stage_in]])
   return output;
 }
 fragment float4 fs_main(VSOut input [[stage_in]]) { return input.colour; }
+kernel void write_indirect_arguments(device uint *arguments [[buffer(0)]],
+                                     uint position [[thread_position_in_grid]])
+{
+  const uint values[5] = {3, 2, 1, 1, 1};
+  if(position < 5)
+    arguments[position] = values[position];
+}
 )EOSHADER";
 
     // The 4-byte buffer offset skips two sentinels. indexStart=1 skips one more,
@@ -111,6 +118,13 @@ fragment float4 fs_main(VSOut input [[stage_in]]) { return input.colour; }
     }
     MTL::Function *vertexFunction = library->newFunction(MTLSTR("vs_main"));
     MTL::Function *fragmentFunction = library->newFunction(MTLSTR("fs_main"));
+    const bool privateIndirect = !GetEnvVar("RENDERDOC_METAL_TEST_PRIVATE_INDIRECT").empty();
+    MTL::Function *writerFunction = privateIndirect
+                                        ? library->newFunction(MTLSTR("write_indirect_arguments"))
+                                        : NULL;
+    MTL::ComputePipelineState *writerPipeline = writerFunction
+                                                    ? device->newComputePipelineState(writerFunction, &error)
+                                                    : NULL;
     MTL::VertexDescriptor *vertexDesc = MTL::VertexDescriptor::alloc()->init();
     vertexDesc->attributes()->object(0)->setFormat(MTL::VertexFormatFloat2);
     vertexDesc->attributes()->object(0)->setOffset(offsetof(Position, position));
@@ -144,10 +158,14 @@ fragment float4 fs_main(VSOut input [[stage_in]]) { return input.colour; }
         device->newBuffer(instances, sizeof(instances), MTL::ResourceStorageModeShared);
     MTL::Buffer *indexBuffer =
         device->newBuffer(indices, sizeof(indices), MTL::ResourceStorageModeShared);
-    MTL::Buffer *indirectBuffer =
-        device->newBuffer(&packet, sizeof(packet), MTL::ResourceStorageModeShared);
+    MTL::Buffer *indirectBuffer = privateIndirect
+                                      ? device->newBuffer(sizeof(packet),
+                                                          MTL::ResourceStorageModePrivate)
+                                      : device->newBuffer(&packet, sizeof(packet),
+                                                          MTL::ResourceStorageModeShared);
     if(pipeline == NULL || positionBuffer == NULL || instanceBuffer == NULL ||
-       indexBuffer == NULL || indirectBuffer == NULL)
+       indexBuffer == NULL || indirectBuffer == NULL ||
+       (privateIndirect && !writerPipeline))
     {
       TEST_WARN("Failed to create T21 resources");
       return 4;
@@ -166,6 +184,14 @@ fragment float4 fs_main(VSOut input [[stage_in]]) { return input.colour; }
         continue;
       }
       MTL::CommandBuffer *commandBuffer = queue->commandBuffer();
+      if(privateIndirect)
+      {
+        MTL::ComputeCommandEncoder *compute = commandBuffer->computeCommandEncoder();
+        compute->setComputePipelineState(writerPipeline);
+        compute->setBuffer(indirectBuffer, offsetof(IndirectPacket, arguments), 0);
+        compute->dispatchThreadgroups(MTL::Size::Make(1, 1, 1), MTL::Size::Make(5, 1, 1));
+        compute->endEncoding();
+      }
       MTL::RenderPassDescriptor *pass =
           MakeBackbufferRenderPass(drawable, MTL::ClearColor::Make(0.025, 0.035, 0.055, 1.0));
       MTL::RenderCommandEncoder *render = commandBuffer->renderCommandEncoder(pass);
@@ -216,6 +242,8 @@ fragment float4 fs_main(VSOut input [[stage_in]]) { return input.colour; }
     }
 
     indirectBuffer->release();
+    if(writerPipeline) writerPipeline->release();
+    if(writerFunction) writerFunction->release();
     indexBuffer->release();
     instanceBuffer->release();
     positionBuffer->release();

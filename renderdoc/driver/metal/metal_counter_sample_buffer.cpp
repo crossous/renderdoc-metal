@@ -26,9 +26,9 @@ bool WrappedMTLDevice::Serialise_newCounterSampleBuffer(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!supported || CounterSampleBuffer == ResourceId() ||
+    if(CounterSampleBuffer == ResourceId() ||
        GetResourceManager()->HasResource(CounterSampleBuffer) ||
-       counterSetName != "timestamp" || sampleCount < 4 || sampleCount > 64 ||
+       counterSetName != "timestamp" || sampleCount < 4 || sampleCount > 4096 ||
        storageMode != MTL::StorageModeShared ||
        !Unwrap(this)->supportsCounterSampling(MTL::CounterSamplingPointAtStageBoundary))
     {
@@ -79,7 +79,7 @@ WrappedMTLCounterSampleBuffer *WrappedMTLDevice::newCounterSampleBuffer(
   const rdcstr name = set && set->name() ? set->name()->utf8String() : "";
   const uint64_t count = descriptor->sampleCount();
   const uint64_t mode = descriptor->storageMode();
-  const bool supported = name == "timestamp" && count >= 4 && count <= 64 &&
+  const bool supported = name == "timestamp" && count >= 4 && count <= 4096 &&
                          mode == MTL::StorageModeShared &&
                          Unwrap(this)->supportsCounterSampling(
                              MTL::CounterSamplingPointAtStageBoundary);

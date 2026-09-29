@@ -9,6 +9,7 @@ public:
                                                 ResourceId id, WrappedMTLDevice *device);
   enum { TypeEnum = eResAccelerationStructureCommandEncoder };
   void SetCommandBuffer(WrappedMTLCommandBuffer *buffer) { m_CommandBuffer = buffer; }
+  WrappedMTLCommandBuffer *GetCommandBuffer() const { return m_CommandBuffer; }
   void buildFormattedTriangle(WrappedMTLAccelerationStructure *structure,
       WrappedMTLBuffer *vertices, NS::UInteger vertexOffset, NS::UInteger vertexStride,
       MTL::AttributeFormat vertexFormat, NS::UInteger triangleCount,

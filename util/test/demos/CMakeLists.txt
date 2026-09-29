@@ -278,7 +278,11 @@ set(METAL_SRC
     metal/metal_shared_texture_handle.cpp
     metal/metal_tile.cpp
     metal/metal_mesh.cpp
-    metal/metal_counter_stage.cpp
+        metal/metal_counter_stage.cpp
+        metal/metal_ue_blit_counter.cpp
+        metal/metal_ue_compute_counter.cpp
+        metal/metal_ue_compute_heaps.cpp
+        metal/metal_ue_parallel_render.cpp
     metal/metal_binary_archive.cpp
     metal/metal_stitched_library.cpp
     metal/metal_dynamic_library.cpp

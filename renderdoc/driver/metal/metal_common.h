@@ -419,6 +419,19 @@ enum class MetalChunk : uint32_t
   MTLBinaryArchive_addLibraryWithDescriptor,
   MTLBinaryArchive_addTileRenderPipelineFunctionsWithDescriptor,
   MTLBinaryArchive_addMeshRenderPipelineFunctionsWithDescriptor,
+  MTLComputeCommandEncoder_useHeap,
+  MTLComputeCommandEncoder_useHeaps,
+  MTLParallelRenderCommandEncoder_renderCommandEncoder,
+  MTLParallelRenderCommandEncoder_endEncoding,
+  MTLParallelRenderCommandEncoder_setColorStoreAction,
+  MTLParallelRenderCommandEncoder_setDepthStoreAction,
+  MTLParallelRenderCommandEncoder_setStencilStoreAction,
+  MTLParallelRenderCommandEncoder_setColorStoreActionOptions,
+  MTLParallelRenderCommandEncoder_setDepthStoreActionOptions,
+  MTLParallelRenderCommandEncoder_setStencilStoreActionOptions,
+  MTLParallelRenderCommandEncoder_pushDebugGroup,
+  MTLParallelRenderCommandEncoder_popDebugGroup,
+  MTLParallelRenderCommandEncoder_insertDebugSignpost,
   Max
 };
 

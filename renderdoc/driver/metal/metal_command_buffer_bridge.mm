@@ -214,6 +214,18 @@
 - (nullable id<MTLComputeCommandEncoder>)computeCommandEncoderWithDescriptor:
     (MTLComputePassDescriptor *)computePassDescriptor API_AVAILABLE(macos(11.0), ios(14.0))
 {
+  if(!computePassDescriptor)
+    return nil;
+  for(NSUInteger i = 0; i < MAX_COMPUTE_PASS_SAMPLE_BUFFER_ATTACHMENTS; i++)
+  {
+    id<MTLCounterSampleBuffer> sample =
+        computePassDescriptor.sampleBufferAttachments[i].sampleBuffer;
+    if(sample && ![sample isKindOfClass:[ObjCBridgeMTLCounterSampleBuffer class]])
+    {
+      RDCERR("Cannot capture unwrapped Metal compute pass counter sample buffer");
+      return nil;
+    }
+  }
   return id<MTLComputeCommandEncoder>(GetWrapped(self)->computeCommandEncoderWithDescriptor(
       (MTL::ComputePassDescriptor *)computePassDescriptor));
 }
@@ -221,6 +233,18 @@
 - (nullable id<MTLBlitCommandEncoder>)blitCommandEncoderWithDescriptor:
     (MTLBlitPassDescriptor *)blitPassDescriptor API_AVAILABLE(macos(11.0), ios(14.0))
 {
+  if(!blitPassDescriptor)
+    return nil;
+  for(NSUInteger i = 0; i < MAX_BLIT_PASS_SAMPLE_BUFFER_ATTACHMENTS; i++)
+  {
+    id<MTLCounterSampleBuffer> sample =
+        blitPassDescriptor.sampleBufferAttachments[i].sampleBuffer;
+    if(sample && ![sample isKindOfClass:[ObjCBridgeMTLCounterSampleBuffer class]])
+    {
+      RDCERR("Cannot capture unwrapped Metal blit pass counter sample buffer");
+      return nil;
+    }
+  }
   return id<MTLBlitCommandEncoder>(GetWrapped(self)->blitCommandEncoderWithDescriptor(
       (MTL::BlitPassDescriptor *)blitPassDescriptor));
 }
@@ -266,8 +290,21 @@
 - (nullable id<MTLParallelRenderCommandEncoder>)parallelRenderCommandEncoderWithDescriptor:
     (MTLRenderPassDescriptor *)renderPassDescriptor
 {
-  METAL_NOT_HOOKED();
-  return [self.real parallelRenderCommandEncoderWithDescriptor:renderPassDescriptor];
+  if(!renderPassDescriptor)
+    return nil;
+  for(NSUInteger i = 0; i < MAX_RENDER_PASS_SAMPLE_BUFFER_ATTACHMENTS; i++)
+  {
+    id<MTLCounterSampleBuffer> sample =
+        renderPassDescriptor.sampleBufferAttachments[i].sampleBuffer;
+    if(sample && ![sample isKindOfClass:[ObjCBridgeMTLCounterSampleBuffer class]])
+    {
+      RDCERR("Cannot capture unwrapped Metal parallel pass counter sample buffer");
+      return nil;
+    }
+  }
+  RDMTL::RenderPassDescriptor descriptor((MTL::RenderPassDescriptor *)renderPassDescriptor);
+  return id<MTLParallelRenderCommandEncoder>(
+      GetWrapped(self)->parallelRenderCommandEncoderWithDescriptor(descriptor));
 }
 
 - (nullable id<MTLResourceStateCommandEncoder>)

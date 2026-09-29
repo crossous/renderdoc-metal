@@ -44,6 +44,9 @@ MetalReplay::MetalReplay(WrappedMTLDevice *wrappedMTLDevice)
 
 MetalReplay::~MetalReplay()
 {
+  for(auto &entry : m_TextureViewSourceInitial)
+    if(entry.second.privateCopy)
+      entry.second.privateCopy->release();
   for(auto &it : m_OutputWindows)
   {
     if(it.second.texture)
@@ -173,7 +176,7 @@ void MetalReplay::AddTexture(ResourceId id, MTL::Texture *texture, bool swapBuff
 
 void MetalReplay::RegisterTextureViewSource(ResourceId id)
 {
-  m_TextureViewSourceInitial.emplace(id, rdcarray<bytebuf>());
+  m_TextureViewSourceInitial.emplace(id, TextureViewSourceInitial());
 }
 
 bool MetalReplay::SnapshotTextureViewSources()
@@ -182,14 +185,69 @@ bool MetalReplay::SnapshotTextureViewSources()
   // frame's GPU writes, so partial replay can restore every mip/slice seen through any view.
   for(auto &entry : m_TextureViewSourceInitial)
   {
-    if(!entry.second.empty())
+    if(!entry.second.sharedData.empty() || entry.second.privateCopy)
       continue;
     WrappedMTLObject *object = m_pDriver->GetResourceManager()->GetResource(entry.first, true);
     if(!object || object->m_Type != eResTexture || !object->m_Real)
       return false;
     MTL::Texture *texture = Unwrap((WrappedMTLTexture *)object);
     const uint64_t mips = texture->mipmapLevelCount();
-    const uint64_t slices = texture->textureType() == MTL::TextureType2D ? 1 : texture->arrayLength();
+    const MTL::TextureType type = texture->textureType();
+    const uint64_t slices = type == MTL::TextureTypeCube ? 6 :
+                            type == MTL::TextureType2D ? 1 : texture->arrayLength();
+    if(texture->storageMode() == MTL::StorageModePrivate)
+    {
+      if((type != MTL::TextureType2D && type != MTL::TextureType2DArray &&
+          type != MTL::TextureTypeCube) ||
+         mips == 0 || mips > 16 || slices == 0 || slices > 16 || mips * slices > 256 ||
+         texture->sampleCount() != 1 || texture->width() > 8192 || texture->height() > 8192)
+        return false;
+      MTL::Device *device = Unwrap(m_pDriver);
+      MTL::TextureDescriptor *descriptor = MTL::TextureDescriptor::alloc()->init();
+      descriptor->setTextureType(type);
+      descriptor->setPixelFormat(texture->pixelFormat());
+      descriptor->setWidth(texture->width());
+      descriptor->setHeight(texture->height());
+      descriptor->setDepth(texture->depth());
+      descriptor->setMipmapLevelCount(mips);
+      descriptor->setArrayLength(texture->arrayLength());
+      descriptor->setSampleCount(1);
+      descriptor->setStorageMode(MTL::StorageModePrivate);
+      descriptor->setUsage(MTL::TextureUsage(MTL::TextureUsageShaderRead |
+                                             MTL::TextureUsageShaderWrite |
+                                             MTL::TextureUsageRenderTarget |
+                                             MTL::TextureUsagePixelFormatView));
+      MTL::Texture *copy = device->newTexture(descriptor);
+      descriptor->release();
+      if(!copy || !InitialiseOutputResources())
+      {
+        if(copy) copy->release();
+        return false;
+      }
+      MTL::CommandBuffer *command = m_OutputQueue->commandBuffer();
+      MTL::BlitCommandEncoder *blit = command ? command->blitCommandEncoder() : NULL;
+      if(!blit)
+      {
+        copy->release();
+        return false;
+      }
+      for(uint64_t slice = 0; slice < slices; slice++)
+        for(uint64_t mip = 0; mip < mips; mip++)
+          blit->copyFromTexture(texture, slice, mip, MTL::Origin::Make(0, 0, 0),
+                                MTL::Size::Make(RDCMAX(1ULL, texture->width() >> mip),
+                                                RDCMAX(1ULL, texture->height() >> mip), 1),
+                                copy, slice, mip, MTL::Origin::Make(0, 0, 0));
+      blit->endEncoding();
+      command->commit();
+      command->waitUntilCompleted();
+      if(command->status() == MTL::CommandBufferStatusError)
+      {
+        copy->release();
+        return false;
+      }
+      entry.second.privateCopy = copy;
+      continue;
+    }
     if(texture->storageMode() != MTL::StorageModeShared || mips == 0 || mips > 16 ||
        slices == 0 || slices > 2048 || mips * slices > 4096)
       return false;
@@ -212,7 +270,7 @@ bool MetalReplay::SnapshotTextureViewSources()
           texture->getBytes(data.data(), width * 4, region, mip);
         else
           texture->getBytes(data.data(), width * 4, bytes, region, mip, slice);
-        entry.second.push_back(data);
+        entry.second.sharedData.push_back(data);
       }
   }
   return true;
@@ -227,15 +285,36 @@ bool MetalReplay::ResetTextureViewSources()
       return false;
     MTL::Texture *texture = Unwrap((WrappedMTLTexture *)object);
     const uint64_t mips = texture->mipmapLevelCount();
-    const uint64_t slices = texture->textureType() == MTL::TextureType2D ? 1 : texture->arrayLength();
-    if(entry.second.size() != mips * slices)
+    const MTL::TextureType type = texture->textureType();
+    const uint64_t slices = type == MTL::TextureTypeCube ? 6 :
+                            type == MTL::TextureType2D ? 1 : texture->arrayLength();
+    if(entry.second.privateCopy)
+    {
+      if(!InitialiseOutputResources()) return false;
+      MTL::CommandBuffer *command = m_OutputQueue->commandBuffer();
+      MTL::BlitCommandEncoder *blit = command ? command->blitCommandEncoder() : NULL;
+      if(!blit) return false;
+      for(uint64_t slice = 0; slice < slices; slice++)
+        for(uint64_t mip = 0; mip < mips; mip++)
+          blit->copyFromTexture(entry.second.privateCopy, slice, mip,
+                                MTL::Origin::Make(0, 0, 0),
+                                MTL::Size::Make(RDCMAX(1ULL, texture->width() >> mip),
+                                                RDCMAX(1ULL, texture->height() >> mip), 1),
+                                texture, slice, mip, MTL::Origin::Make(0, 0, 0));
+      blit->endEncoding();
+      command->commit();
+      command->waitUntilCompleted();
+      if(command->status() == MTL::CommandBufferStatusError) return false;
+      continue;
+    }
+    if(entry.second.sharedData.size() != mips * slices)
       return false;
     for(uint64_t slice = 0; slice < slices; slice++)
       for(uint64_t mip = 0; mip < mips; mip++)
       {
         const uint64_t width = RDCMAX(1ULL, texture->width() >> mip);
         const uint64_t height = RDCMAX(1ULL, texture->height() >> mip);
-        const bytebuf &data = entry.second[slice * mips + mip];
+        const bytebuf &data = entry.second.sharedData[slice * mips + mip];
         if(data.size() != width * height * 4)
           return false;
         const MTL::Region region = MTL::Region::Make2D(0, 0, width, height);
@@ -420,8 +499,11 @@ void MetalReplay::AddShaderBindings(ResourceId shader, NS::Array *arguments)
             member->name() ? member->name()->utf8String() : StringFormat::Fmt("id%llu", memberIndex);
         MTL::ArrayType *array = MetalArgumentArray(member);
         const MTL::DataType memberType = array ? array->elementType() : member->dataType();
-        if(memberType == MTL::DataTypeTexture || memberType == MTL::DataTypeSampler ||
-           memberType == MTL::DataTypePointer)
+        // Reflection can describe members of an inactive top-level argument. Keep their names in
+        // the shader reflection, but require a bound packet only when Metal actually uses it.
+        if(argument->active() &&
+           (memberType == MTL::DataTypeTexture || memberType == MTL::DataTypeSampler ||
+            memberType == MTL::DataTypePointer))
           m_ShaderArgumentSlots[shader][bind] = name;
         const NS::UInteger count = array ? array->arrayLength() : 1;
         const NS::UInteger stride = array ? array->argumentIndexStride() : 1;
@@ -631,31 +713,46 @@ void MetalReplay::AddComputePipeline(ResourceId id, ResourceId function,
   }
 }
 
-bool MetalReplay::ValidateComputeBufferBindings() const
+bool MetalReplay::ValidateComputeBufferBindings(bool allowMissingBufferReflection) const
 {
   auto pipeline = m_ComputeBufferMinimums.find(m_CurrentPipelineState.computePipelineResourceId);
-  if(pipeline == m_ComputeBufferMinimums.end())
+  if(pipeline == m_ComputeBufferMinimums.end() && !allowMissingBufferReflection)
+  {
+    fprintf(stderr, "Metal compute binding validation: missing buffer reflection map\n");
     return false;
-  for(const auto &required : pipeline->second)
+  }
+  if(pipeline != m_ComputeBufferMinimums.end())
+    for(const auto &required : pipeline->second)
   {
     MetalPipe::BufferBinding binding = GetComputeBuffer(required.first);
     if((binding.resourceId == ResourceId() &&
         m_CurrentComputeInlineBytes.find(required.first) == m_CurrentComputeInlineBytes.end()) ||
        binding.byteSize < required.second.first ||
        binding.byteOffset % required.second.second != 0)
+    {
+      fprintf(stderr, "Metal compute binding validation: buffer slot=%u id=%d size=%llu min=%llu offset=%llu align=%llu\n",
+              required.first, binding.resourceId != ResourceId(), binding.byteSize,
+              required.second.first, binding.byteOffset, required.second.second);
       return false;
+    }
   }
   auto textures = m_ComputeRequiredTextures.find(m_CurrentPipelineState.computePipelineResourceId);
   if(textures != m_ComputeRequiredTextures.end())
     for(uint32_t slot : textures->second)
       if(GetComputeTexture(slot) == ResourceId())
+      {
+        fprintf(stderr, "Metal compute binding validation: texture slot=%u missing\n", slot);
         return false;
+      }
   auto samplers = m_ComputeRequiredSamplers.find(m_CurrentPipelineState.computePipelineResourceId);
   if(samplers != m_ComputeRequiredSamplers.end())
     for(uint32_t slot : samplers->second)
       if(slot >= m_CurrentPipelineState.computeSamplers.size() ||
          m_CurrentPipelineState.computeSamplers[slot] == ResourceId())
+      {
+        fprintf(stderr, "Metal compute binding validation: sampler slot=%u missing\n", slot);
         return false;
+      }
   return true;
 }
 
@@ -968,6 +1065,46 @@ static Descriptor MakeResolveTargetDescriptor(MetalReplay *replay,
   }
 
   return ret;
+}
+
+MetalReplay::EncoderReplayState MetalReplay::SaveEncoderState() const
+{
+  EncoderReplayState state;
+  state.pipeline = m_CurrentPipelineState;
+  state.renderPass = m_CurrentRenderPassDescriptor;
+  state.computeInlineBytes = m_CurrentComputeInlineBytes;
+  state.computeThreadgroupMemory = m_CurrentComputeThreadgroupMemory;
+  state.samplerLOD = m_CurrentSamplerLOD;
+  state.vertexAttributeStrides = m_CurrentVertexAttributeStrides;
+  return state;
+}
+
+void MetalReplay::RestoreEncoderState(const EncoderReplayState &state)
+{
+  m_CurrentPipelineState = state.pipeline;
+  m_CurrentRenderPassDescriptor = state.renderPass;
+  m_CurrentComputeInlineBytes = state.computeInlineBytes;
+  m_CurrentComputeThreadgroupMemory = state.computeThreadgroupMemory;
+  m_CurrentSamplerLOD = state.samplerLOD;
+  m_CurrentVertexAttributeStrides = state.vertexAttributeStrides;
+}
+
+void MetalReplay::ActivateEncoderContext(ResourceId commandBuffer)
+{
+  if(m_ActiveEncoderContext == commandBuffer)
+    return;
+  if(m_ActiveEncoderContext != ResourceId())
+    m_EncoderContexts[m_ActiveEncoderContext] = SaveEncoderState();
+  auto it = m_EncoderContexts.find(commandBuffer);
+  RestoreEncoderState(it == m_EncoderContexts.end() ? EncoderReplayState() : it->second);
+  m_ActiveEncoderContext = commandBuffer;
+}
+
+void MetalReplay::ClearEncoderContexts()
+{
+  m_ActiveEncoderContext = ResourceId();
+  m_EncoderContexts.clear();
+  RestoreEncoderState(EncoderReplayState());
 }
 
 void MetalReplay::BeginRenderPass(const RDMTL::RenderPassDescriptor &descriptor)
@@ -2408,17 +2545,35 @@ void MetalReplay::AddEvent(uint32_t chunkIndex, uint64_t fileOffset)
 void MetalReplay::AddAction(const ActionDescription &in)
 {
   ActionDescription action = in;
+  rdcarray<uint32_t> &debugGroupPath = m_DebugGroupPaths[m_ActiveEncoderContext];
+  // Metal debug groups are encoder scoped. An incomplete group cannot contain the next
+  // encoder's pass, and a pass end must sit outside the group for navigation.
+  if(action.flags & ActionFlags::EndPass)
+    debugGroupPath.clear();
   action.eventId = m_PendingEvents.empty() ? m_NextEventID++ : m_PendingEvents.back().eventId;
   action.actionId = m_NextActionID;
-  if(!(action.flags & ActionFlags::PassBoundary))
+  if(!(action.flags & (ActionFlags::PassBoundary | ActionFlags::PushMarker |
+                      ActionFlags::PopMarker | ActionFlags::SetMarker)))
     m_NextActionID++;
   action.events.swap(m_PendingEvents);
   m_LastActionEventID = action.eventId;
   m_EventPipelineStates[action.eventId] = m_CurrentPipelineState;
   m_EventSamplerLOD[action.eventId] = m_CurrentSamplerLOD;
+  rdcarray<ActionDescription> *actions = &m_FrameRecord.actionList;
+  for(uint32_t index : debugGroupPath)
+  {
+    if(index >= actions->size())
+    {
+      RDCERR("Invalid Metal debug group action path");
+      debugGroupPath.clear();
+      actions = &m_FrameRecord.actionList;
+      break;
+    }
+    actions = &(*actions)[index].children;
+  }
   if(m_MultiActionChildrenRemaining)
   {
-    ActionDescription &parent = m_FrameRecord.actionList.back();
+    ActionDescription &parent = actions->back();
     parent.children.push_back(action);
     if(--m_MultiActionChildrenRemaining == 0)
     {
@@ -2431,7 +2586,16 @@ void MetalReplay::AddAction(const ActionDescription &in)
   }
   else
   {
-    m_FrameRecord.actionList.push_back(action);
+    actions->push_back(action);
+    if(action.flags & ActionFlags::PushMarker)
+      debugGroupPath.push_back((uint32_t)actions->size() - 1);
+    else if(action.flags & ActionFlags::PopMarker)
+    {
+      if(debugGroupPath.empty())
+        RDCWARN("Metal debug group pop without a matching push");
+      else
+        debugGroupPath.pop_back();
+    }
   }
 
   if(action.flags & ActionFlags::Drawcall)
@@ -2494,6 +2658,17 @@ void MetalReplay::AddAction(const ActionDescription &in)
   }
 }
 
+void MetalReplay::AddDebugGroup(const NS::String *label, ActionFlags flag)
+{
+  // Match D3D12/Vulkan's marker actions. The name comes from the captured Metal label,
+  // and the existing API event remains the action's final event for seek and inspection.
+  ActionDescription action;
+  action.flags = flag;
+  if(label && label->utf8String())
+    action.customName = label->utf8String();
+  AddAction(action);
+}
+
 void MetalReplay::RegisterComputeIndirectAction(uint32_t eventId, ResourceId buffer,
                                                 uint64_t offset)
 {
@@ -2515,16 +2690,24 @@ void MetalReplay::ResolvePendingComputeIndirectActions()
 
     uint32_t groups[3] = {};
     memcpy(groups, bytes.data(), sizeof(groups));
-    for(ActionDescription &action : m_FrameRecord.actionList)
+    // Debug groups can now contain indirect actions; traverse their children too.
+    rdcarray<rdcarray<ActionDescription> *> lists = {&m_FrameRecord.actionList};
+    while(!lists.empty())
     {
-      if(action.eventId != pending.eventId)
-        continue;
-      action.dispatchDimension[0] = groups[0];
-      action.dispatchDimension[1] = groups[1];
-      action.dispatchDimension[2] = groups[2];
-      action.customName = StringFormat::Fmt("dispatchThreadgroups(indirect, <%u, %u, %u>)",
-                                             groups[0], groups[1], groups[2]);
-      break;
+      rdcarray<ActionDescription> *list = lists.back();
+      lists.pop_back();
+      for(ActionDescription &action : *list)
+      {
+        if(action.eventId == pending.eventId)
+        {
+          action.dispatchDimension[0] = groups[0];
+          action.dispatchDimension[1] = groups[1];
+          action.dispatchDimension[2] = groups[2];
+          action.customName = StringFormat::Fmt("dispatchThreadgroups(indirect, <%u, %u, %u>)",
+                                                 groups[0], groups[1], groups[2]);
+        }
+        if(!action.children.empty()) lists.push_back(&action.children);
+      }
     }
   }
   m_PendingComputeIndirectActions.clear();
@@ -2532,8 +2715,14 @@ void MetalReplay::ResolvePendingComputeIndirectActions()
 
 void MetalReplay::BeginMultiAction(uint32_t childCount)
 {
-  RDCASSERT(m_MultiActionChildrenRemaining == 0 && childCount > 0 &&
-            !m_FrameRecord.actionList.empty());
+  rdcarray<ActionDescription> *actions = &m_FrameRecord.actionList;
+  for(uint32_t index : m_DebugGroupPaths[m_ActiveEncoderContext])
+  {
+    RDCASSERT(index < actions->size());
+    if(index >= actions->size()) return;
+    actions = &(*actions)[index].children;
+  }
+  RDCASSERT(m_MultiActionChildrenRemaining == 0 && childCount > 0 && !actions->empty());
   m_MultiActionChildrenRemaining = childCount;
 }
 
@@ -2612,6 +2801,7 @@ RDResult MetalReplay::ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBu
   m_LastActionEventID = 0;
   m_MultiActionChildrenRemaining = 0;
   m_MultiActionEndEvents.clear();
+  m_DebugGroupPaths.clear();
 
   RDResult ret = m_pDriver->ReadLogInitialisation(rdc, storeStructuredBuffers);
   if(ret != ResultCode::Succeeded)
@@ -2960,6 +3150,9 @@ bool MetalReplay::ReadTextureSubresource(MTL::Texture *texture, const Subresourc
 
   switch(texture->pixelFormat())
   {
+    case MTL::PixelFormatBC1_RGBA:
+    case MTL::PixelFormatBC1_RGBA_sRGB:
+    case MTL::PixelFormatBC5_RGUnorm:
     case MTL::PixelFormatRGBA8Unorm:
     case MTL::PixelFormatRGBA8Unorm_sRGB:
     case MTL::PixelFormatBGRA8Unorm:
@@ -2978,13 +3171,25 @@ bool MetalReplay::ReadTextureSubresource(MTL::Texture *texture, const Subresourc
   const uint64_t width = RDCMAX(1ULL, uint64_t(texture->width()) >> sub.mip);
   const uint64_t height = RDCMAX(1ULL, uint64_t(texture->height()) >> sub.mip);
   const bool depthStencil = texture->pixelFormat() == MTL::PixelFormatDepth32Float_Stencil8;
-  const uint64_t tightRowPitch = width * 4;
-  const uint64_t alignment = depthStencil ? 256 : RDCMAX<uint64_t>(
+  const bool bc1 = texture->pixelFormat() == MTL::PixelFormatBC1_RGBA ||
+                   texture->pixelFormat() == MTL::PixelFormatBC1_RGBA_sRGB;
+  const bool bc5 = texture->pixelFormat() == MTL::PixelFormatBC5_RGUnorm;
+  const uint64_t rows = bc1 || bc5 ? (height + 3) / 4 : height;
+  const uint64_t tightRowPitch = bc1 ? ((width + 3) / 4) * 8 :
+                                 bc5 ? ((width + 3) / 4) * 16 : width * 4;
+  const uint64_t alignment = depthStencil ? 256 : bc1 || bc5 ? 1 : RDCMAX<uint64_t>(
       1, device->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
   const uint64_t rowPitch = AlignUp(tightRowPitch, alignment);
-  const uint64_t depthSize = rowPitch * height;
+  const uint64_t depthSize = rowPitch * rows;
   const uint64_t stencilRowPitch = depthStencil ? AlignUp(width, alignment) : 0;
   const uint64_t bufferSize = depthSize + stencilRowPitch * height;
+  if((bc1 || bc5) &&
+     (textureType != MTL::TextureType2D || width > 4096 || height > 4096 ||
+      bufferSize > 32ULL * 1024 * 1024))
+  {
+    RDCERR("Metal BC texture readback exceeds the validated 2D block layout");
+    return false;
+  }
 
   MTL::Buffer *readback =
       device->newBuffer((NS::UInteger)bufferSize, MTL::ResourceStorageModeShared);
@@ -3029,9 +3234,9 @@ bool MetalReplay::ReadTextureSubresource(MTL::Texture *texture, const Subresourc
 
   // RenderDoc's D32S8 representation is eight bytes: float depth, uint8 stencil, three padding.
   const uint64_t outputRowPitch = depthStencil ? width * 8 : tightRowPitch;
-  data.resize(size_t(outputRowPitch * height));
+  data.resize(size_t(outputRowPitch * rows));
   const byte *src = (const byte *)readback->contents();
-  for(uint64_t y = 0; y < height; y++)
+  for(uint64_t y = 0; y < rows; y++)
   {
     if(depthStencil)
     {
@@ -3625,6 +3830,14 @@ void MetalReplay::PickPixel(ResourceId texture, uint32_t x, uint32_t y, const Su
   MTL::Texture *real = wrappedTexture ? Unwrap(wrappedTexture) : NULL;
   if(real == NULL || sub.mip >= real->mipmapLevelCount())
     return;
+
+  if(real->pixelFormat() == MTL::PixelFormatBC1_RGBA ||
+     real->pixelFormat() == MTL::PixelFormatBC1_RGBA_sRGB ||
+     real->pixelFormat() == MTL::PixelFormatBC5_RGUnorm)
+  {
+    RDCERR("Metal BC pixel picking requires block decompression");
+    return;
+  }
 
   const uint32_t width = RDCMAX(1U, (uint32_t)real->width() >> sub.mip);
   const uint32_t height = RDCMAX(1U, (uint32_t)real->height() >> sub.mip);

@@ -1,0 +1,3 @@
+Replaying '/Users/kurogames/Documents/Unreal Projects/SocoTestProj/Saved/RenderDocMetalCaptures/UE58_frame99.rdc' locally..
+2026-09-29 01:22:39.136 renderdoccmd[52593:11433567] Metal API Validation Enabled
+2026-09-29 01:22:39.200 renderdoccmd[52593:11433567] failed assertion _status < MTLCommandBufferStatusCommitted at line 323 in -[IOGPUMetalCommandBuffer setCurrentCommandEncoder:]

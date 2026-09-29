@@ -35,6 +35,7 @@ public:
                                WrappedMTLDevice *wrappedMTLDevice);
 
   void SetCommandBuffer(WrappedMTLCommandBuffer *commandBuffer) { m_CommandBuffer = commandBuffer; }
+  WrappedMTLCommandBuffer *GetCommandBuffer() const { return m_CommandBuffer; }
   DECLARE_FUNCTION_SERIALISED(void, setLabel, NS::String *value);
   DECLARE_FUNCTION_SERIALISED(void, endEncoding);
   DECLARE_FUNCTION_SERIALISED(void, insertDebugSignpost, NS::String *string);

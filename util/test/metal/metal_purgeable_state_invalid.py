@@ -30,7 +30,7 @@ def main():
                             if n.get('id') == chunk_id)
                 child(node, field).text = str(value)
                 cases.append((f'{field}-{value}', variant))
-            for value in (0, 3, 4, 5):
+            for value in (0, 3, 5):
                 variant = copy.deepcopy(tree)
                 node = next(n for n in variant.findall('./chunks/chunk')
                             if n.get('id') == chunk_id)

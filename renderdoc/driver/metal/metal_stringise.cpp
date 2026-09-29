@@ -31,7 +31,7 @@
 template <>
 rdcstr DoStringise(const MetalChunk &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1384, "Chunks changed without updating names");
+  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1397, "Chunks changed without updating names");
 
   BEGIN_ENUM_STRINGISE(MetalChunk)
   {
@@ -229,6 +229,28 @@ rdcstr DoStringise(const MetalChunk &el)
                                "MTLCommandBuffer::encodeSignalEvent");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_parallelRenderCommandEncoderWithDescriptor,
                                "MTLCommandBuffer::parallelRenderCommandEncoderWithDescriptor");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_renderCommandEncoder,
+                               "MTLParallelRenderCommandEncoder::renderCommandEncoder");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_endEncoding,
+                               "MTLParallelRenderCommandEncoder::endEncoding");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_setColorStoreAction,
+                               "MTLParallelRenderCommandEncoder::setColorStoreAction");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_setDepthStoreAction,
+                               "MTLParallelRenderCommandEncoder::setDepthStoreAction");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_setStencilStoreAction,
+                               "MTLParallelRenderCommandEncoder::setStencilStoreAction");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_setColorStoreActionOptions,
+                               "MTLParallelRenderCommandEncoder::setColorStoreActionOptions");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_setDepthStoreActionOptions,
+                               "MTLParallelRenderCommandEncoder::setDepthStoreActionOptions");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_setStencilStoreActionOptions,
+                               "MTLParallelRenderCommandEncoder::setStencilStoreActionOptions");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_pushDebugGroup,
+                               "MTLParallelRenderCommandEncoder::pushDebugGroup");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_popDebugGroup,
+                               "MTLParallelRenderCommandEncoder::popDebugGroup");
+    STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_insertDebugSignpost,
+                               "MTLParallelRenderCommandEncoder::insertDebugSignpost");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_resourceStateCommandEncoder,
                                "MTLCommandBuffer::resourceStateCommandEncoder");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_resourceStateCommandEncoderWithDescriptor,
@@ -673,6 +695,10 @@ rdcstr DoStringise(const MetalChunk &el)
                                "MTLComputeCommandEncoder::useResource");
     STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_useResources,
                                "MTLComputeCommandEncoder::useResources");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_useHeap,
+                               "MTLComputeCommandEncoder::useHeap");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_useHeaps,
+                               "MTLComputeCommandEncoder::useHeaps");
     STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_memoryBarrierWithScope,
                                "MTLComputeCommandEncoder::memoryBarrierWithScope");
     STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_memoryBarrierWithResources,
@@ -1625,7 +1651,7 @@ rdcstr DoStringise(const MTL::IndirectCommandType &el)
 template <>
 rdcstr DoStringise(const MetalResourceType &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)MetalResourceType::eResMax == 30, "MetalResourceType changed");
+  RDCCOMPILE_ASSERT((uint32_t)MetalResourceType::eResMax == 31, "MetalResourceType changed");
   BEGIN_ENUM_STRINGISE(MetalResourceType);
   {
     STRINGISE_ENUM(eResUnknown);
@@ -1642,6 +1668,7 @@ rdcstr DoStringise(const MetalResourceType &el)
     STRINGISE_ENUM(eResBlitCommandEncoder);
     STRINGISE_ENUM(eResComputePipelineState);
     STRINGISE_ENUM(eResComputeCommandEncoder);
+    STRINGISE_ENUM(eResParallelRenderCommandEncoder);
     STRINGISE_ENUM(eResArgumentEncoder);
     STRINGISE_ENUM(eResSamplerState);
     STRINGISE_ENUM(eResIndirectCommandBuffer);

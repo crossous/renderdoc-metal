@@ -38,7 +38,11 @@ public:
   {
     m_CommandBuffer = commandBuffer;
     m_HasGPUWork = false;
+    m_ParallelParent = NULL;
   }
+  WrappedMTLCommandBuffer *GetCommandBuffer() const { return m_CommandBuffer; }
+  void SetParallelParent(WrappedMTLParallelRenderCommandEncoder *parent) { m_ParallelParent = parent; }
+  WrappedMTLParallelRenderCommandEncoder *GetParallelParent() const { return m_ParallelParent; }
   void MarkGPUWork() { m_HasGPUWork = true; }
   bool HasGPUWork() const { return m_HasGPUWork; }
   void SetDeferredStoreActions(uint16_t mask) { m_DeferredStoreActions = mask; }
@@ -384,6 +388,7 @@ public:
 
 private:
   WrappedMTLCommandBuffer *m_CommandBuffer;
+  WrappedMTLParallelRenderCommandEncoder *m_ParallelParent = NULL;
   bool m_HasGPUWork = false;
   uint16_t m_DeferredStoreActions = 0;
   WrappedMTLRenderPipelineState *m_EncoderPipeline = NULL;

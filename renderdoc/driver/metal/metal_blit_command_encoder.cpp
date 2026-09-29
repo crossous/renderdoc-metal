@@ -74,8 +74,8 @@ static bool ValidTextureRegion(WrappedMTLTexture *texture, NS::UInteger slice, N
          uint64_t(origin.z) <= depth && uint64_t(size.depth) <= depth - uint64_t(origin.z);
 }
 
-// Keep linear transfers bounded before they reach the native driver. Packed, compressed and
-// depth/stencil layouts require separate aspect/block handling and are rejected here.
+// Keep linear transfers bounded before they reach the native driver. BC1/BC5 use 4x4
+// blocks; other packed/compressed and depth/stencil layouts remain rejected here.
 static bool ValidLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slice,
                                     NS::UInteger level, const MTL::Origin &origin,
                                     const MTL::Size &size, WrappedMTLBuffer *buffer,
@@ -86,22 +86,37 @@ static bool ValidLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slic
      buffer->m_Type != eResBuffer || !Unwrap(buffer) ||
      options != MTL::BlitOptionNone || Unwrap(texture)->sampleCount() != 1)
     return false;
-  const ResourceFormat format = MakeResourceFormat(Unwrap(texture)->pixelFormat());
-  if(format.Special() || format.compType == CompType::Depth || format.compByteWidth == 0 ||
-     format.compCount == 0)
+  MTL::PixelFormat mtlFormat = Unwrap(texture)->pixelFormat();
+  const bool bc1 = mtlFormat == MTL::PixelFormatBC1_RGBA ||
+                   mtlFormat == MTL::PixelFormatBC1_RGBA_sRGB;
+  const bool bc5 = mtlFormat == MTL::PixelFormatBC5_RGUnorm;
+  const ResourceFormat format = MakeResourceFormat(mtlFormat);
+  if(!bc1 && !bc5 &&
+     (format.Special() || format.compType == CompType::Depth ||
+      format.compByteWidth == 0 || format.compCount == 0))
     return false;
-  const uint64_t pixelBytes = uint64_t(format.compByteWidth) * format.compCount;
-  const uint64_t rowBytes = uint64_t(size.width) * pixelBytes;
+  const uint64_t pixelBytes = bc1 ? 8 : bc5 ? 16 :
+                               uint64_t(format.compByteWidth) * format.compCount;
+  const uint64_t width = RDCMAX(1ULL, uint64_t(Unwrap(texture)->width()) >> level);
+  const uint64_t height = RDCMAX(1ULL, uint64_t(Unwrap(texture)->height()) >> level);
+  if((bc1 || bc5) && (origin.x % 4 || origin.y % 4 ||
+                      (size.width % 4 && origin.x + size.width != width) ||
+                      (size.height % 4 && origin.y + size.height != height) ||
+                      size.depth != 1))
+    return false;
+  const uint64_t rowBytes = (bc1 || bc5) ? ((uint64_t(size.width) + 3) / 4) * pixelBytes :
+                                                  uint64_t(size.width) * pixelBytes;
+  const uint64_t rows = (bc1 || bc5) ? (uint64_t(size.height) + 3) / 4 : uint64_t(size.height);
   const uint64_t bufferLength = Unwrap(buffer)->length();
   if(offset > bufferLength || offset % pixelBytes || rowPitch % pixelBytes ||
      rowPitch < rowBytes || rowBytes > bufferLength - offset)
     return false;
   uint64_t available = bufferLength - offset - rowBytes;
-  if(size.height - 1 > available / rowPitch)
+  if(rows - 1 > available / rowPitch)
     return false;
-  available -= (size.height - 1) * rowPitch;
+  available -= (rows - 1) * rowPitch;
   if(size.depth > 1 &&
-     (imagePitch == 0 || imagePitch % rowPitch || size.height > imagePitch / rowPitch ||
+     (imagePitch == 0 || imagePitch % rowPitch || rows > imagePitch / rowPitch ||
       size.depth - 1 > available / imagePitch))
     return false;
   return true;
@@ -156,7 +171,13 @@ bool WrappedMTLBlitCommandEncoder::Serialise_setLabel(SerialiserType &ser, NS::S
   SERIALISE_CHECK_READ_ERRORS();
 
   if(IsReplayingAndReading())
+  {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
     Unwrap(BlitCommandEncoder)->setLabel(value);
+  }
   return true;
 }
 
@@ -191,6 +212,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     Unwrap(BlitCommandEncoder)->endEncoding();
     m_Device->SetReplayBlitCommandEncoder(NULL);
     if(IsLoading(m_State))
@@ -235,10 +261,20 @@ bool WrappedMTLBlitCommandEncoder::Serialise_insertDebugSignpost(SerialiserType 
   SERIALISE_ELEMENT(string).Important();
 
   SERIALISE_CHECK_READ_ERRORS();
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::SetMarker);
+  }
 
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
   }
   return true;
 }
@@ -272,10 +308,20 @@ bool WrappedMTLBlitCommandEncoder::Serialise_pushDebugGroup(SerialiserType &ser,
   SERIALISE_ELEMENT(string).Important();
 
   SERIALISE_CHECK_READ_ERRORS();
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::PushMarker);
+  }
 
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
   }
   return true;
 }
@@ -308,10 +354,20 @@ bool WrappedMTLBlitCommandEncoder::Serialise_popDebugGroup(SerialiserType &ser)
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, this);
 
   SERIALISE_CHECK_READ_ERRORS();
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(NULL, ActionFlags::PopMarker);
+  }
 
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
   }
   return true;
 }
@@ -350,6 +406,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_synchronizeResource(SerialiserType 
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
   }
   return true;
 }
@@ -392,7 +453,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_synchronizeTexture(SerialiserType &
   if(IsReplayingAndReading())
   {
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
-       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
        !Unwrap(BlitCommandEncoder) || !ValidTextureSubresource(texture, slice, level) ||
        Unwrap(texture)->storageMode() != MTL::StorageModeManaged)
     {
@@ -443,6 +504,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromBuffer(
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     if(!ValidBufferRange(sourceBuffer, sourceOffset, size) ||
        !ValidBufferRange(destinationBuffer, destinationOffset, size))
     {
@@ -532,7 +598,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromBuffer(
   {
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
        !BlitCommandEncoder->m_Real ||
-       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
        !ValidLinearTextureCopy(destinationTexture, destinationSlice, destinationLevel,
                                destinationOrigin, sourceSize, sourceBuffer, sourceOffset,
                                sourceBytesPerRow, sourceBytesPerImage, options))
@@ -615,6 +681,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromTexture(
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     if(!ValidTextureRegion(sourceTexture, sourceSlice, sourceLevel, sourceOrigin, sourceSize) ||
        !ValidTextureRegion(destinationTexture, destinationSlice, destinationLevel,
                            destinationOrigin, sourceSize) ||
@@ -715,7 +786,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromTexture(
   {
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
        !BlitCommandEncoder->m_Real ||
-       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
        !ValidLinearTextureCopy(sourceTexture, sourceSlice, sourceLevel, sourceOrigin, sourceSize,
                                destinationBuffer, destinationOffset, destinationBytesPerRow,
                                destinationBytesPerImage, options))
@@ -790,6 +861,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromTexture(SerialiserType &ser
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     MTL::Texture *src = Unwrap(sourceTexture), *dst = Unwrap(destinationTexture);
     if(!BlitCommandEncoder || !src || !dst ||
        src->mipmapLevelCount() != dst->mipmapLevelCount() ||
@@ -863,6 +939,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromTexture(
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     if(!BlitCommandEncoder ||
        !ValidTextureCopyRange(sourceTexture, sourceSlice, sourceLevel, destinationTexture,
                                destinationSlice, destinationLevel, sliceCount, levelCount))
@@ -937,6 +1018,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_generateMipmapsForTexture(Serialise
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     if(!ValidTextureSubresource(texture, 0, 0) || Unwrap(texture)->mipmapLevelCount() < 2)
     {
       RDCERR("Invalid Metal mipmap generation target");
@@ -995,6 +1081,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_fillBuffer(SerialiserType &ser, Wra
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     if(!ValidBufferRange(buffer, range.location, range.length))
     {
       RDCERR("Invalid Metal buffer fill range: %llu+%llu", uint64_t(range.location),
@@ -1051,7 +1142,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_updateFence(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!BlitCommandEncoder || BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+    if(!BlitCommandEncoder || BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
        BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
        !BlitCommandEncoder->m_Real || !ValidMetalFence(fence))
     {
@@ -1087,7 +1178,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_waitForFence(
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
-    if(!BlitCommandEncoder || BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+    if(!BlitCommandEncoder || BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
        BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
        !BlitCommandEncoder->m_Real || !ValidMetalFence(fence) ||
        !fence->CanWait(m_Device->GetReplayEpoch(), GetResID(BlitCommandEncoder)))
@@ -1134,6 +1225,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_getTextureAccessCounters(
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
   }
   return true;
 }
@@ -1183,6 +1279,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_resetTextureAccessCounters(Serialis
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
   }
   return true;
 }
@@ -1224,6 +1325,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_optimizeContentsForGPUAccess(Serial
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     if(!BlitCommandEncoder || !ValidTextureSubresource(texture, 0, 0))
     {
       RDCERR("Invalid Metal GPU texture optimization resource");
@@ -1268,6 +1374,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_optimizeContentsForGPUAccess(Serial
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     if(!BlitCommandEncoder || !ValidTextureSubresource(texture, slice, level))
     {
       RDCERR("Invalid Metal GPU texture optimization subresource");
@@ -1311,6 +1422,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_optimizeContentsForCPUAccess(Serial
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     if(!BlitCommandEncoder || !ValidTextureSubresource(texture, 0, 0))
     {
       RDCERR("Invalid Metal CPU texture optimization resource");
@@ -1355,6 +1471,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_optimizeContentsForCPUAccess(Serial
 
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
     if(!BlitCommandEncoder || !ValidTextureSubresource(texture, slice, level))
     {
       RDCERR("Invalid Metal CPU texture optimization subresource");
@@ -1404,7 +1525,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_resetCommandsInBuffer(
   if(IsReplayingAndReading())
   {
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
-       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
        !Unwrap(BlitCommandEncoder) || !ValidICBRange(buffer, range) || !buffer->PrepareReplay())
     {
       RDCERR("Invalid Metal GPU ICB reset range, resource or encoder");
@@ -1450,7 +1571,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyIndirectCommandBuffer(
   {
     const NS::Range target = NS::Range::Make(destinationIndex, sourceRange.length);
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
-       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
        !Unwrap(BlitCommandEncoder) || !ValidICBRange(source, sourceRange) ||
        !ValidICBRange(destination, target) ||
        source->CommandTypes() != destination->CommandTypes() ||
@@ -1506,7 +1627,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_optimizeIndirectCommandBuffer(
   if(IsReplayingAndReading())
   {
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
-       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
        !Unwrap(BlitCommandEncoder) || !ValidICBRange(indirectCommandBuffer, range) ||
        !indirectCommandBuffer->PrepareReplay() ||
        !indirectCommandBuffer->RegisterOptimization(GetResID(BlitCommandEncoder->m_CommandBuffer), range))
@@ -1552,6 +1673,11 @@ bool WrappedMTLBlitCommandEncoder::Serialise_sampleCountersInBuffer(
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
+       !BlitCommandEncoder->m_Real ||
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+      return false;
+
   }
   return false;
 }
@@ -1597,7 +1723,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_resolveCounters(
 
   if(IsReplayingAndReading())
   {
-    if(!BlitCommandEncoder || BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder() ||
+    if(!BlitCommandEncoder || BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
        BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
        !BlitCommandEncoder->m_Real || !sampleBuffer ||
        sampleBuffer->m_Type != eResCounterSampleBuffer || !sampleBuffer->m_Real ||

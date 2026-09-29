@@ -5,9 +5,33 @@
 
 ## 当前待验
 
+2026-09-29 BATCH320：用户已人工打开 UE `frame1770`，发现无 scope 和
+黑色 RT，内容验收失败。新库终端 API 可见旧帧的 21 个 marker；项目级
+受控 viewport 按钮已编译，待用户点击一次检查场景 pass。新版 UI 尚未
+验收，累计**成功** UI QA 增量 0。见 [BATCH320](BATCH320.md)。
+
+2026-09-29 BATCH319 增量：UE v0x10 `frame1770` 在最终库下有界 API/CLI
+单次终端打开通过，用户尚需人工核对 `Lvl_FirstPerson` PIE 的画面、
+事件树和资源；T319 帧内 Shared placement buffer 也待 UI 抽看。
+库/app hash 与命令见 [批次证据](BATCH319.md)。累计 UI QA 增量 **0**。
+
+2026-09-29 BATCH315–318 增量：UE v0xF `frame5394` 已截取但缺 BC 帧首
+初始内容，最终库安全拒绝；T317/T318 的 BC placement 纹理原生/注入、
+定向 API/CLI、GPU 像素/原始块及事件回跳通过。待人工 L4 看三个压缩纹理
+资源、帧首初始内容和正反向 seek；新 UE v0x10 帧尚未取得。
+累计 UI QA 增量 **0**。见 [批次证据](BATCH315-318.md)。
+
+2026-09-29 M7 增量：新增的单次回放脚本已用 T313 终端验证，尚无新 UE
+截帧和新 UI 检查；累计 UI QA 增量 **0**。见
+[M7 记录](UE58_M7_RECAPTURE_GATE_2026-09-29.md)。
+
 按用户要求，本轮没有启动 qrenderdoc 或使用 Computer Use。T34–T69、T71–T132、T135–T153、T156–T157、T159–T312 和 T10 marker
 增量已完成计划内终端自动验证，但以下 GUI L4 尚未执行；统一验收与最新库版本见
 `QA_CONSOLIDATED.md`。旧 batch QA 文档保留细节，总单为最新入口。用户计划重置后集中QA。
+
+2026-09-29 增量：T313/T314 placement buffer 显式 alias/释放复用已定向终端通过，
+待人工 UI 检查两资源身份、创建顺序及前后事件回跳；累计 UI QA 增量 **0**。
+旧 v0xE T133 仍为预期拒绝负例，不打开。证据见 [BATCH313–314](BATCH313-314.md)。
 
 | 批次 / 功能 | 状态 | 最终构建与 capture | 待验重点 |
 | --- | --- | --- | --- |

@@ -35,6 +35,7 @@
 #include "metal_function.h"
 #include "metal_library.h"
 #include "metal_render_command_encoder.h"
+#include "metal_parallel_render_command_encoder.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_sampler_state.h"
 #include "metal_fence.h"

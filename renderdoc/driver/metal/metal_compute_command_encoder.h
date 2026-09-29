@@ -35,12 +35,17 @@ public:
                                   WrappedMTLDevice *device);
 
   void SetCommandBuffer(WrappedMTLCommandBuffer *commandBuffer) { m_CommandBuffer = commandBuffer; }
+  WrappedMTLCommandBuffer *GetCommandBuffer() const { return m_CommandBuffer; }
   DECLARE_FUNCTION_SERIALISED(void, endEncoding);
   DECLARE_FUNCTION_SERIALISED(void, updateFence, WrappedMTLFence *fence);
   DECLARE_FUNCTION_SERIALISED(void, waitForFence, WrappedMTLFence *fence);
   DECLARE_FUNCTION_SERIALISED(void, useResource, WrappedMTLResource *resource, MTL::ResourceUsage usage);
   DECLARE_FUNCTION_SERIALISED(void, useResources, rdcarray<WrappedMTLResource *> resources,
                               MTL::ResourceUsage usage);
+  void declareHeaps(rdcarray<WrappedMTLHeap *> heaps, bool arrayVariant);
+  template <typename SerialiserType>
+  bool Serialise_declareHeaps(SerialiserType &ser, rdcarray<WrappedMTLHeap *> heaps,
+                             bool arrayVariant);
   DECLARE_FUNCTION_SERIALISED(void, memoryBarrierWithScope, MTL::BarrierScope scope);
   DECLARE_FUNCTION_SERIALISED(void, memoryBarrierWithResources, rdcarray<WrappedMTLResource *> resources);
   DECLARE_FUNCTION_SERIALISED(void, pushDebugGroup, NS::String *string);
