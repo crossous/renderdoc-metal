@@ -162,6 +162,7 @@ public:
       WrappedMTLArgumentEncoder *encoder, rdcarray<uint64_t> descriptors,
       uint64_t encodedLength, uint64_t alignment, bool supported);
   uint64_t GetReplayEpoch() const { return m_ReplayEpoch; }
+  bool DeferTerminalBufferPurge(ResourceId id);
   uint64_t GetCaptureEpoch() const { return m_CaptureEpoch; }
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandQueue *, newCommandQueue);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLCommandQueue *, newCommandQueue,
@@ -483,6 +484,8 @@ private:
   RDResult ContextReplayLog(CaptureState readType, uint32_t endEventID,
                             ReplayLogType replayType);
   bool FinishReplayCommands();
+  bool RestoreReplayPurgedBuffers();
+  bool ApplyTerminalReplayBufferPurges();
   bool ResetReplayCPUUpdatedBuffers();
   WrappedMTLTexture *Common_NewTexture(RDMTL::TextureDescriptor &descriptor, MetalChunk chunkType,
                                        bool ioSurfaceTexture, IOSurfaceRef iosurface,
@@ -554,6 +557,11 @@ private:
   };
   std::map<ResourceId, ReplayCommandBufferState> m_ReplayCommandBuffers;
   rdcarray<ResourceId> m_ReplayCommandBufferOrder;
+  // A terminal Empty has no later reference in the frame stream. Execute it only after every
+  // command buffer has completed, then restore NonVolatile before the next frame replay.
+  std::set<ResourceId> m_TerminalFramePurgeableBuffers;
+  std::set<ResourceId> m_PendingReplayBufferPurges;
+  std::set<ResourceId> m_ReplayPurgedBuffers;
   WrappedMTLRenderCommandEncoder *m_ReplayRenderCommandEncoder = NULL;
   WrappedMTLParallelRenderCommandEncoder *m_ReplayParallelRenderCommandEncoder = NULL;
   WrappedMTLBlitCommandEncoder *m_ReplayBlitCommandEncoder = NULL;

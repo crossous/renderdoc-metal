@@ -1359,13 +1359,18 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
       // resource. Capture completion callbacks are not represented by command-buffer chunks,
       // and replay currently does not reproduce their resource lifetime boundary. Scan before
       // executing any frame GPU work: otherwise Metal Validation can abort the process while
-      // setting a still-in-use resource purgeable.
+      // setting a still-in-use resource purgeable. Structured export only decodes chunks and
+      // must remain available for CPU-only diagnosis of captures rejected by this gate.
+      if(!IsStructuredExporting(m_State))
       {
+        m_TerminalFramePurgeableBuffers.clear();
+        std::map<ResourceId, uint64_t> purgeOffsets;
         ReadSerialiser safetyScan(m_FrameReader, Ownership::Nothing);
         safetyScan.SetVersion(m_SectionVersion);
         while(!m_FrameReader->AtEnd() && !safetyScan.IsErrored())
         {
           MetalChunk candidate = safetyScan.ReadChunk<MetalChunk>();
+          const uint64_t offset = m_FrameReader->GetOffset();
           if(candidate == MetalChunk::MTLBuffer_setPurgeableState ||
              candidate == MetalChunk::MTLTexture_setPurgeableState)
           {
@@ -1375,16 +1380,70 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
                                      "Buffer"_lit : "Texture"_lit,
                                  resource);
             safetyScan.Serialise("State"_lit, state);
-            if(state == MTL::PurgeableStateVolatile || state == MTL::PurgeableStateEmpty)
+            if(resource == ResourceId() ||
+               (state != MTL::PurgeableStateKeepCurrent &&
+                state != MTL::PurgeableStateNonVolatile &&
+                state != MTL::PurgeableStateEmpty))
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+                                  "Invalid Metal frame purgeable state or resource");
+            if(purgeOffsets.count(resource))
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+                                  "Metal buffer is referenced after Empty (%s)",
+                                  ToStr(resource).c_str());
+            if(candidate == MetalChunk::MTLTexture_setPurgeableState &&
+               state == MTL::PurgeableStateEmpty)
               RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
                                   "Metal frame purgeable-state transition requires GPU completion "
                                   "tracking before replay (resource %s)", ToStr(resource).c_str());
+            if(candidate == MetalChunk::MTLBuffer_setPurgeableState &&
+               state == MTL::PurgeableStateEmpty)
+              purgeOffsets[resource] = offset;
           }
-          safetyScan.SkipCurrentChunk();
+          // Search the entire chunk payload for ResourceIds equal to a purged buffer.
+          // This is deliberately conservative: a false match rejects a supported capture, while
+          // a missing reference could otherwise allow a use after Empty on GPU. The scan also
+          // checks child fields in descriptors and argument packets without assuming their layout.
+          const uint64_t end = offset + safetyScan.ChunkMetadata().length;
+          if(end < offset || end > m_FrameReader->GetSize())
+            RETURN_ERROR_RESULT(ResultCode::APIDataCorrupted,
+                                "Invalid Metal frame chunk length during purge scan");
+          if(!purgeOffsets.empty())
+          {
+            bytebuf bytes;
+            bytes.resize(64 * 1024 + sizeof(ResourceId) - 1);
+            size_t overlap = 0;
+            while(m_FrameReader->GetOffset() < end)
+            {
+              const size_t count = (size_t)RDCMIN(uint64_t(64 * 1024),
+                                                  end - m_FrameReader->GetOffset());
+              if(!m_FrameReader->Read(bytes.data() + overlap, count))
+                RETURN_ERROR_RESULT(ResultCode::APIDataCorrupted,
+                                    "Invalid Metal frame chunk during purge scan");
+              const size_t available = overlap + count;
+              for(const auto &purge : purgeOffsets)
+              {
+                if(offset <= purge.second)
+                  continue;
+                for(size_t i = 0; i + sizeof(ResourceId) <= available; i++)
+                {
+                  ResourceId found;
+                  memcpy(&found, bytes.data() + i, sizeof(found));
+                  if(found == purge.first)
+                    RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+                                        "Metal buffer is referenced after Empty (%s)",
+                                        ToStr(found).c_str());
+                }
+              }
+              overlap = RDCMIN(available, sizeof(ResourceId) - 1);
+              memmove(bytes.data(), bytes.data() + available - overlap, overlap);
+            }
+          }
           safetyScan.EndChunk();
         }
         if(safetyScan.IsErrored())
           return RDResult(ResultCode::APIDataCorrupted, safetyScan.GetError().message);
+        for(const auto &purge : purgeOffsets)
+          m_TerminalFramePurgeableBuffers.insert(purge.first);
         m_FrameReader->SetOffset(0);
       }
 
@@ -1425,7 +1484,6 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
             if(m_ReplayBufferInitialContents.count(buffer))
               m_ReplayCPUUpdatedBuffers.insert(buffer);
           }
-          scan.SkipCurrentChunk();
           scan.EndChunk();
         }
         if(scan.IsErrored())
@@ -1448,7 +1506,14 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
 
       if(GetReplay()->HasPendingComputeIndirectActions())
       {
-        FinishReplayCommands();
+        for(ResourceId id : m_PendingReplayBufferPurges)
+          if(GetReplay()->HasPendingComputeIndirectActionFor(id))
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+                                "Metal terminal purge conflicts with indirect argument read (%s)",
+                                ToStr(id).c_str());
+        if(!FinishReplayCommands())
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+                              "Invalid Metal replay completion before indirect action resolve");
         GetReplay()->ResolvePendingComputeIndirectActions();
       }
 
@@ -1684,6 +1749,8 @@ bool WrappedMTLDevice::FinishReplayCommands()
     }
     it->second.buffer = NULL;
   }
+  if(success && !ApplyTerminalReplayBufferPurges())
+    success = false;
   m_ReplayCommandBuffers.clear();
   m_ReplayCommandBufferOrder.clear();
   m_PendingReplayCPUBufferUpdates.clear();
@@ -1699,12 +1766,56 @@ bool WrappedMTLDevice::FinishReplayCommands()
   return success;
 }
 
+bool WrappedMTLDevice::DeferTerminalBufferPurge(ResourceId id)
+{
+  if(!m_TerminalFramePurgeableBuffers.count(id) || m_PendingReplayBufferPurges.count(id))
+  {
+    RDCERR("Invalid Metal terminal buffer purge %s", ToStr(id).c_str());
+    return false;
+  }
+  m_PendingReplayBufferPurges.insert(id);
+  return true;
+}
+
+bool WrappedMTLDevice::ApplyTerminalReplayBufferPurges()
+{
+  // All submitted work has completed in FinishReplayCommands before this is called. Deferring
+  // Empty preserves the capture's logical end-of-frame lifetime without racing GPU use.
+  for(ResourceId id : m_PendingReplayBufferPurges)
+  {
+    WrappedMTLObject *object = GetResourceManager()->GetResource(id, true);
+    if(!object || object->m_Type != eResBuffer || !object->m_Real)
+      return false;
+    MTL::Buffer *buffer = Unwrap((WrappedMTLBuffer *)object);
+    if(buffer->setPurgeableState(MTL::PurgeableStateEmpty) != MTL::PurgeableStateNonVolatile)
+      return false;
+    m_ReplayPurgedBuffers.insert(id);
+  }
+  m_PendingReplayBufferPurges.clear();
+  return true;
+}
+
+bool WrappedMTLDevice::RestoreReplayPurgedBuffers()
+{
+  for(ResourceId id : m_ReplayPurgedBuffers)
+  {
+    WrappedMTLObject *object = GetResourceManager()->GetResource(id, true);
+    if(!object || object->m_Type != eResBuffer || !object->m_Real)
+      return false;
+    Unwrap((WrappedMTLBuffer *)object)->setPurgeableState(MTL::PurgeableStateNonVolatile);
+  }
+  m_ReplayPurgedBuffers.clear();
+  return true;
+}
+
 RDResult WrappedMTLDevice::ReplayLog(uint32_t endEventID, ReplayLogType replayType)
 {
   if(replayType != eReplay_OnlyDraw)
   {
     if(!FinishReplayCommands())
       RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal replay completion");
+    if(!RestoreReplayPurgedBuffers())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal purgeable buffer restore");
     // Frame-created placement children belong to a previous execution of the frame stream.
     // Release their native allocations before restoring the frame-start contents. Their
     // ResourceIds and metadata stay registered so the creation chunks can bind fresh objects.

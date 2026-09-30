@@ -6,6 +6,32 @@
 
 ## 当前优先级：黑盒回放、稳定性、真实普通帧
 
+09-30 [BATCH325](BATCH325_WINDOWSERVER_WATCHDOG_2026-09-29.md)：23:15
+WindowServer watchdog 已导致第二次本机重启；前一轮超时的两个 UE 回放
+探针仍见于重启前 stackshot 的 GPU 内核路径。**停止此远程机 UE 大帧
+GPU/GUI 回放**；超时或 SIGKILL 不构成安全保证。可做 CPU 静态审计、
+编译和不涉及 GPU 的日志工具；GPU 功能族实证转到可本地恢复的 Mac。
+
+09-29 [BATCH324](BATCH324_UE58_GPU_WAIT_AND_REMOTE_HOST_STOP.md)：本远程机
+的 UE 真帧诊断副本已到 GPU 完成等待，采样见 8.3 GiB footprint 与短暂
+WindowServer 不就绪。暂停本机 UE 大帧 GPU/GUI 测试；先静态排查
+command buffer 完成与资源规模，并使超时/物理 footprint 监测可靠。
+不得跳过等待或删除 `Empty` 守卫求打开。旧帧仍未正常开启；重启测试须
+在稳定环境且一次性验证 API/CLI、像素、MRT、scope 和 GPU VA。
+
+09-29 [BATCH323](BATCH323_TERMINAL_PURGEABLE_REPLAY.md)：当前 Mac 的
+4 KiB 原生/注入/API/CLI/GPU 字节及 seek 小夹具已通过，帧尾 buffer
+`Empty` 接通。原 `UE58_capture.rdc` 仍有 15 个旧 view 顺序错误；已生成
+哈希与 BATCH321 相同的诊断副本。下一步由用户对**诊断副本**做**一次**有日志、
+超时与 RSS 上限的 API-only 回放，确认是否越过首阻塞；再检查场景
+scope、MRT、像素与 GPU VA。不要将小夹具结果当作 UE 真帧或 UI 通过。
+
+09-29 [BATCH322](BATCH322_UE58_CPU_AUDIT_AND_COMPLETION_PROBE.md)：
+先在另一台可承担 GPU 测试的 Mac 显式运行 4 KB 原生 completion/Empty
+探针，再据实测决定 Metal 回放的完成边界方案；当前远程机继续只做
+CPU 审计与构建。真帧含 Nanite/10 个 MRT pass，不能把旧 Slate 帧的
+单 RT 黑屏结论套用到它。实际回放仍安全拒绝，不能删守卫求打开。
+
 09-29 [BATCH321](BATCH321_UE58_CAPTURE_VIEW_ORDER_AND_WATCHDOG.md)：
 `UE58_capture.rdc` 的 buffer view/父 placement buffer 顺序已修于 capture 代码，
 但旧帧推进到帧内 purgeable/GPU 完成时触发 Metal Validation 断言；本机随后

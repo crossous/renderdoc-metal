@@ -1,5 +1,59 @@
 # Metal Replay 当前状态
 
+本地 Mac 接手文字见 [2026-09-30 交接 prompt](LOCAL_MAC_AGENT_HANDOFF_2026-09-30.md)；
+远程机停止 UE 大帧 GPU/GUI 回放。
+
+## M9 / BATCH325：确认 23:15 WindowServer watchdog 重启，远程机继续停测
+
+23:15:38 panic 明确为 WindowServer 连续 120 秒未 check in；其主线程
+在 Metal/IOGPU/AGXG16X 提交路径，23:12 的快照里两个已终止的 UE 回放
+探针仍列为 zombie，线程也停于 GPU 内核路径。此前 20:43 曾发生同类
+watchdog，却没有这两个探针，所以本次与回放高度关联但不能判定唯一
+根因或具体 Metal chunk。超时与杀进程不足以保证 GPU 内核工作结束。
+本机停止 UE 大帧 GPU/GUI 回放；只读审计与编译可继续。见
+[BATCH325](BATCH325_WINDOWSERVER_WATCHDOG_2026-09-29.md)。
+**真帧未打开；无新定向 GPU 通过、全量回归或人工 UI 验收；累计成功
+UI QA 增量 0。**
+
+## M9 / BATCH324：UE 真帧停在 GPU 完成等待，本远程机停止大帧回放
+
+用户提供的 API-only 日志未产生结果文件，不能判定成功或失败。助手在同一
+旧库与 view 顺序诊断副本上做 12 秒和 18 秒两次有界 API 定位；后一次
+栈采样落在 `FinishReplayCommands` → Metal `waitUntilCompleted`，物理
+footprint 8.3 GiB，而脚本 RSS 仅采到 923.3 MiB。超时杀进程时系统拒绝
+SIGKILL，进程处于 `?Es`；WindowServer 曾约 6.34 秒不就绪后恢复。
+无新重启，但已达到本机停测门槛。XML 静态统计：12 heap/6.062 GiB、
+64 次 commit、无编码 wait event；尚不能确定是 GPU 长任务还是驱动/回放
+挂起。已修正两处扫描警告和脚本异常退出记录，终端库重建，**未用新库
+再次跑 UE 真帧**。见 [BATCH324](BATCH324_UE58_GPU_WAIT_AND_REMOTE_HOST_STOP.md)。
+**UE 真帧仍打不开；全量回归未跑；人工 UI 未验收；累计成功 UI QA 增量 0。**
+
+## M9 / BATCH323：帧尾 buffer Empty 小夹具通过，UE 真帧待一次有界回放
+
+在 D3D12/Vulkan 完成后回收与 UE 5.8 `DeferredDelete` 的横向对照后，
+接通帧尾 buffer `Empty`：执行前拒绝后续引用，待已提交 GPU 工作完成后
+执行，并在事件回跳前恢复。当前 Mac 的 4 KiB 原生 Validation、注入捕获、
+API/CLI、GPU 字节/seek 及 1 例新负例通过；T62 的 10 例旧负例通过。
+T62/T35 旧帧 API/CLI 通过，T319 专用 API/CLI 通过（通用 smoke helper
+误用 T35 断言而失败）。原始 `UE58_capture.rdc` 的 15 个旧 view 顺序错误
+仍在；已只读原件并生成 SHA 与 BATCH321 相同的诊断副本供有界验证。
+旧真帧尚**未**用本批库做 GPU 回放，
+也没有新人工 UI 验收；黑 RT 与 Shader Converter GPU VA 仍待核实。
+见 [BATCH323](BATCH323_TERMINAL_PURGEABLE_REPLAY.md)。**仅定向终端通过；
+全量回归未跑；人工 UI 通过 0，累计成功 UI QA 增量 0。**
+
+## M9 / BATCH322：真帧 CPU 审计，GPU 完成边界仍未实现
+
+在不执行 GPU 回放的条件下，`UE58_capture.rdc` 已可只读导出 XML：
+11214 chunk、278 draw、89 render pass、10 个 MRT pass，确有 UE 场景与
+Nanite scope。旧 `frame1770` 仍是单 RT 的 Slate 帧，不能解释真帧。
+真帧的两个 buffer 经 command buffer blit 使用、提交后在 11174/11175
+被置为 `Empty`，而捕获不含等待完成的 chunk；安全拒绝仍保留。原生
+4 KB completion/Empty 探针仅编译，未在这台发生过 WindowServer watchdog
+的远程 Mac 上运行。见 [BATCH322](BATCH322_UE58_CPU_AUDIT_AND_COMPLETION_PROBE.md)。
+**仅 CPU 定向审计和编译通过；全量回归未运行；人工 UI 未验收；累计成功
+UI QA 增量 0。**
+
 ## M9 / BATCH321：UE58_capture 原因定位；WindowServer watchdog 后暂停 GPU
 
 用户 `UE58_capture.rdc`（SHA256 `a96e685f…`）确由受控 viewport 按钮保存，

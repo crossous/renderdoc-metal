@@ -1,0 +1,31 @@
+{
+  "capture_xml": "UE58_frame1770.xml",
+  "chunks": 4177,
+  "draws": 280,
+  "render_passes": 1,
+  "mrt_passes": [],
+  "top_debug_groups": [
+    [
+      "RenderGraphExecute - UpdateAllPrimitiveSceneInfos",
+      4
+    ],
+    [
+      "UpdateAllPrimitiveSceneInfos",
+      4
+    ],
+    [
+      "GPUSkinCache_UpdateSkinningBatches",
+      1
+    ],
+    [
+      "FRDGBuilder::SubmitBufferUploads",
+      1
+    ],
+    [
+      "SlateUI Title = SocoTestProj - 虚幻编辑器",
+      1
+    ]
+  ],
+  "wait_until_completed_chunks": [],
+  "purgeable_changes": []
+}

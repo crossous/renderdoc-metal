@@ -1,5 +1,24 @@
 # 集中 GUI QA 总入口
 
+2026-09-30 BATCH325 增量：确认 23:15 WindowServer watchdog 整机重启，
+没有新的 GUI 验收；当前远程机暂停 UE 大帧 GPU/GUI 测试。累计成功
+UI QA 增量 **0**；见 [BATCH325](BATCH325_WINDOWSERVER_WATCHDOG_2026-09-29.md)。
+
+2026-09-29 BATCH324 增量：UE 真帧诊断副本的 API-only 定位停在 Metal
+`waitUntilCompleted`；未获得打开结果，WindowServer 短暂不就绪后恢复。
+本批无 GUI 操作，画面、MRT 和 scope 均未验收；累计成功 UI QA 增量
+**0**。见 [BATCH324](BATCH324_UE58_GPU_WAIT_AND_REMOTE_HOST_STOP.md)。
+
+2026-09-29 BATCH323 增量：帧尾 buffer `Empty` 的 4 KiB 小夹具终端
+原生/注入/API/CLI、GPU 字节与 seek 通过；`UE58_capture.rdc` 尚未用
+本批库回放或人工打开。累计成功 UI QA 增量 **0**；见
+[BATCH323](BATCH323_TERMINAL_PURGEABLE_REPLAY.md)。
+
+2026-09-29 BATCH322 增量：`UE58_capture.rdc` 仅经 CPU XML 审计证实有
+UE/Nanite 场景 scope、89 pass 与 10 个 MRT pass；安全门控仍阻止 GPU
+回放。没有新人工 UI 操作，旧 `frame1770` 黑屏失败仍在。
+累计成功 UI QA 增量 **0**；见 [BATCH322](BATCH322_UE58_CPU_AUDIT_AND_COMPLETION_PROBE.md)。
+
 2026-09-29 BATCH321 增量：`UE58_capture.rdc` 人工开启失败，终端定位 buffer
 view 顺序和下一处 purgeable/GPU 完成阻塞；远程机 WindowServer watchdog
 重启后停止 GPU/GUI 验证。累计成功 UI QA 增量 **0**；见

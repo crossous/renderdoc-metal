@@ -1,5 +1,33 @@
 # 公司 Codex API 临时接手单（2026-09-28）
 
+> 2026-09-30 本地 Mac 接手时，直接使用
+> [本地 Mac agent prompt](LOCAL_MAC_AGENT_HANDOFF_2026-09-30.md)；
+> 以下为原始公司 API 交接与历史信息。
+
+> 2026-09-30 M9 / BATCH325：先读 [23:15 WindowServer watchdog 调查](BATCH325_WINDOWSERVER_WATCHDOG_2026-09-29.md)。
+> 本远程机已再次因 WindowServer/Metal/IOGPU 提交链路不响应而重启；
+> 前一轮超时的 UE 探针仍见于重启前 GPU 内核栈。超时和 SIGKILL 无法
+> 保证 GPU 工作安全退出。此机只做 CPU 审计与编译，停止 UE 大帧 GPU/GUI
+> 回放；不能把时间关联当作具体 RenderDoc chunk 的根因证明。
+
+> 2026-09-29 M9 / BATCH324：先读 [UE 真帧 GPU 等待与停测](BATCH324_UE58_GPU_WAIT_AND_REMOTE_HOST_STOP.md)。
+> 同一诊断副本的 API-only 回放已进入 Metal `waitUntilCompleted`，采样的
+> 物理 footprint 8.3 GiB，WindowServer 短暂不就绪；旧脚本的 RSS 限额
+> 不覆盖该 footprint，超时后 SIGKILL 被拒。此远程机暂停 UE 大帧 GPU
+> 回放。扫描告警和脚本退出记录已修、终端库已构建，**新库未在 UE 帧上运行**。
+
+> 2026-09-29 M9 / BATCH323：先读 [帧尾 Empty 定向证据](BATCH323_TERMINAL_PURGEABLE_REPLAY.md)。
+> 当前 Mac 的 4 KiB 原生、注入、API/CLI 与 GPU 字节/seek 小夹具通过；
+> 原始 `UE58_capture.rdc` 仍有 15 个旧 view 顺序错误；诊断副本 SHA
+> `45db2707…` 与 BATCH321 相同，仍未用本批库做 GPU 回放或 UI 验收。只接通有
+> 后续无引用证明的帧尾 buffer `Empty`；不能外推到纹理、Volatile 或
+> 帧中复用。下一步由用户对诊断副本做一次有界 API-only 回放并回传日志。
+
+> 2026-09-29 M9 / BATCH322：先读 [CPU 审计与完成探针](BATCH322_UE58_CPU_AUDIT_AND_COMPLETION_PROBE.md)。
+> 当前真帧已可只读 XML 导出，含场景/Nanite scope 和 10 个 MRT pass；
+> 实际 GPU 回放仍安全拒绝。原生 completion/Empty 探针只编译未运行，
+> 本远程 M4 Max 继续暂停 GPU 验证。
+
 > 2026-09-29 M9：先读 [BATCH321](BATCH321_UE58_CAPTURE_VIEW_ORDER_AND_WATCHDOG.md)。
 > 当前远程 M4 Max 发生 WindowServer watchdog 重启，已暂停本机 GPU 回放。
 > `UE58_capture.rdc` 的 buffer view 创建顺序修正已写入代码，但旧帧推进到

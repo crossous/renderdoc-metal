@@ -89,13 +89,18 @@ bool WrappedMTLBuffer::Serialise_setPurgeableState(SerialiserType &ser, MTL::Pur
     if(!Buffer || Buffer->m_Type != eResBuffer || !Buffer->m_Real ||
        (State != MTL::PurgeableStateKeepCurrent && State != MTL::PurgeableStateNonVolatile &&
         State != MTL::PurgeableStateEmpty) ||
-       (m_Device->GetReplayEpoch() != 0 &&
-        (State == MTL::PurgeableStateVolatile || State == MTL::PurgeableStateEmpty)))
+       (m_Device->GetReplayEpoch() != 0 && State == MTL::PurgeableStateVolatile))
     {
       RDCERR("Invalid or unsupported Metal buffer purgeable state or replay lifetime");
       return false;
     }
-    Unwrap(Buffer)->setPurgeableState((MTL::PurgeableState)State);
+    if(m_Device->GetReplayEpoch() != 0 && State == MTL::PurgeableStateEmpty)
+    {
+      if(!m_Device->DeferTerminalBufferPurge(GetResID(Buffer)))
+        return false;
+    }
+    else
+      Unwrap(Buffer)->setPurgeableState((MTL::PurgeableState)State);
   }
   return true;
 }

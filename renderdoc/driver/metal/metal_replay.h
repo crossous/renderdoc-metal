@@ -182,6 +182,7 @@ public:
   void AddDebugGroup(const NS::String *label, ActionFlags flag);
   void RegisterComputeIndirectAction(uint32_t eventId, ResourceId buffer, uint64_t offset);
   bool HasPendingComputeIndirectActions() const { return !m_PendingComputeIndirectActions.empty(); }
+  bool HasPendingComputeIndirectActionFor(ResourceId id) const;
   void ResolvePendingComputeIndirectActions();
   void BeginMultiAction(uint32_t childCount);
   uint32_t GetMultiActionEndEvent(uint32_t eventId) const;

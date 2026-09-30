@@ -1,0 +1,294 @@
+{
+  "capture_xml": "UE58_capture.xml",
+  "chunks": 11214,
+  "draws": 278,
+  "render_passes": 89,
+  "mrt_passes": [
+    {
+      "chunk": 3414,
+      "color_attachments": [
+        "250251",
+        "250238"
+      ]
+    },
+    {
+      "chunk": 5263,
+      "color_attachments": [
+        "250436",
+        "250439"
+      ]
+    },
+    {
+      "chunk": 5445,
+      "color_attachments": [
+        "250269",
+        "250272",
+        "250275"
+      ]
+    },
+    {
+      "chunk": 5496,
+      "color_attachments": [
+        "250441",
+        "250443"
+      ]
+    },
+    {
+      "chunk": 5681,
+      "color_attachments": [
+        "250269",
+        "250272",
+        "250275"
+      ]
+    },
+    {
+      "chunk": 5799,
+      "color_attachments": [
+        "250285",
+        "250288",
+        "250290",
+        "250293",
+        "250296"
+      ]
+    },
+    {
+      "chunk": 6783,
+      "color_attachments": [
+        "66836",
+        "66838",
+        "66840"
+      ]
+    },
+    {
+      "chunk": 7100,
+      "color_attachments": [
+        "250285",
+        "250288",
+        "250290",
+        "250293",
+        "250296"
+      ]
+    },
+    {
+      "chunk": 7419,
+      "color_attachments": [
+        "6959",
+        "6960"
+      ]
+    },
+    {
+      "chunk": 7452,
+      "color_attachments": [
+        "8571",
+        "8577"
+      ]
+    }
+  ],
+  "top_debug_groups": [
+    [
+      "PostProcessing",
+      21
+    ],
+    [
+      "MainPass",
+      16
+    ],
+    [
+      "Nanite::DrawGeometry",
+      14
+    ],
+    [
+      "PostPass",
+      11
+    ],
+    [
+      "Nanite::VisBuffer",
+      10
+    ],
+    [
+      "DirectLighting",
+      10
+    ],
+    [
+      "TextureDownsampleChain",
+      10
+    ],
+    [
+      "NaniteBasePass",
+      8
+    ],
+    [
+      "InstanceCulling",
+      7
+    ],
+    [
+      "LumenSceneUpdate: 19 card captures 0.019M texels",
+      7
+    ],
+    [
+      "VirtualShadowMapMarkPages",
+      7
+    ],
+    [
+      "FVirtualShadowMapArray::BeginMarkPages",
+      7
+    ],
+    [
+      "RenderGraphExecute - CanvasRenderThreadScope",
+      7
+    ],
+    [
+      "Lights",
+      6
+    ],
+    [
+      "RenderVirtualShadowMaps(Non-Nanite)",
+      6
+    ],
+    [
+      "Batched",
+      6
+    ],
+    [
+      "LumenSceneLighting",
+      6
+    ],
+    [
+      "NodeAndClusterCull",
+      5
+    ],
+    [
+      "CullingPasses",
+      5
+    ],
+    [
+      "RenderDeferredLighting",
+      5
+    ]
+  ],
+  "wait_until_completed_chunks": [],
+  "purgeable_changes": [
+    {
+      "chunk": 11174,
+      "api": "MTLBuffer::setPurgeableState",
+      "resource": "251031",
+      "state": "4",
+      "last_blit_read": {
+        "chunk": 9248,
+        "encoder": "251045",
+        "command_buffer": "251044"
+      },
+      "preceding_commits": [
+        {
+          "chunk": 9214,
+          "command_buffer": "251027"
+        },
+        {
+          "chunk": 9219,
+          "command_buffer": "251023"
+        },
+        {
+          "chunk": 9220,
+          "command_buffer": "251015"
+        },
+        {
+          "chunk": 9224,
+          "command_buffer": "251028"
+        },
+        {
+          "chunk": 9228,
+          "command_buffer": "251029"
+        },
+        {
+          "chunk": 9232,
+          "command_buffer": "251030"
+        },
+        {
+          "chunk": 9619,
+          "command_buffer": "251057"
+        },
+        {
+          "chunk": 11163,
+          "command_buffer": "251044"
+        },
+        {
+          "chunk": 11167,
+          "command_buffer": "251061"
+        },
+        {
+          "chunk": 11168,
+          "command_buffer": "251060"
+        },
+        {
+          "chunk": 11169,
+          "command_buffer": "251075"
+        },
+        {
+          "chunk": 11173,
+          "command_buffer": "251104"
+        }
+      ]
+    },
+    {
+      "chunk": 11175,
+      "api": "MTLBuffer::setPurgeableState",
+      "resource": "251032",
+      "state": "4",
+      "last_blit_read": {
+        "chunk": 9249,
+        "encoder": "251045",
+        "command_buffer": "251044"
+      },
+      "preceding_commits": [
+        {
+          "chunk": 9214,
+          "command_buffer": "251027"
+        },
+        {
+          "chunk": 9219,
+          "command_buffer": "251023"
+        },
+        {
+          "chunk": 9220,
+          "command_buffer": "251015"
+        },
+        {
+          "chunk": 9224,
+          "command_buffer": "251028"
+        },
+        {
+          "chunk": 9228,
+          "command_buffer": "251029"
+        },
+        {
+          "chunk": 9232,
+          "command_buffer": "251030"
+        },
+        {
+          "chunk": 9619,
+          "command_buffer": "251057"
+        },
+        {
+          "chunk": 11163,
+          "command_buffer": "251044"
+        },
+        {
+          "chunk": 11167,
+          "command_buffer": "251061"
+        },
+        {
+          "chunk": 11168,
+          "command_buffer": "251060"
+        },
+        {
+          "chunk": 11169,
+          "command_buffer": "251075"
+        },
+        {
+          "chunk": 11173,
+          "command_buffer": "251104"
+        }
+      ]
+    }
+  ]
+}

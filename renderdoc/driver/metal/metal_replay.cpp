@@ -2675,6 +2675,14 @@ void MetalReplay::RegisterComputeIndirectAction(uint32_t eventId, ResourceId buf
   m_PendingComputeIndirectActions.push_back({eventId, buffer, offset});
 }
 
+bool MetalReplay::HasPendingComputeIndirectActionFor(ResourceId id) const
+{
+  for(const PendingComputeIndirectAction &pending : m_PendingComputeIndirectActions)
+    if(pending.buffer == id)
+      return true;
+  return false;
+}
+
 void MetalReplay::ResolvePendingComputeIndirectActions()
 {
   for(const PendingComputeIndirectAction &pending : m_PendingComputeIndirectActions)

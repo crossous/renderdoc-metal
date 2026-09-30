@@ -25,6 +25,9 @@ int main(int argc, char **argv)
     return 3;
   }
 
+  fprintf(stderr, "OpenFile OK; beginning OpenCapture\n");
+  fflush(stderr);
+
   IReplayController *controller = NULL;
   rdctie(result, controller) = file->OpenCapture(ReplayOptions(), NULL);
   file->Shutdown();
