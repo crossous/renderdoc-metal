@@ -1,0 +1,9 @@
+# B431：复用完成后回收的 Native 上传缓冲区
+
+ef026832 frame37616/37617 将独立Shared buffer16409/16410(各4MiB)设置为Empty。原 descriptor frame whitelist 拒绝setPurgeableState，但Metal core已有全帧terminal-use扫描、DeferTerminalBufferPurge、FinishReplayCommands等待全部提交结束、ApplyTerminalReplayBufferPurges及下一replay恢复NonVolatile的实现。
+
+coverage65接入现有路径，只接受已在core终端扫描注册的Empty、帧内独立Shared(Default/Tracked)、活着且未alias、非typed table/GPUdescriptor destination，并要求全部既有consumer已commit。校验本身不回收Native分配。仍通过core检测Empty后任何资源引用，执行时仍先GPU完成再NativeEmpty，下一次帧内重新创建/恢复。未为Metal重做通用提交/生命周期机制，也未忽略真实回收操作。
+
+精确5366f35c4654fc7e9b1627ce05e6b10c68fb8cddc767e8d3321ea6c985cb38ae、metal-terminal-upload.bwq3bt：两个实际4MiB frame staging，R8/BGRA8_sRGB两种Native线性上传+局部patch；原应用waitUntilCompleted后实际Empty。4captures/16resetseeks、所有像素/首次copy/局部patch/EID0恢复一致，22 API+CLI非法state/unknown/texture/table/重复/回收后用/缺consumercommit/legacy64反例GPU前拒绝。
+
+当前实际UE完整预提交检查及5366f35c冻结全量回归运行中。此前d6c890d4全量308captures/7786malformed/3080重复打开通过、0B resident增长。当前最新库的全量结果尚未完成；尚无UE整帧GPU/UI验收。未提交或推送。

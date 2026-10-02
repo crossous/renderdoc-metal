@@ -60,6 +60,11 @@ def main():
                              ('Function', child(intersection, 'Library').text)]:
             edit_intersection(field + '-' + str(value), field, value)
         def emit(tag, variant):
+            # Array/string edits change the serialized payload size. Ask the existing
+            # structured-file writer to recompute lengths rather than retaining the
+            # original upper bound and corrupting the following chunk.
+            for node in variant.findall('./chunks/chunk'):
+                node.set('length', '0')
             xml = directory / (tag + '.zip.xml')
             variant.write(xml,encoding='unicode',xml_declaration=True)
             shutil.copyfile(str(original)[:-4],str(xml)[:-4])

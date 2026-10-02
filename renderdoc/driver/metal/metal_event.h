@@ -16,6 +16,7 @@ public:
   bool IsSharedEvent() const { return m_IsSharedEvent; }
   void SetAliasSource(WrappedMTLEvent *source) { m_AliasSource = source; }
   WrappedMTLEvent *AliasRoot() { return m_AliasSource ? m_AliasSource->AliasRoot() : this; }
+  uint64_t GetInitialHostValue() const { return m_InitialHostValue; }
   uint64_t lastSignal = 0;
 private:
   bool m_IsSharedEvent = false;

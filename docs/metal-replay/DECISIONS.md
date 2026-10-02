@@ -1,5 +1,76 @@
 # Metal Replay 决策记录
 
+## D057：描述符生命周期沿用明确shadow元数据，UE私有执行点用隔离模块
+
+- 2026-10-01，先对照D3D12 CopyDescriptors/GetRefIDs与Vulkan DescriptorSetSlot；
+  裸内存旧非零值不能证明槽位活跃，记录allocator generation与真正deferred free。
+- B332仅重编码producer声明的compute inline VA字段，普通常量保留；小GPU/seek
+  与56负例通过。B333 slot记录仅作CPU诊断，缺完整契约时GPU前拒绝，不加coverage。
+- 官方局部源码核对后直接隔离编译MetalRHI，保持类布局/98导出，进程级加载副本。
+  UBT WriteOutdatedActions会先删除产物，禁止再用于安装Engine只读探测；事故123库
+  已按官方manifest恢复复核。持续真实UE目标active。见BATCH332/BATCH333。
+
+## D056：帧内descriptor资源先验证出生时序，再复用原有完成/重建边界
+
+- 2026-10-01，采用v3受限compute契约。CPU preflight只登记已发生创建的候选，
+  不创建未来native资源；唯一VA range/ID明确重编码。非法late update也先拒绝。
+- 回跳仍等GPU完成，先释放view再parent，保留wrapper identity并按事件重建。
+  Shared/Private与buffer-backed view实际GPU/seek、48负例通过。见BATCH331。
+- v3不是UE完整coverage：仍缺有效slots/临时slice/inline来源/render与alias，
+  不给primary插件添加未经证明的coverage声明。完整UE仍拒绝。
+
+## D055：捕获 thumbnail 持有被选中的 drawable acquisition 至完成后
+
+- 2026-09-30，采用。UE真实thumbnail copy应用崩溃表明completed command buffer
+  保留不足以证明drawable/surface存活。recording持有native drawable/texture/proxy；
+  selected backbuffer原子发布，结束/丢弃后平衡释放。提交后不额外持有非selected
+  drawable acquisition，避免CAMetalLayer pool耗尽。六次present+autorelease测试通过。
+- 保留原有GPU完成等待；成功捕获不代表UE replay通过。见BATCH329。
+
+## D054：GPU写入表必须具有显式CPU写入来源
+
+- 2026-09-30，采用v2小用例契约。GPU目的表禁止自动Shared diff；CPU完整entry
+  annotation按执行点记录，仅更新该范围，防止捕获GPU结果或抹掉其它GPU写入。
+- coverage声明是应用完整schema/来源承诺，UEprimary布局插件不能作此声明。
+  GPU copy+CPU entry真实输出41/121/160与seek通过。见BATCH328。
+
+## D053：descriptor relocation 仅针对明确typed字段
+
+- 2026-09-30，采用受限小用例。资源身份/range+offset重编码，普通常量不扫描；
+  初始与全部CPU写入先验证，再执行GPU帧。缺项/歧义和未支持执行路径提前拒绝。
+- v1/v2实际replay已实现，覆盖小compute帧；UE帧内身份/临时布局/有效槽位与render
+  尚未支持，不删D051守卫求打开。见BATCH328–329。
+
+## D052：raw GPU身份查询形成保守live资源capture依赖
+
+- 日期：2026-09-30；状态：捕获遗漏修复采用，replay族仍未完成。
+- useHeap只声明驻留，sampler没有heap；编码器显式setter列表不足以表达raw
+  descriptor依赖。对照D3D12 RefBuffers，在capture开始保守引用查询过GPU
+  身份的live资源；在active capture中缓存getter仍须标记引用，只去重chunk。
+- 通过资源管理器锁内live map遍历，不保留所有历史对象，不额外retain native
+  资源，不把已销毁对象写进本次capture；可能增加实际未使用live资源的捕获量。
+- 原生间接/useHeap小夹具证实旧文件丢掉全部三类资源，而修复后两次capture
+  保留。UE自动重截sampler表全部有候选；同ID+相同描述符可记录为等价别名，
+  但不得随意选择不一致资源或把未知/stale槽置零求打开。
+- 不改变D051的GPU前拒绝。typed schema、临时payload与GPU/CPU更新执行点
+  必须真实实现；原生跨进程122证明仅是算法验证。见BATCH327。
+
+## D051：原生GPU身份先捕获诊断，未重定位前拒绝整帧GPU执行
+
+- 日期：2026-09-30；状态：采用诊断边界，完整replay未实现。
+- 新UE帧确实保留Shader Converter原进程VA/texture ID，但旧格式缺身份映射。
+  对照D3D12地址range tracker和UE三字段descriptor，记录应用首次查询的
+  buffer VA、texture/sampler ID及资源身份；追加chunk1397，不改变旧字段。
+- metadata保存在资源record，活跃捕获另存frame stream，原子去重并验证
+  跨capture持久性。新帧必须先CPU核对mapping覆盖与歧义；不扫描任意64-bit
+  内容并盲目替换，也不把getter查询当已实现descriptor解析。
+- 在整个stream预扫描发现该族时，于资源分配/initial GPU upload/frame
+  commit前拒绝；即使只是无实际解引用的查询也会保守拒绝。CPU structured
+  export持续可用。旧帧没有metadata，不能把没有marker当安全证明。
+- 后续完整族需要识别表类型、offset/typed views/samplers与帧内GPU更新/
+  拷贝的执行点语义。新库重截只获取必要数据；小诊断原生通过不等于UE
+  replay或人工UI通过。验证与当前阻塞见BATCH326。
+
 ## D001：固定在 RenderDoc v1.46 上开发
 
 - 日期：2026-09-20

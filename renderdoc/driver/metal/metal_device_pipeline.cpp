@@ -50,11 +50,6 @@ bool ValidIntersectionLinks(const RDMTL::LinkedFunctions &links)
   return true;
 }
 
-bool ValidFunction(WrappedMTLFunction *function, MTL::FunctionType type)
-{
-  return function && function->m_Type == eResFunction && function->m_Real &&
-         Unwrap(function)->functionType() == type;
-}
 
 bool ValidBuffers(const rdcarray<RDMTL::PipelineBufferDescriptor> &buffers)
 {
@@ -76,6 +71,13 @@ bool ValidPreloadedLibraries(const rdcarray<WrappedMTLDynamicLibrary *> &librari
 }
 }
 
+bool ValidateMetalPipelineFunction(WrappedMTLFunction *function, MTL::FunctionType type)
+{
+  return function && function->m_Type == eResFunction && function->m_Real &&
+         Unwrap(function)->functionType() == type;
+}
+
+
 template <typename SerialiserType>
 bool WrappedMTLDevice::Serialise_newRenderPipelineStateWithDescriptorOptions(
     SerialiserType &ser, WrappedMTLRenderPipelineState *pipeline,
@@ -92,9 +94,9 @@ bool WrappedMTLDevice::Serialise_newRenderPipelineStateWithDescriptorOptions(
     if(!supported || !ValidOptions((MTL::PipelineOption)optionsValue) ||
        RenderPipelineState == ResourceId() ||
        GetResourceManager()->HasResource(RenderPipelineState) ||
-       !ValidFunction(descriptor.vertexFunction, MTL::FunctionTypeVertex) ||
+       !ValidateMetalPipelineFunction(descriptor.vertexFunction, MTL::FunctionTypeVertex) ||
        (descriptor.fragmentFunction &&
-        !ValidFunction(descriptor.fragmentFunction, MTL::FunctionTypeFragment)) ||
+        !ValidateMetalPipelineFunction(descriptor.fragmentFunction, MTL::FunctionTypeFragment)) ||
        !ValidVisibleLinks(descriptor.vertexLinkedFunctions) ||
        !ValidVisibleLinks(descriptor.fragmentLinkedFunctions) ||
        !ValidBuffers(descriptor.vertexBuffers) || !ValidBuffers(descriptor.fragmentBuffers) ||
@@ -296,7 +298,7 @@ bool WrappedMTLDevice::Serialise_newComputePipelineStateWithDescriptor(
     if(!supported || !ValidOptions((MTL::PipelineOption)optionsValue) ||
        ComputePipelineState == ResourceId() ||
        GetResourceManager()->HasResource(ComputePipelineState) ||
-       !ValidFunction(descriptor.computeFunction, MTL::FunctionTypeKernel) ||
+       !ValidateMetalPipelineFunction(descriptor.computeFunction, MTL::FunctionTypeKernel) ||
        !ValidIntersectionLinks(descriptor.linkedFunctions) || !ValidBuffers(descriptor.buffers) ||
        !ValidPreloadedLibraries(descriptor.preloadedLibraries) ||
        !ValidArchives(descriptor.binaryArchives) ||

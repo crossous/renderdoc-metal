@@ -43,6 +43,9 @@ public:
   WrappedMTLCommandBuffer *GetCommandBuffer() const { return m_CommandBuffer; }
   void SetParallelParent(WrappedMTLParallelRenderCommandEncoder *parent) { m_ParallelParent = parent; }
   WrappedMTLParallelRenderCommandEncoder *GetParallelParent() const { return m_ParallelParent; }
+  void MarkCaptureWritesDeclared() { m_CaptureWritesDeclared=true; }
+  void CaptureIndirectWrite(WrappedMTLResource *resource);
+  void CaptureIndirectArguments(WrappedMTLBuffer *buffer, uint64_t offset, uint32_t wordCount);
   void MarkGPUWork() { m_HasGPUWork = true; }
   bool HasGPUWork() const { return m_HasGPUWork; }
   void SetDeferredStoreActions(uint16_t mask) { m_DeferredStoreActions = mask; }
@@ -387,6 +390,8 @@ public:
   };
 
 private:
+  bool m_CaptureWritesDeclared=false;
+  uint32_t m_CaptureIndirectOrdinal=0;
   WrappedMTLCommandBuffer *m_CommandBuffer;
   WrappedMTLParallelRenderCommandEncoder *m_ParallelParent = NULL;
   bool m_HasGPUWork = false;

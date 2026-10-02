@@ -1,0 +1,12 @@
+# B432：完成 UE 全帧预检后逐步执行 Native 工作
+
+5366f35c 的 ef026832 pre-submit coverage65 完整通过，forced exit证明未上传GPU初始内容或提交原帧命令。该精确冻结库全量308captures/7786malformed/3080lifecycleopens通过，resident增长9551872B，start/endhash一致。同步GitHub完成：远端默认分支、HEAD、FETCH_HEAD仍c4be68bb7fce662e4dd8498408981fa2e824c3b6；已有改动未丢弃，无提交推送。
+
+新增互斥诊断选项，不改变RDC或正常打开默认路径：
+
+- RENDERDOC_METAL_INITIAL_UPLOAD_COVERAGE=65：完整ScanDescriptorMetadata、Native背景对象/PSO加载、PrepareDescriptorTables、ValidateDescriptorFrame之后，沿用正常initial CPU/Private buffer/texture/view恢复路径；强制API失败退出于原Frame ContextReplayLog之前。
+- RENDERDOC_METAL_FRAME_PREFIX_COVERAGE=65 + RENDERDOC_METAL_FRAME_PREFIX_COMMITS=N：同样全帧预检；CPU扫描第N个原commit边界，必须没有另一个已编码/已预留却未提交的CB；满足后才initialupload及原ContextReplayLog前缀。Native完成和间接参数执行点解析后强制退出，不返回伪造的完整IReplayController。
+
+原始命令、Native buffers、CPU snapshot ownership、wait、queue order不变。实际UE75commits：1/2/3/4为可完整结束的纯buffer-copy边界；5仍有未提交工作，在GPU上传前拒绝。后续可完整结束的边界从36开始。CPU审计文件ue-acquired-drawable-submission-work.json。
+
+59d97cf09846785dd28c7014ee786097be74275281c003e460af91c4aa78b75a、metal-bounded-diagnostics.jWUQgc：3个Native positive(initial-only/1commit/2commit完整保留队列预留)及19个互斥flag/范围/缺边界/未完成边界GPU前反例通过，所有正例都必须forced exit。实际UE initial-only正在执行；无UE完整帧验收。

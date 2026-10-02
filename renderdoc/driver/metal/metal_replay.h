@@ -26,6 +26,7 @@
 
 #include "replay/replay_driver.h"
 #include "metal_common.h"
+#include "metal_render_indirect_readback.h"
 
 class WrappedMTLDevice;
 
@@ -52,6 +53,12 @@ public:
   void AddBuffer(ResourceId id, uint64_t length);
   void AddTexture(ResourceId id, MTL::Texture *texture, bool swapBuffer);
   void RegisterTextureViewSource(ResourceId id);
+  void RegisterBufferTextureSource(ResourceId view, ResourceId buffer) { m_BufferTextureSources[view] = buffer; }
+  ResourceId GetBufferTextureSource(ResourceId view) const
+  {
+    auto parent = m_BufferTextureSources.find(view);
+    return parent == m_BufferTextureSources.end() ? ResourceId() : parent->second;
+  }
   bool SnapshotTextureViewSources();
   bool ResetTextureViewSources();
   void AddShaderLibrary(ResourceId id, const rdcstr &source);
@@ -74,6 +81,7 @@ public:
     MetalPipe::State pipeline;
     RDMTL::RenderPassDescriptor renderPass;
     std::map<uint32_t, uint64_t> computeInlineBytes, computeThreadgroupMemory;
+    std::map<uint32_t, rdcarray<byte>> computeInlineData;
     std::map<uint32_t, rdcpair<float, float>> samplerLOD;
     rdcarray<uint32_t> vertexAttributeStrides;
   };
@@ -85,9 +93,21 @@ public:
   void SetComputeTexture(uint32_t index, ResourceId id);
   void BindComputeSampler(uint32_t index, ResourceId id);
   bool ValidateComputeBufferBindings(bool allowMissingBufferReflection = false) const;
+  bool ValidateComputeBufferSnapshot(ResourceId pipeline,
+      const std::map<uint32_t, MetalPipe::BufferBinding> &buffers,
+      const std::map<uint32_t, uint64_t> &bytes) const;
+  bool ValidateGraphicsTargets(ResourceId pipeline, const std::map<uint32_t, MTL::PixelFormat> &targets, uint32_t maxTargets = 2,
+      MTL::PixelFormat depth = MTL::PixelFormatInvalid,
+      MTL::PixelFormat stencil = MTL::PixelFormatInvalid, bool allowAttachmentless = false) const;
+  bool ValidateGraphicsBufferSnapshot(ResourceId pipeline, uint32_t stage,
+      const std::map<uint32_t, MetalPipe::BufferBinding> &buffers,
+      const std::map<uint32_t, uint64_t> &bytes, bool allowAbsentFragment = false) const;
   bool ValidateComputeThreadgroup(const MTL::Size &threads, const MTL::Size *grid = NULL) const;
+  bool ValidateComputeThreadgroupSnapshot(ResourceId pipeline, const MTL::Size &threads,
+      const std::map<uint32_t, uint64_t> &memory, const MTL::Size *grid = NULL) const;
   void SetComputeThreadgroupMemory(uint32_t index, uint64_t length);
-  void BindComputeBytes(uint32_t index, uint64_t length);
+  void BindComputeBytes(uint32_t index, const rdcarray<byte> &data);
+  void BindGraphicsBytes(uint32_t stage, uint32_t index, uint64_t length);
   bool SetComputeBufferOffset(uint32_t index, uint64_t offset);
   void SetSamplerLOD(ShaderStage stage, uint32_t index, float minimum, float maximum);
   ResourceId GetComputeTexture(uint32_t index) const;
@@ -97,6 +117,11 @@ public:
   MetalPipe::BufferBinding GetComputeBufferForAccess(bool write) const;
   void AddDepthStencilState(ResourceId id, const RDMTL::DepthStencilDescriptor &descriptor);
   void AddSamplerState(ResourceId id, const RDMTL::SamplerDescriptor &descriptor);
+  bool SupportsSamplerArgumentBuffers(ResourceId id) const
+  {
+    auto state = m_SamplerStates.find(id);
+    return state != m_SamplerStates.end() && state->second.supportArgumentBuffers;
+  }
   void BeginRenderPass(const RDMTL::RenderPassDescriptor &descriptor);
   const RDMTL::RenderPassDescriptor &GetRenderPassDescriptor() const
   {
@@ -132,6 +157,8 @@ public:
   rdcarray<ResourceId> GetArgumentBuffers() const;
   bool RestoreArgumentBufferResources(ResourceId id);
   bool ValidateArgumentBufferBindings() const;
+  bool IsComputeBufferReadOnly(ResourceId pipeline, uint32_t slot) const;
+  bool IsComputeBufferActive(ResourceId pipeline, uint32_t slot) const;
   void BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType indexType,
                        uint64_t indexCount = 0);
   void SetIndirectBuffer(ResourceId id, uint64_t offset, uint64_t size);
@@ -180,10 +207,21 @@ public:
   uint32_t GetNextEventID() const { return m_NextEventID; }
   void AddAction(const ActionDescription &action);
   void AddDebugGroup(const NS::String *label, ActionFlags flag);
-  void RegisterComputeIndirectAction(uint32_t eventId, ResourceId buffer, uint64_t offset);
+  bool RegisterComputeIndirectAction(uint32_t eventId, ResourceId buffer, uint64_t offset,
+                                     MTL::ComputeCommandEncoder *encoder,
+                                     ResourceId encoderID = ResourceId());
+  bool TraceComputeArgumentProducers(uint32_t eventId, ResourceId command,
+                                    MTL::ComputeCommandEncoder *encoder);
   bool HasPendingComputeIndirectActions() const { return !m_PendingComputeIndirectActions.empty(); }
   bool HasPendingComputeIndirectActionFor(ResourceId id) const;
-  void ResolvePendingComputeIndirectActions();
+  bool ResolvePendingComputeIndirectActions();
+  bool RegisterRenderIndirectAction(uint32_t eventId, WrappedMTLRenderCommandEncoder *encoder,
+                                    ResourceId buffer, uint64_t offset, uint32_t wordCount,
+                                    uint32_t *arguments = NULL);
+  void NoteRenderIndirectWrite(ResourceId pass, WrappedMTLResource *resource);
+  bool FlushRenderIndirectActions(ResourceId pass, MTL::CommandBuffer *command);
+  bool HasPendingRenderIndirectActions() const { return !m_PendingRenderIndirectActions.empty(); }
+  bool ResolvePendingRenderIndirectActions();
   void BeginMultiAction(uint32_t childCount);
   uint32_t GetMultiActionEndEvent(uint32_t eventId) const;
   void AddUsage(ResourceId id, ResourceUsage usage);
@@ -333,7 +371,7 @@ private:
 
   bool InitialiseOutputResources();
   bool ResizeOutputWindow(OutputWindow &output, int32_t width, int32_t height);
-  bool ReadTextureSubresource(MTL::Texture *texture, const Subresource &sub, bytebuf &data);
+  bool ReadTextureSubresource(MTL::Texture *texture, const Subresource &sub, bytebuf &data, ResourceId id);
   bool RenderTextureInternal(MTL::Texture *source, MTL::Texture *target, TextureDisplay cfg,
                              MTL::LoadAction loadAction, MTL::ClearColor clearColor);
   void AddShaderBindings(ResourceId shader, NS::Array *arguments);
@@ -348,8 +386,26 @@ private:
     uint32_t eventId;
     ResourceId buffer;
     uint64_t offset;
+    MTL::Buffer *snapshot;
+    bool diagnostic = false;
+    ResourceId pipeline;
+    rdcarray<uint32_t> expected;
   };
+  MTL::ComputePipelineState *m_IndirectReadbackPipeline = NULL;
+  void ClearPendingComputeIndirectActions();
   rdcarray<PendingComputeIndirectAction> m_PendingComputeIndirectActions;
+  std::map<ResourceId,uint32_t> m_LoadComputeIndirectOrdinals;
+  struct PendingRenderIndirectAction
+  {
+    uint32_t eventId=0,wordCount=0;
+    ResourceId pass;
+    uint64_t offset=0;
+    rdcarray<uint32_t> expected;
+    MetalIndirectReadback readback;
+  };
+  rdcarray<PendingRenderIndirectAction> m_PendingRenderIndirectActions;
+  std::map<ResourceId,uint32_t> m_LoadRenderIndirectOrdinals;
+  std::map<ResourceId,rdcarray<MetalIndirectWriteFootprint>> m_RenderIndirectWrites;
   rdcarray<APIEvent> m_PendingEvents;
   rdcarray<APIEvent> m_Events;
   std::map<ResourceId, rdcarray<EventUsage>> m_ResourceUses;
@@ -368,8 +424,10 @@ private:
   {
     rdcarray<bytebuf> sharedData;
     MTL::Texture *privateCopy = NULL;
+    bool capturedParent = false;
   };
   std::map<ResourceId, TextureViewSourceInitial> m_TextureViewSourceInitial;
+  std::map<ResourceId, ResourceId> m_BufferTextureSources;
   std::map<ResourceId, rdcstr> m_LibrarySources;
   std::map<ResourceId, ShaderReflection> m_Shaders;
 
@@ -389,14 +447,20 @@ private:
     ResourceId fragmentFunction;
     RDMTL::VertexDescriptor vertexDescriptor;
     uint32_t sampleCount = 1;
+    bool rasterizationEnabled = true;
     bool alphaToCoverageEnabled = false;
     bool alphaToOneEnabled = false;
     rdcarray<RDMTL::RenderPipelineColorAttachmentDescriptor> colorAttachments;
+    MTL::PixelFormat depthAttachmentPixelFormat = MTL::PixelFormatInvalid;
+    MTL::PixelFormat stencilAttachmentPixelFormat = MTL::PixelFormatInvalid;
   };
   std::map<ResourceId, RenderPipelineInfo> m_RenderPipelines;
+  std::map<ResourceId, std::map<uint32_t, rdcpair<uint64_t, uint64_t>>> m_ShaderBufferMinimums;
+  std::map<ResourceId, bool> m_ShaderIndirectReadOnly;
   std::map<ResourceId, ResourceId> m_TilePipelines;
   std::map<ResourceId, ResourceId> m_MeshPipelines;
   std::map<ResourceId, ResourceId> m_ComputePipelines;
+  std::map<ResourceId, std::set<uint32_t>> m_ComputeReadOnlyBuffers;
   std::map<ResourceId, std::map<uint32_t, rdcpair<uint64_t, uint64_t>>> m_ComputeBufferMinimums;
   std::map<ResourceId, rdcarray<uint32_t>> m_ComputeRequiredTextures, m_ComputeRequiredSamplers;
   std::map<ResourceId, std::map<uint32_t, uint64_t>> m_ComputeThreadgroupMinimums;
@@ -404,6 +468,7 @@ private:
   std::map<ResourceId, rdcpair<uint64_t, uint64_t>> m_ComputeThreadgroupLimits;
   std::map<ResourceId, uint64_t> m_ComputeThreadExecutionMultiples;
   std::map<uint32_t, uint64_t> m_CurrentComputeInlineBytes, m_CurrentComputeThreadgroupMemory;
+  std::map<uint32_t, rdcarray<byte>> m_CurrentComputeInlineData;
   std::map<ResourceId, RDMTL::DepthStencilDescriptor> m_DepthStencilStates;
   std::map<ResourceId, RDMTL::SamplerDescriptor> m_SamplerStates;
   struct ArgumentPacket

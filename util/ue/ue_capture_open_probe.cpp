@@ -19,7 +19,8 @@ int main(int argc, char **argv)
   ResultDetails result = file->OpenFile(argv[1], "rdc", NULL);
   if(!result.OK())
   {
-    fprintf(stderr, "OpenFile failed\n");
+    fprintf(stderr, "OpenFile failed (code=%u): %s\n", (uint32_t)result.code,
+            result.internal_msg ? result.internal_msg->c_str() : "no detail");
     file->Shutdown();
     RENDERDOC_ShutdownReplay();
     return 3;
@@ -33,7 +34,8 @@ int main(int argc, char **argv)
   file->Shutdown();
   if(!result.OK() || controller == NULL)
   {
-    fprintf(stderr, "OpenCapture failed\n");
+    fprintf(stderr, "OpenCapture failed (code=%u): %s\n", (uint32_t)result.code,
+            result.internal_msg ? result.internal_msg->c_str() : "no detail");
     RENDERDOC_ShutdownReplay();
     return 4;
   }

@@ -69,6 +69,53 @@ static bool ValidCPUTextureRead(WrappedMTLTexture *texture, const MTL::Region &r
   return true;
 }
 
+// Like Vulkan/D3D12 staging footprints, count block rows and the last occupied byte,
+// rather than reading padding after the final row. This also includes every 3D image.
+static bool CPUTextureUploadSpan(WrappedMTLTexture *texture, const MTL::Region &region,
+                                 uint64_t level, uint64_t slice, uint64_t rowPitch,
+                                 uint64_t imagePitch, uint64_t &span)
+{
+  span = 0;
+  if(!texture || texture->m_Type != eResTexture || !Unwrap(texture))
+    return false;
+  MTL::Texture *real = Unwrap(texture);
+  if(level >= real->mipmapLevelCount() || level >= 64 || real->sampleCount() != 1 ||
+     real->framebufferOnly() || (real->storageMode() != MTL::StorageModeShared &&
+                                 real->storageMode() != MTL::StorageModeManaged))
+    return false;
+  uint64_t slices = RDCMAX(1ULL, uint64_t(real->arrayLength()));
+  if(real->textureType() == MTL::TextureTypeCube || real->textureType() == MTL::TextureTypeCubeArray)
+    slices *= 6;
+  const uint64_t width = RDCMAX(1ULL, uint64_t(real->width()) >> level);
+  const uint64_t height = RDCMAX(1ULL, uint64_t(real->height()) >> level);
+  const uint64_t depth = RDCMAX(1ULL, uint64_t(real->depth()) >> level);
+  const MTL::Origin &o = region.origin;
+  const MTL::Size &s = region.size;
+  if(slice >= slices || !s.width || !s.height || !s.depth || o.x > width ||
+     s.width > width - o.x || o.y > height || s.height > height - o.y || o.z > depth ||
+     s.depth > depth - o.z)
+    return false;
+  uint32_t bw = 0, bh = 0, blockBytes = 0;
+  if(!GetTextureBlockShape(real->pixelFormat(), bw, bh, blockBytes) || o.x % bw || o.y % bh ||
+     (s.width % bw && o.x + s.width != width) ||
+     (s.height % bh && o.y + s.height != height))
+    return false;
+  const uint64_t columns = (s.width + bw - 1) / bw;
+  const uint64_t rows = (s.height + bh - 1) / bh;
+  if(columns > UINT64_MAX / blockBytes || !rowPitch || rowPitch % blockBytes ||
+     rowPitch < columns * blockBytes || rows - 1 > (UINT64_MAX - columns * blockBytes) / rowPitch)
+    return false;
+  span = (rows - 1) * rowPitch + columns * blockBytes;
+  if(s.depth > 1)
+  {
+    if(!imagePitch || imagePitch % rowPitch || rows > imagePitch / rowPitch ||
+       s.depth - 1 > (UINT64_MAX - span) / imagePitch)
+      return false;
+    span += (s.depth - 1) * imagePitch;
+  }
+  return span <= SIZE_MAX;
+}
+
 WrappedMTLTexture::WrappedMTLTexture(MTL::Texture *realMTLTexture, ResourceId objId,
                                      WrappedMTLDevice *wrappedMTLDevice)
     : WrappedMTLObject(realMTLTexture, objId, wrappedMTLDevice, wrappedMTLDevice->GetStateRef())
@@ -91,13 +138,18 @@ bool WrappedMTLTexture::Serialise_makeAliasable(SerialiserType &ser)
       return false;
     }
     Unwrap(Texture)->makeAliasable();
+    m_Device->RecordReplayAliasable(GetResID(Texture));
   }
   return true;
 }
 
 void WrappedMTLTexture::makeAliasable()
 {
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  SCOPED_LOCK(m_Device->GetCaptureSubmissionLock());
   SERIALISE_TIME_CALL(Unwrap(this)->makeAliasable());
+  if(IsCaptureMode(m_State)) Atomic::CmpExch32(&m_CapturedAliasable, 0, 1);
+  if(IsCaptureMode(m_State)) GetResourceManager()->MarkCapturedTextureViewsRetired(this);
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();
@@ -242,7 +294,9 @@ static bool ValidTextureView(MTL::Texture *source, MTL::PixelFormat format,
           availableSlices = source->arrayLength();
         break;
       case MTL::TextureTypeCube:
-        if(type == MTL::TextureType2DArray) availableSlices = 6;
+        if(type == MTL::TextureType2DArray ||
+           (type == MTL::TextureTypeCube && slices.location == 0 && slices.length == 6))
+          availableSlices = 6;
         break;
       default: break;
     }
@@ -298,7 +352,10 @@ bool WrappedMTLTexture::Serialise_newTextureView(SerialiserType &ser, WrappedMTL
   if(IsReplayingAndReading())
   {
     if(!Source || Source->m_Type != eResTexture || !Source->m_Real ||
-       View == ResourceId() || GetResourceManager()->HasResource(View) ||
+       View == ResourceId() ||
+       (GetResourceManager()->HasResource(View) &&
+        !(IsActiveReplaying(m_State) && m_Device->IsFrameBufferTextureView(View) &&
+          !GetResourceManager()->GetResource(View)->m_Real)) ||
        !ValidTextureView(Unwrap(Source), format, type, levels, slices, swizzle, variant))
     {
       RDCERR("Invalid or unsupported Metal texture view source, format or subresource range");
@@ -323,12 +380,23 @@ bool WrappedMTLTexture::Serialise_newTextureView(SerialiserType &ser, WrappedMTL
       RDCERR("Metal failed to create texture view from captured parameters");
       return false;
     }
-    WrappedMTLTexture *wrapped = NULL;
-    GetResourceManager()->WrapResource(View, real, wrapped, true);
-    m_Device->AddResource(View, ResourceType::Texture, "Texture View");
-    m_Device->GetReplay()->AddTexture(View, real, false);
-    m_Device->GetReplay()->RegisterTextureViewSource(GetResID(Source));
-    m_Device->DerivedResource(Source, View);
+    const bool frameView = m_Device->GetReplayEpoch() != 0 &&
+        m_Device->IsFramePlacementResource(GetResID(Source));
+    if(frameView && IsLoading(m_State))
+      m_Device->RegisterFrameBufferTextureView(View);
+    if(frameView && IsActiveReplaying(m_State))
+      GetResourceManager()->ReplaceRealResource(GetResourceManager()->GetResource(View), real, true);
+    else
+    {
+      WrappedMTLTexture *wrapped = NULL;
+      GetResourceManager()->WrapResource(View, real, wrapped, true);
+      m_Device->AddResource(View, ResourceType::Texture, "Texture View");
+      m_Device->GetReplay()->AddTexture(View, real, false);
+      // Frame parents are recreated before their writes; they have no frame-start contents.
+      if(!frameView) m_Device->GetReplay()->RegisterTextureViewSource(GetResID(Source));
+      m_Device->RegisterReplayTextureViewParent(View, GetResID(Source));
+      m_Device->DerivedResource(Source, View);
+    }
   }
   return true;
 }
@@ -339,6 +407,7 @@ WrappedMTLTexture *WrappedMTLTexture::newTextureView(MTL::PixelFormat format,
                                                      MTL::TextureSwizzleChannels swizzle,
                                                      uint32_t variant)
 {
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
   MTL::Texture *real = NULL;
   if(variant == 0)
   {
@@ -366,7 +435,14 @@ WrappedMTLTexture *WrappedMTLTexture::newTextureView(MTL::PixelFormat format,
     Serialise_newTextureView(ser, wrapped, format, type, levels, slices, swizzle, variant);
     MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
     record->AddParent(GetRecord(this));
-    record->AddChunk(scope.Get());
+    Chunk *creation = scope.Get();
+    record->AddChunk(creation);
+    if(IsActiveCapturing(m_State) && m_Device->IsCapturedFrameResource(GetResID(this)))
+    {
+      m_Device->AddFrameCaptureRecordChunk(creation->Duplicate());
+      m_Device->RegisterCapturedFrameResource(GetResID(wrapped));
+      GetResourceManager()->MarkResourceFrameReferenced(GetResID(this), eFrameRef_Read);
+    }
   }
   return wrapped;
 }
@@ -450,10 +526,11 @@ bool WrappedMTLTexture::Serialise_replaceRegion(SerialiserType &ser, MTL::Region
   SERIALISE_ELEMENT(bytesPerRow).Important();
 
   bytebuf contents;
-  if(ser.IsWriting() && pixelBytes && bytesPerRow > 0 && region.size.height > 0)
+  uint64_t span = 0;
+  if(ser.IsWriting() && pixelBytes && region.size.depth == 1 &&
+     CPUTextureUploadSpan(this, region, level, 0, bytesPerRow, 0, span))
   {
-    const size_t dataSize = size_t(bytesPerRow) * size_t(region.size.height);
-    contents.assign((const byte *)pixelBytes, dataSize);
+    contents.assign((const byte *)pixelBytes, size_t(span));
   }
   SERIALISE_ELEMENT(contents).Important();
 
@@ -461,6 +538,13 @@ bool WrappedMTLTexture::Serialise_replaceRegion(SerialiserType &ser, MTL::Region
 
   if(IsReplayingAndReading())
   {
+    if(region.size.depth != 1 ||
+       !CPUTextureUploadSpan(Texture, region, level, 0, bytesPerRow, 0, span) ||
+       contents.size() < span)
+    {
+      RDCERR("Invalid Metal CPU texture upload storage, region, pitch or payload");
+      return false;
+    }
     Unwrap(Texture)->replaceRegion(region, level, contents.data(), bytesPerRow);
   }
 
@@ -508,11 +592,11 @@ bool WrappedMTLTexture::Serialise_replaceRegion(SerialiserType &ser, MTL::Region
   SERIALISE_ELEMENT(bytesPerImage).Important();
 
   bytebuf contents;
-  if(ser.IsWriting() && pixelBytes && bytesPerRow > 0 && region.size.height > 0)
+  uint64_t span = 0;
+  if(ser.IsWriting() && pixelBytes &&
+     CPUTextureUploadSpan(this, region, level, slice, bytesPerRow, bytesPerImage, span))
   {
-    const size_t dataSize =
-        bytesPerImage > 0 ? size_t(bytesPerImage) : size_t(bytesPerRow) * size_t(region.size.height);
-    contents.assign((const byte *)pixelBytes, dataSize);
+    contents.assign((const byte *)pixelBytes, size_t(span));
   }
   SERIALISE_ELEMENT(contents).Important();
 
@@ -520,6 +604,12 @@ bool WrappedMTLTexture::Serialise_replaceRegion(SerialiserType &ser, MTL::Region
 
   if(IsReplayingAndReading())
   {
+    if(!CPUTextureUploadSpan(Texture, region, level, slice, bytesPerRow, bytesPerImage, span) ||
+       contents.size() < span)
+    {
+      RDCERR("Invalid Metal CPU texture slice upload storage, region, pitch or payload");
+      return false;
+    }
     Unwrap(Texture)->replaceRegion(region, level, slice, contents.data(), bytesPerRow,
                                    bytesPerImage);
   }

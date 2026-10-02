@@ -1,0 +1,9 @@
+# B413：已查询的零活跃参数计算reflection
+
+真实UE dispatch encoder17658/pipeline4950被ValidateComputeBufferSnapshot拒绝，trace显示known0/textures0/samplers0；原Native query已成功，只因没有active buffer便从未建立m_ComputeBufferMinimums。
+
+AddComputePipeline只在reflection对象存在时创建已知empty buffer集合，沿用B405 empty fragment处理。reflection不存在仍unknown。IsComputeBufferReadOnly利用完整active binding集合将未使用的额外绑定判为无GPU写入；活跃UAV保持写入状态。
+
+78f8814b/metal-zero-argument-compute.TywIlh：6captures/24reset-seeks/108indirect+24fresh+24mixed API+CLI反例组通过。原Native空kernel多一次dispatch、额外Shared output绑定和sourced roots；API反射确认为零active资源，output保持first结果，后续原consumer/MRT/metadata正确。新增scope及reset均验证。此为通用reflection修复，不修改原PSO/Shader。
+
+真实UE越过第六次dispatch，下一拒绝blit debug marker。完整UE GPU/UI仍未验收，目标active，无提交推送。

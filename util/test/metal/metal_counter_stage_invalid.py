@@ -37,9 +37,9 @@ def main():
         ('create-set-name', 'create', 'counterSetName', 'not-timestamp'),
         ('create-count-zero', 'create', 'sampleCount', '0'),
         ('create-count-three', 'create', 'sampleCount', '3'),
-        ('create-count-over-limit', 'create', 'sampleCount', '65'),
+        ('create-count-over-limit', 'create', 'sampleCount', '4097'),
         ('create-storage-private', 'create', 'storageMode', '2'),
-        ('create-unsupported', 'create', 'supported', 'false'),
+        ('create-empty-set-name', 'create', 'counterSetName', ''),
         ('pass-sample-unknown', 'pass', 'descriptor.sampleBufferAttachments.0.sampleBuffer', '999999'),
         ('pass-sample-wrong-type', 'pass', 'descriptor.sampleBufferAttachments.0.sampleBuffer', '32'),
         ('pass-sample-id-zero', 'pass', 'descriptor.sampleBufferAttachments.0.sampleBufferId', '0'),
@@ -80,6 +80,21 @@ def main():
             message = run(command, 'replay', '--loops', '1', invalid, success=False)
             assert ('Failed to process Metal chunk' in message or
                     'Failed to replay Metal chunk' in message), (tag, message)
+        # The supported budget was extended to 4096 samples; 65 is now legal.
+        # The old capture-side support hint is informational: replay validates the
+        # actual descriptor and the replay device's native sampling capability.
+        for tag, field_name, value in [('count-65', 'sampleCount', '65'),
+                                       ('support-hint', 'supported', 'false')]:
+            variant = copy.deepcopy(tree)
+            creation = next(item for item in variant.findall('./chunks/chunk')
+                            if item.get('name') == names['create'])
+            child(creation, field_name).text = value
+            xml = directory / ('valid-' + tag + '.zip.xml')
+            variant.write(xml, encoding='unicode', xml_declaration=True)
+            shutil.copyfile(str(original)[:-4], str(xml)[:-4])
+            valid = directory / ('valid-' + tag + '.rdc')
+            run(command, 'convert', '-f', xml, '-o', valid, '-c', 'rdc')
+            run(command, 'replay', '--loops', '3', valid)
     print(f'Stage-boundary counter malformed captures rejected without crash: {len(cases)} cases')
 
 

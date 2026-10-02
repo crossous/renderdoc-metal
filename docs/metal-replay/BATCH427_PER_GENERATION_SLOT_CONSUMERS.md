@@ -1,0 +1,9 @@
+# B427：每一代 descriptor 槽位的 borrower
+
+真实UE buffer24/offset11448 old generation6469 在chunk38381退役。CB17883在38422之后绑定整张表并画105次，但此时此slot已dead；新generation6610在38563分配并38568写typed CPU value。整表resourceCommands包含未提交17883，不能代表已dead槽位的旧generation消费者。B425用整表committed条件过宽，错误地冻结了未被该CB借用的槽位。
+
+按D3D12/Vulkan logical descriptor shadow的entry identity维护slotConsumers[key]；noteResource仅将live/materialized entry记录到该generation，dead/empty slot不借用。严格匹配retired旧generation且该slot的旧消费者全部committed、无opaque GPU table writes时，在allocation成功后清旧borrowed/written/fresh/slotConsumers，Native CPUwrite仍经既有wait-before-restore。不是把整张bindless表的所有byte归为每个CB的读，也没有允许旧generation真实unsubmitted消费者。
+
+精确b70285fd2291c237636c1642b241e7ae062e1ce8a5e08666d4c6b513183ffe77、metal-dead-slot-table-borrow.0v8VfT：6captures/24seek；既有Native GPU producer/compute/MRT/resolve，retire slot0并提交第一CB。第二个未提交CB只绑定含dead slot0的表，原Nativezero-argshader执行；第三个新generation CPU write/source绑定、Nativeconsumer和pixels正确。先前NativeGPUdescriptorID保留，old consumers在第一CB提交后已完成，而第二CB没有借用dead entry。108 indirect+24fresh+24mixed+24retirement+30borrower/reuse API+CLI negativegroups=210，包含把free移到第二CB消费后（必须拒绝旧slot真实未提交borrow）和移除第二CBcommit（queue预约必须拒绝）。
+
+真实UE后续pre-submit进行中；d6c890d4冻结库的旧全量并行验证中。整帧GPU/UI未验收，无提交推送，持续目标active。

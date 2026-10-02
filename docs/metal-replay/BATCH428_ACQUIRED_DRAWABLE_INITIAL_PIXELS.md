@@ -1,0 +1,11 @@
+# B428：取得 current drawable 时保存 Native 初始像素
+
+实际UE current RGB10A2 drawable17898（486×118 Managed/Tracked）在frame38575首次Load。eb9386b7原截帧无对应initialpixels，不能仅允许source identity、伪造clear/zero或用帧末图像还原。需要捕获时保存取得drawable时的真实Native内容，并重新截帧。
+
+沿用RenderDoc通用initial-state机制（D3D12ResourceManager::Prepare_InitialState / ResourceManager::InsertInitialContentsChunks）。WrapDrawableTexture在active capture取得新的非framebufferOnly Private/Shared/Managed drawable后、返回应用前，调用既有Prepare_InitialState(texture)；已有Native GPU texture→staging readback、紧密rawbytes、SetInitialContents、序列化和replay upload共用，无新wire/APIchunk。取得drawable是前一presentation释放后的acquisition边界，此处尚未对它编码本帧应用操作。其他背景dirty初始内容仍在StartFrameCapture处理。失败只记录并保留缺失状态，不编造像素。
+
+coverage65 known nextDrawable显式ResourceId增加RGB10A2，仍2D≤2048/mip/sample/array/depth1/non-framebufferOnly。已有initial完整bytes的drawable可原NativeLoad；缺initial仍必须既有完整Clear-before-read规则。RGB10A2 Nativeformat未转为BGRA8、未替换Native颜色/Load。
+
+精确01db4c65f1e1a3f9a85493a3b089870e41b8a325b07818b716e61b5f2c1c0129、metal-drawable-load.jfuF7b：先在截帧外seed整个drawable pool非零(.25,.5,.75,1)，capture内取得fresh drawable、typedSRV binding、原NativeLoad及shader读取，无capture内Clear。TRACE_DRAWABLE_INITIAL证明两个当前drawable均在active capture取得并preserved=1。2captures/8resetseeks，所有4个packedRGB10A2像素、NativeGPU读sum638/DEADBEEF、EID0原initial完全一致；16 API+CLI initial缺失/重复/short/format/sourcekind/identity/legacy反例GPU前拒绝。原未知未seed池C5JFZu同样通过，但最终采用非零seed更强验证。
+
+准备以原isolated MetalRHI+当前库重新自动截UE，保留eb9386b7。UI现在可访问。d6c890d4冻结旧全量最后lifecycle阶段进行中；当前库最新全量待跑。实际UE整帧GPU/UI仍未验收，无提交推送，持续目标active。

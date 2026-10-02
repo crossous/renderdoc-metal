@@ -89,7 +89,8 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
        WrappedMTL##CPPTYPE::TypeEnum == eResIntersectionFunctionTable ||                       \
        WrappedMTL##CPPTYPE::TypeEnum == eResAccelerationStructure ||                            \
        WrappedMTL##CPPTYPE::TypeEnum == eResComputePipelineState ||                            \
-       WrappedMTL##CPPTYPE::TypeEnum == eResEvent)                                             \
+       WrappedMTL##CPPTYPE::TypeEnum == eResEvent ||                                            \
+       WrappedMTL##CPPTYPE::TypeEnum == eResCommandQueue)                                       \
     {                                                                                         \
       /* These new* objects transfer their native +1 to the independently owned proxy. */      \
       /* Do not leave a retaining association pointing at a proxy the app can release. */      \

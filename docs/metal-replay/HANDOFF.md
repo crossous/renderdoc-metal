@@ -1,5 +1,10 @@
 # Agent 交接规范
 
+2026-10-02 当前基线见 [UE replay checkpoint](CHECKPOINT_2026-10-02_UE_REPLAY.md)、
+[STATUS 顶部](STATUS.md)和[本机运行入口](../../util/ue/README.md)。用户已要求将
+B326–B439 当前改动提交并推送，随后提供画面差异继续改进；终端、真实UE和助手UI
+验证已有记录，用户最终画面验收仍待反馈。下方为早期交接历史。
+
 临时交给公司 Codex API 时，请先看[2026-09-28 交接单](COMPANY_CODEX_API_HANDOFF_2026-09-28.md)。
 当前接手请先看 [STATUS 顶部](STATUS.md)、[BATCH301](BATCH301.md)、
 [BATCH302](BATCH302.md)、[BATCH303](BATCH303.md)、[BATCH304](BATCH304.md)、

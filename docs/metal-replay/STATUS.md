@@ -1,4 +1,325 @@
+2026-10-02 [B438](BATCH438_INTERLEAVED_GPU_PRODUCER_OWNERSHIP.md)/[B439](BATCH439_RETIRED_PRIVATE_TEXTURE_BACKING.md)：当前 b814fdbb 已通过同一 UE faa8540e 的严格审计、正常 OpenCapture、整帧 EID9924 与反复 EID0 重置。三份原生900×640图像逐字节一致，重编码JPEG与原捕获缩略图逐字节一致；EID2017实际indirect为8,1,1，BasePass五MRT及两组64³体积MRT重复读回稳定。修复各自定向后立即返回同一UE，再进行一次当前库验收全量308/7786/3080，通过后再次返回同一UE通过。当前库 qrenderdoc 正常加载，实际第五MRT、体积Slice63及完整编辑器/天空/黄色平台观察通过，正常退出；这是助手UI操作记录，未声称用户人工验收或独立原始无损图像golden。校验归档763历史目标至外置CauseUseMac（12.22GiB逻辑数据），34原始项目截帧全部保留，清理后构建约3.2GiB，后续验收产物生成后约3.7GiB、可用约13GiB。无提交推送。当前使用入口及已验收副本见 [运行说明](../../util/ue/README.md)。
+
+2026-10-02 [B408](BATCH408_INITIAL_CPU_GPU_DESCRIPTOR_VALUES.md)候选61最终51c5a0a7定向6/24/108+21通过：完整CPU初始值证明、late/generation/source拒绝；commit消费闭包只在draw/dispatch验证，真实UE无GPU预检继续推进。已实现metadata-only/pre-submit两个强制退出入口，不修改实际RDC coverage；目标active，未提交推送。
+
+2026-10-02 [B426](BATCH426_DRAWABLE_CLEAR_BEFORE_SHADER_READ.md) 固定d6c890d4全量308/7786/3080通过、growth0B/hash一致；[B427](BATCH427_PER_GENERATION_SLOT_CONSUMERS.md) 6/24/210通过；[B428](BATCH428_ACQUIRED_DRAWABLE_INITIAL_PIXELS.md) 当前01db4c65、2/8/16通过，非零seedRGB10A2 acquired snapshot/NativeLoad/初始恢复验证。旧UE eb9386b7 缺currentLoad drawable初始像素不可伪造，已保留，正在自动重截；UI已可访问，整帧GPU/UI未验收，持续目标active，无提交推送。
+
+
+2026-10-02 [B422](BATCH422_LAYERED_FRAME_VOLUME_TARGETS.md) / [B423](BATCH423_LOGICAL_GPU_TABLE_RETIREMENT.md) / [B424](BATCH424_SOURCED_LINEAR_TEXTURE_UPLOADS.md)：3D layered MRT 2/8/20、logical GPU retirement 6/24/180（含later resolve Native bytes）、Shared staging→R8/BGRA8_sRGB 4/16/38 通过；实际UE已继续到帧后段，最新 cdf6b4fc pre-submit 进行中，整帧GPU/UI未验收。最近全量仍6e963f9a 308/7786/3080，最新库全量待跑。持续目标active，无提交推送。
+
+
+2026-10-02 [B406](BATCH406_REPLAY_ALLOCATION_BUDGET.md)6/24/110+15通过，真实UE candidate60 metadata/budget CPU-only通过；[B407](BATCH407_LARGE_BUFFER_TEXTURE.md)402984b1大TextureBuffer3cases/12reset-seeks/16API+CLI negatives通过。真实UE pre-submit已加载全部背景资源，停在frame DescriptorSlotEvent，未GPU上传/整帧回放；继续epoch/source定位，目标active。
+
+2026-10-02 B405最终2bcf9403精确全量308/7786/3080通过，growth9306112B且hash不变。预算候选coverage60/CPU-only元数据入口对象编译中，原真实UE文件不改coverage，不运行整帧GPU；目标active。
+
+2026-10-02 [B405](BATCH405_ATTACHMENTLESS_UAV_PLAN.md)v59最终2bcf9403定向6/42/252通过；B404、B403、B402、B401交叉通过，原生零附件UAV输出和fragment保留正确。精确组合全量进行中；实际UE34heap/initial CPU预算进一步量测，未授权整帧GPU/UI，持续目标active，无提交推送。
+
 # Metal Replay 当前状态
+
+2026-10-02 [B404](BATCH404_SOURCED_RENDER_INDIRECT_PLAN.md)v58 4c177a50定向22captures/88cycles/404API+CLI反例通过；zero/indexed/parallel/future MRT/D32S8和Native原参数、每像素正常。最近精确全量B403 a0f8b74a 308/7786/3080；新候选继续零附件UAV，不替UE整体coverage授权。目标active，UI未验收，无提交推送。
+
+2026-10-02 B403最终a0f8b74a精确全量308/7786/3080通过，growth6750208B，端点hash一致；render capture/loading定向8/56/248通过。B404 coverage58有界sourced render indirect已对象编译，开始22captures/88cycles微型GPU，不授权实际UE整帧。目标active，人工UI未验收，无提交推送。
+
+2026-10-02 [B403](BATCH403_RENDER_INDIRECT_PASS_END_PLAN.md)已完成render indirect逐使用capture/loading候选，Native pass-end机制复用Vulkan；八组合capture/replay与56 reset seeks/248异常组通过（b6356359），indexOffset保持原byte binding语义后重验。真实UE已自动重截eb9386b7：17render证据全部匹配、29280总work、11zero；31compute全部匹配、39616threads。隔离UE模块9d6349a6，无安装引擎改动；完整UE/UI仍未验收，持续目标active，无提交推送。
+
+2026-10-02 v57精确26a25b7f…组合全量308 captures/7786 malformed/3080 lifecycle通过，resident growth7520256B且库hash一致。B400同库跨8/56/176也通过；B401、B402定向见下。B403 Native pass-end blit组件build-only完成，准备串行8组合GPU；已确认UE所有UAV写声明及TextureBuffer parent路径，当前capture还未接通。实际UE/UI未验收，目标active，无提交推送。
+
+2026-10-02 [B400](BATCH400_CAPTURE_INDIRECT_ARGUMENTS_PLAN.md)7930a5b3定向8/56/176通过，真实重截1deff873的31次compute indirect证据全匹配（22零调用、39616总threads、最大22400）。[B401](BATCH401_SOURCED_DEPTH_ONLY.md)v56 e8f991a2定向14/56及depth-only seeks/80负例通过。[B402](BATCH402_SOURCED_COMPUTE_INDIRECT.md)v57 26a25b7f定向12captures/48cycles/150负例通过，包含Native1/2/0、Shared/Private参数及DS/MRT。当前库跨B400兼容验证后运行组合全量；实际UE还在CPU元数据拒绝，人工UI未验收，目标active，无提交推送。
+
+2026-10-02 B399精确f12b4ea6…全量308/7786/3080通过，growth1441792B且hash一致，定向18/72/354通过。正式B400 capture indirect候选已对象编译，准备8captures/56seeks/176反例；render indirect17次Native参数范围与全部显式write footprint（含TextureBuffer parent）无重叠，仍需shader/声明完整性检查。实际UE/UI未验收，目标active。
+
+2026-10-02 [B399](BATCH399_DEFERRED_SOURCED_STORE_ACTIONS.md)：v55精确f12b4ea6…18captures/72seeks/354反例通过，serial/parallel/5MRT/DS/future heap/counter所有partial/full pixels正确。全量准备中；B400独立Native捕获参数组件4组合通过1/3/2及unretained生命周期，待正式接入。整帧UE/UI未验收，目标active。
+
+2026-10-02 B398精确8b15aaec…全量308/7786/3080通过，growth4931584B且结束hash一致；v55 deferred stores对象及夹具编译完成，接续18captures/72cycles微型定向。实际UE138附件全部final Store、Unknown94全部setter闭合，10个真实graphics PSO Native编译通过，无GPU提交。整帧/UI未验收，目标active。
+
+2026-10-02 [B398](BATCH398_SOURCED_COUNTER_PASS_ATTACHMENTS.md)：v54精确8b15aaec…12 captures/48 seeks/150反例通过，共用Native counter验证，串行/并行和depth/stencil/heap/five MRT全部像素正确。全量运行中；继续v55延迟StoreAction，实际UE/UI未验收，目标active。
+
+2026-10-02 [B395](BATCH395_PARTIAL_COPY_SUBMISSION_PREFIX.md)：v52精确5b329da9…按原提交順序、chunk/ResourceId重放缺失纯buffer-blit prefix及future birth。Same/split/late/later-staging/11-copy组合16 captures/64 cycles/48 first-draw seeks/578反例通过，帧末index全零后仍恢复正确Native索引与像素。当前UE135次frame-index的CPU字节/顺序闭合。v52全量准备中，整帧UE/UI未验收，目标active。
+
+2026-10-02 v50精确008ca84b…全量308 captures/7786 malformed/3080 lifecycle通过，growth12681216B，结束hash一致；包含v47大copy/v48Private index/v49draw/v50submission snapshot。v51提交順序候选开始链接/微型late-upload验证，实际UE整帧及人工UI未验收，目标active。
+
+2026-10-02 [B394](BATCH394_SUBMISSION_INDEX_ORDER_PENDING.md)：当前UE195直接indexed draws的CPU字节与提交顺序审计通过，135次frame index/9 future buffers；4次consumer先编码、producer后编码但先提交，v51候选改按commit模拟，尚未构建。v50精确全量继续运行、不替换Native库。间接48调用在19 encoders，存在同encoder写参数，需要逐使用点GPU快照。完整UE/UI尚未验收，目标active。
+
+2026-10-02 [B393](BATCH393_SUBMISSION_INDEX_UPLOADS_PLAN.md)：精确008ca84b… v50 CPU快照按commit归属，Same/split submission的frame Private indices4 captures/16 seeks/146反例通过；已知复制范围与GPU写入检查接通，全量308/7786/3080运行中。继续当前UE实际索引和48 indirect分析，整帧/UI未验收，目标active。
+
+2026-10-02 [B392](BATCH392_BOUNDED_DIRECT_DRAWS_PLAN.md)：精确43a58922… v49 Triangle/Strip、乱序索引、负baseVertex、双实例/baseInstance及256/512 draws两轮各4 captures/16 seeks/130反例通过。继续submission所属CPU快照→staging blit→帧内Private index证明；实际UE整帧和人工UI尚未验收，持续目标active。
+
+2026-10-02 [B391](BATCH391_INITIALIZED_PRIVATE_INDEX_PLAN.md)：v48 精确257c4303…初始化Private UInt16/UInt32索引4 captures/16 seek cycles/116 API+CLI反例通过。v47普通copy256条端点也已通过；继续有界直接绘制参数、TriangleStrip和帧内索引上传。精确全量最近v46，完整UE/UI尚未验收，持续目标active。
+
+2026-10-02 [B388](BATCH388_LARGE_ORDINARY_BUFFER_COPIES_PLAN.md) / [B389](BATCH389_UE_SMALL_PLACEMENT_HEAP_PLAN.md)：c5caf390…普通大blit6 captures/24 seek cycles/83反例通过，256条端点复核中。UE heap64重截12230757…完成并保留，913有效source/1937初始slots/62producer全部匹配，当前frame问题0，Native1748 placements范围问题0；38heaps总2.45GiB、127历史buffer overlaps仍需时序证明。466b749c v46精确全量308/7786/3080通过、growth8880128B；当前v47全量待后续组合。完整UE/UI仍未验收，持续目标active。
+
+2026-10-02 [B387](BATCH387_DIRECT_DISPATCH_WORK_PLAN.md)：466b749c… v46直接dispatch 64³/512²/128×1和128次compute八捕获/32 seek cycles/158 API+CLI反例通过，公共Native线程组snapshot复用；精确全量运行中。隔离heap64模块0d648a90…已构建，原引擎hash不变，待串行重截验证。实际UE整帧/UI未验收，目标active。
+
+2026-10-02 [B385](BATCH385_FRAME_NUMERIC_TEXTURES_PLAN.md)：4d69dbb0… v44五类frame来源10 captures/40seeks/160反例通过，真实texture atomic操作及完整像素/UInt PickPixel通过；继续UE真实shader批量52/256项typed更新。整帧/UI尚未验收，目标active。
+
+2026-10-02 B384 精确 cf1bc8af… 全量308/7786/3080通过，resident growth13123584B；v44整数/单通道/打包frame纹理候选开始定向测试，包含真正的Metal3.1 texture atomic_exchange/fetch_add。UE763817d8整帧尚未GPU replay；人工UI仍锁屏待验。持续目标active。
+
+2026-10-02 [B386](BATCH386_UE_BATCH_DESCRIPTOR_PRODUCERS.md)：6ddd8e91…真实UE shader 52/256项更新四捕获/16 seek cycles、全部slot与末槽vertex/fragment2×2像素通过，39+39反例及257条完整producer的40组重检通过；普通blit预算不变。继续直接dispatch，整帧/UI仍未验收，目标active。
+
+2026-10-02 [B384](BATCH384_FRAME_VOLUME_EXTENTS_PLAN.md)：v43 RGBA16/32Float64³及二维格式8 captures/32 seeks/124反例、完整texel/首末depth PickPixel通过；精确新库全量运行中。继续实际uint/packed颜色frame来源，UE整帧/UI仍未验收，目标active。
+
+2026-10-02 [B383](BATCH383_LARGE_TRACKED_PLACEMENT_ALIASES.md)：v42较大tracked placement共享16 captures/64 seeks/208 API+CLI negative groups通过，复用异步夹具，Native逻辑A/B、GPU/像素/EID0正确，旧21类674兼容通过。实际UE整帧未提交/UI锁屏，持续目标active。
+
+2026-10-02 [B382](BATCH382_LARGE_TYPED_TABLE_PLAN.md)：4322af8c…18MiB主表+98304B sampler表2 captures/16dispatch seek+8reset/21 negatives通过；UE精确三槽注解修复并重截763817d8…，unknown非零0、当前frame slot/inline/68producer问题0，842有效初始source闭合。精确4322af8全量308/7786/3080通过，resident growth11632640B。
+
+2026-10-02 [B381](BATCH381_LARGE_FRAME_BUFFER_PLAN.md)：最终150e4d32…placement128KiB/standalone Shared4MiB定向6 captures/24 seeks/67 negatives通过，Shared全数据、Private局部upload/overwrite/归零正确；958d133d…早期组合全量308/7786/3080/growth12632064B通过，150e4后CPU范围/retirement-prefix修复精确全量由后续B382包含验证。
+
+2026-10-02 [B380](BATCH380_FRAME_ARRAY_VOLUME_UAV_PLAN.md)：v39帧内array/3D typed读写7b4e0848…六捕获/24seek/完整30texel及87 API+CLI反例通过；接通CPU已验证inline-only dispatch和source usage闭包，额外12seek/CS_RW验证通过。旧21类674兼容已通过；后续组合全量958d133d…308/7786/3080通过，growth12632064B，未扩间接dispatch/完整UE覆盖，目标active。
+
+2026-10-02 [B379](BATCH379_FRAME_COLOR_SOURCE_PLAN.md)：v38帧内192×104 RG11/R16来源74f7ef23…直接/view八捕获32回跳/完整19968px与GPU值/114 API+CLI反例通过；使用独立heap范围避免未证明的旧纹理重叠，当前精确全量未重复。真实新帧19 texture/259 buffer/31 indirect dispatch继续适配，目标active。
+
+
+2026-10-02 [B378](BATCH378_MANAGED_DRAWABLE_INITIAL_STATE.md)：Managed纹理GPU初始快照和背景drawable dirty接通，v37背景typed来源要求完整initial；7ef3fa13…两layer极小1×1 Managed背景源两捕获/八回跳/GPU122及恢复/30反例通过。修正用例窗口选择以记录presentation backbuffer；实际UE bfa3f117…重截完成，850有效来源=489纹理initial+361 buffer initial，无缺失；Native1697 placement范围0错误。精确7ef3fa13…全量308/7786/3080通过，growth9256960B；继续192×104帧内RG11B10适配，整帧/UI未验收，目标active。
+
+2026-10-02 [B377](BATCH377_INITIALIZED_TEXTURE_FAMILY_PLAN.md)：v36完整initial的2D/array/cube/cube-array/3D/depth/stencil ID来源及父依赖接通；ada72925…159 typed texture slots、七类GPU309、两捕获/八回跳/12312子资源检查/130反例通过。公共8-bit Depth/S8解码补归一化，四format cases/141027断言通过。定位实际旧drawable Managed initial缺口，继续极小复现及重截；整帧/UI未验收，目标active。
+
+2026-10-02 [B376](BATCH376_INITIALIZED_2D_COLOR_SOURCES.md)：v35完整initial的背景2D颜色来源/逻辑字节预算接通；e3c11635…R16Float192×104直接/parent-view共四捕获/16回跳、完整像素恢复及GPU122、82组反例通过；精确库全量308/7786/3080通过，growth0B。已初始化2D clear按attachment尺寸校验，完整UE/UI未验收，继续资源父依赖与实际格式，目标active。
+
+2026-10-02 [B375](BATCH375_INITIALIZED_LARGE_BUFFER_SOURCES.md)：v34完整initial的背景buffer来源及CPU allocation预算接通；9e97baf5…Standalone Private65552B/memberOffset65540，两捕获/八回跳/GPU122及TextureBuffer像素恢复、52组反例通过。frame64KiB/heap1MiB未扩大，继续实际2D纹理范围。全量最近a9a106aa…通过，整帧/UI未验收，持续目标active。
+
+2026-10-02 [B374](BATCH374_CUBE_VIEW_PARENT_INITIAL_STATE.md)：view复用捕获parent初始数据，取消额外baseline副本；cube->cube和完整初始内容cube source接通。RGBA/BGRA四捕获/16seek/76反例、实际RG11B10两捕获/八seek/38反例，GPU122及packed/API像素一致。非法cube几何在Native创建前拒绝，避免断言退出。继续v34已初始化大buffer source；全量a9a106aa…已通过，整帧/UI未验收，持续目标active。
+
+2026-10-01 [B373](BATCH373_BUFFER_TEXTURE_PARENT_REPLAY.md)：v32 Private TextureBuffer sourced ID和parent buffer API读回/PickPixel接通；a9a106aa…两捕获/八回跳，offset256 GPU122及overwrite/reset像素正确，40反例拒绝。普通非descriptor buffer blit受16条/64KiB范围与提交/alias检查约束。35b6237e…16实际格式Native独立decode/128 raw+PickPixel/八回跳/28反例通过，补RG16Uint创建遗漏；精确a9a106aa…全量308/7786/3080通过，growth7045120B；真实UE359个type9来源parent数据完整，仍需全资源范围/coverage，整帧/UI未验收，持续目标active。
+
+2026-10-01 [B372](BATCH372_CPU_TEXTURE_BIRTH_RETIREMENTS.md)：v31允许退役前导中经已有合法性检查的buffer texture/heap texture创建，明确view parent依赖及GPU ID；a6c6c93e…80退役四捕获/16seek/128反例通过，view复制像素byte1..4及drawable核对通过。前版978f9a40…全量308/7786/3080通过，本版旧21类/674反例兼容通过。实际CPU候选122槽/121失效texture，仍需192×104 heap/Private TextureBuffer/格式范围与完整coverage适配；整帧/UI未验收，持续目标active。
+
+2026-10-01 [B371](BATCH371_UNSUBMITTED_BUFFER_BLIT_RETIREMENTS.md)：v30未提交普通buffer blit精确tuple及256退役上限接通；978f9a40…80槽四捕获/16seek/112反例通过。真实UE CPU审计v30在buffer texture birth31573停止，覆盖66槽；CPU texture birth候选在首次CPU内容更新31665停止，122冻结槽/121纹理来源、五条复制15200B全部有界，无提交。精确978f9a40…全量308/7786/3080通过，growth12058624B；继续v31合法创建及视图父buffer依赖适配；整帧/UI未验收，持续目标active。
+
+2026-10-01 [B370](BATCH370_PLACEMENT_TEXTURE_SCOPE_PLAN.md)：placement复用通用格式/Native footprint，支持Shared和cube-array并校验heap storage。e4d05e4f…Private158纹理/12312检查/110反例、Shared20纹理/1536检查/80反例通过，旧21类674反例通过；精确库全量308/7786/3080通过、growth9928704B。b2b56a6c…两个Shared来源已完整，另121个stale来源在首次提交前退役，75条超过v29前缀64上限、46穿插未提交buffer blit；继续验证提交前非Shader复制的退役规则。整帧/UI未验收，持续目标active。
+
+2026-10-01 [B369](BATCH369_SHARED_TEXTURE_INITIAL_STATE.md)：Shared纹理起点GPU快照/逐slice-mip恢复接通，04a4de2d…20纹理/两捕获/1536检查/八回跳/80反例通过；Private148纹理110反例和Private view76反例兼容通过。CPU upload12反例兼容通过，实际b2b56a6c…489纹理/642042264B字节匹配、两个Shared来源初始数据完整；placement类型/格式小用例已通过，准备旧回归。整帧/UI未验收，持续目标active。
+
+2026-10-01 [B368](BATCH368_CPU_RESOURCE_BIRTH_RETIREMENTS.md)：v29允许纯CPU buffer birth穿插精确generation退役，首个GPU命令边界立即结束；cbfa65f9…四捕获/16seek/92反例通过。针对实际734378ff…49个早退役stale来源；旧v16兼容90反例通过，Shared初始内容继续适配。整帧/UI未验收，无提交/推送，持续目标active。
+
+2026-10-01 [B367](BATCH367_PRIVATE_TEXTURE_SUBRESOURCES.md)：array/cube/cube-array/3D及depth/stencil逐slice/mip初始内容和公共DecodePixelData接通。精确eda11f64…148纹理/两捕获/11544分子资源检查/八回跳/90反例通过；Native depth clear独立读回通过。Private view兼容76反例通过，实际734378ff…485纹理/622624824B初始字节全部匹配；定位49个穿插CPU birth的早退役slot和Shared初始内容缺口。精确库全量308/7786/3080通过、growth11403264B，UI待完成，完整UE尚未GPU replay，持续目标active。
+
+2026-10-01 [B366](BATCH366_BACKGROUND_PRIVATE_TEXTURE_VIEW_RESTORE.md)：Private view明确parent初始数据校验、起点上传后建立baseline的顺序修复和Native staging局部pool接通。0eb096fd…四捕获/16seek/76反例、direct兼容56反例、frame view MRT八捕获/32seek/387反例通过。未重复全量；21411d96…308/7786/3080已通过。人工UI与完整UE未验收；继续实际array/cube/3D/深度初始状态，持续目标active。
+
+2026-10-01 [B365](BATCH365_PRIVATE_COLOR_TEXTURE_INITIAL_STATE.md)：普通Private颜色纹理初始像素、Native staging pitch/紧密mip序列化、缺失数据和预创建mip校验接通。精确21411d96…四捕获/16seek/56反例、三mip行像素通过；组合全量308/7786/3080通过，growth8536064B。实际49e66f85…重截保存363份纹理/186669370B初始像素，逐逻辑布局字节数全部匹配、帧内来源错误0。整帧仍未GPU replay，继续Private view初始恢复顺序及array/cube/3D/depth等真实缺口，持续目标active。
+
+2026-10-01 [B364](BATCH364_FRAME_TEXTURE_VIEW_SOURCES.md)：frame Private subset view sourced GPU ID、8捕获/32seek/387反例、旧21类/674反例通过。窗口最大化和UE编辑器Grow两层尺寸原因已对照源码修复，实际9738816a…重截GBuffer为320×240；1917活slot/114producer全部匹配，帧内来源/inline/lifetime错误0。整帧尚未GPU replay，继续普通Private纹理初始内容，持续目标active，无提交/推送。
+
+2026-10-01 [B363](BATCH363_DESCRIPTOR_BACKING_REUSE.md)：实际UE的12处typed backing overlap完成CPU归属/slot退役审计；新增明确ResourceId对校验和重叠CPU快照后的活表重定位。连续截帧的旧退休表initial依赖遗漏已修复。精确246a9d5c…8捕获/32seek/176反例，Private兼容220反例、跨kind MRT兼容331反例通过；旧21类674反例通过；全量308/7786/3080通过，驻留增长13205504B。完整UE尚未GPU replay，人工UI待解锁，持续目标active。
+
+
+2026-10-01 [B361](BATCH361_PRIVATE_HEAP_DESCRIPTOR_SOURCES.md) / [B362](BATCH362_ENCODING_TIME_ALIASES_AND_PARTIAL_SNAPSHOTS.md)：Private来源8捕获/32seek/216反例，未提交CB期间Private alias220反例，Private buffer→MRT texture跨kind331反例通过。Shared partial tail遗漏future alias提交快照已修复；精确57ba6f4a…8捕获/32seek/204反例及8份非冗余snapshot捕获/32seek（GPU首读184/248、后续225/161）通过，旧21类/674反例通过。57ba6f4a…全量308/7786/3080已通过、growth11943936B。实际UE 0649fac8…12处descriptor backing alias仍需适配；完整UE尚未GPU replay，UI待解锁，持续目标active。
+
+
+2026-10-01 [B359](BATCH359_FRAME_TEXTURE_DESCRIPTOR_RELOCATION.md) / [B360](BATCH360_TRACKED_ASYNC_HEAP_ALIASES.md)：frame Private texture→MRT→下一pass来源重定位通过八捕获/32seek/319反例，a9c8e85b…全量308/7786/3080通过，增长11501568B。tracked Shared heap异步alias与useHeaps间接CPU快照遗漏已修复，863f5998…八捕获/32seek/200反例及兼容MRT/旧alias/18帧通过；该新库全量308/7786/3080通过，增长13942784B。UE 0649fac8…重截已保留，369条CPU快照、1669初始来源全部匹配，帧内source/producer/inline错误0；完整UE GPU replay仍未通过，继续Private/cross-kind alias与实际绘制范围，UI待解锁，持续目标active。
+
+
+2026-10-01 [B357](BATCH357_PARALLEL_FIVE_MRT.md) / [B358](BATCH358_FRAME_PLACEMENT_TEXTURE_BIRTHS.md)：parallel/MRT5 八捕获/32seek/223反例通过；修复 UE 帧内 texture/view 被提前写入 initial section 和 heap 父依赖遗漏，四捕获/24seek、18旧帧/13反例通过。新 UE ef14a1ed… 65 texture/14view 按帧内顺序记录，1676初始来源/112producer/2737inlineVA无帧内错误，125CB/peak32。当前库 ecc44d57…旧21类回归中；bfe86da…全量308/7786/3080已通过。完整UE尚未replay，继续future texture来源与实际资源范围；UI待解锁，持续目标active。
+
+
+2026-10-01 [B354](BATCH354_LEADING_DESCRIPTOR_RETIREMENTS_AND_CAPTURE_SIZE.md) /
+[B355](BATCH355_IMPLICIT_PLACEMENT_BUFFER_ALIASES.md)：稳定320×240重新捕获
+f744c413…，1678帧初来源及内容、112GPU producer、2737inlineVA全匹配，
+126CB/peak33、170pass/393draw，完整UE尚未提交GPU replay。物理placement
+alias保留两份对象和旧descriptor：8捕获/32seek/184反例通过（f69220dd…）；
+v16旧21类/674反例通过。B353精确5b08e331…全量308/7786/3080已经通过，
+后续精确新库全量待跑；UI待解锁。持续推进signal-only与异步alias。
+
+
+2026-10-01 [B353](BATCH353_INTERLEAVED_SUBMISSIONS_AND_PARTIAL_TAILS.md)：真实 UE
+75 个 command buffer、峰值 11 的交错创建/提交已复现；修复 partial seek
+尾部队列预约死锁和 future submission 过早恢复快照。库5b08e331…，retained/
+unretained 四捕获、16轮 seek、GPU 累加308/像素186-122、114反例、旧九帧通过。
+B352 的0f684365…已完成308正例/7786反例/3080生命周期完整回归，增长13549568B；
+B353 全量复跑中。新的320x240真实FirstPerson截帧8ebcbfa6…已保存并自动退出，
+尺寸来自插件实际日志；原大帧保留，正在做CPU审计。完整UE replay尚未通过，
+UI仍待解锁；持续目标active。
+
+2026-10-01 [B351](BATCH351_UE_DRAW_CONSTANTS_AND_INDEXED_SOURCES.md) /
+[B352](BATCH352_COMMAND_BUFFER_QUEUE_PROXY_LIFETIME.md)：UE IR绘制常量、UInt16/UInt32
+静态索引来源和冗余提交快照验证接通；发现并修复临时queue的包装父对象悬空。
+21类/674反例、真实UE更新shader小图形/27反例、双队列完成回调、旧八帧通过；
+库0f684365…，queue连续10×2捕获通过。此前93eb26b1…的308图像/CLI与分段反例
+至T312、3080生命周期通过（增长12369920B），该新库完整累计复跑仍待执行。
+新UE隔离诊断模块feeed228…已编译，开始低负载进程设置自动截帧并退出；原帧
+已保留。完整UE画面/MRT/pass尚未完成，UI仍待解锁；持续目标active。
+
+
+2026-10-01 [B350](BATCH350_REGRESSION_RESOURCE_AND_FAILURE_LIFECYCLES.md)：ICB 动作树、
+无 coverage 的普通帧内 buffer 回跳、共享 DummyDriver 与提交快照归属已修复。
+308 份图像/CLI 阶段、T49 87反例与相关定向通过，全量剩余反例/lifecycle 执行中。
+库93eb26b1…；最新 UI 待解锁，完整 UE 未完成，持续推进 UE 绘制参数与索引路径。
+
+
+2026-10-01 [B349](BATCH349_EXPLICIT_FRAME_HEAP_ALIASES.md)：v13 显式 heap 退役与
+同地址不同资源重定位、连续两捕获/四次 seek 图像通过；十九类/560 反例通过。
+全量首轮 T20 ICB action tree 崩溃已定位并修正，重跑中；最新 UI 待解锁，
+完整 UE 未完成。持续目标 active，继续回归与真实 UE 绘制参数/索引路径。
+
+
+2026-10-01 [B348](BATCH348_ASYNC_SUBMISSIONS_AND_CPU_SNAPSHOTS.md)：v12 同队列
+无捕获端 CPU wait 的两提交与 Shared 快照恢复同步通过，GPU 累加 308/正确像素。
+十八类 /507 API+CLI 反例、真实 UE 更新 shader 小图形链路、旧六帧定向通过。
+库 b2edab43…；全量未跑，最新 UI 未验，完整 UE 未完成。持续推进 frame heap alias。
+
+
+2026-10-01 [B347](BATCH347_FRAME_HEAP_DESCRIPTOR_PAYLOADS.md)：v11 帧内 heap
+payload/table 创建与来源重定位接通，四轮重建仍 GPU 字节/像素正确；十七类/
+453 API+CLI 反例通过。库52b42a31…；全量未跑，新增 UI 未验，完整 UE 未完成。
+持续目标 active，继续无 CPU wait 的有序提交与 Shared 快照同步。
+
+
+2026-10-01 [B346](BATCH346_COMPLETION_WAITS_AND_SOURCED_SUBMISSIONS.md)：完成等待
+不再为空；v10 同队列两提交及 waited CPU 描述符更新、未保留资源方式通过。
+十六类 /383 API+CLI 反例、旧六帧定向、两队列捕获回调/恢复通过。库64714dcb…。
+全量未跑，新增 UI 未验，完整 UE 未完成；持续目标 active，推进 heap/ring/异步提交。
+
+
+2026-10-01 [B345](BATCH345_SOURCED_MRT_AND_PASS_SCOPES.md)：v9 双 MRT 与跨 pass
+采样、action.outputs / colorTargets / BeginPass-EndPass / 四轮 seek 全部正确；
+十四类描述符与 284 组 API+CLI 反例通过，库 c5570049…（该批验证版本）。
+全量未跑，新增 UI 未验，完整 UE 未完成；持续目标 active，推进完成等待与多提交。
+
+
+2026-10-01 [B343](BATCH343_SOURCED_GRAPHICS_DESCRIPTOR_CONSUMERS.md) /
+[B344](BATCH344_ACTUAL_UE_UPDATE_TO_GRAPHICS.md)：v9 顶点/片元 inline 按来源重编码，
+真实 UE 更新 shader 接入小图形消费者；两捕获/四轮 seek/正确 GPU 字节与像素通过。
+十三类描述符 / 241 组 API+CLI 反例通过，真实 UE 链路另有 27 组通过。
+库 490bf140…；全量未跑、新增 UI 未验、完整 UE 尚未完成。持续目标 active，
+继续 MRT / 多 pass / 多提交 / alias。
+
+
+2026-10-01 [B342](BATCH342_ACTUAL_UE_DESCRIPTOR_UPDATE_SHADER.md)：从真实UE
+截帧提取原编译UpdateDescriptorHandle shader，单条/四条更新原生GPU、各两捕获、
+四轮seek与API字节/CLI通过；payload为opaque copy，尚无该真实UE条目的consumer。
+库仍37063340…，全量未跑/新增UI未验/完整UE未完成，持续目标active；继续
+vertex/fragment来源重编码和draw验证。
+
+
+2026-10-01 [B341](BATCH341_FRAME_SOURCED_BUFFER_TABLES.md)：普通buffer创建与
+临时表声明正确入帧；v8新建source/table回跳重建，强迫VA每轮改变仍采样正确。
+十二类tiny/214 API+CLI负例及旧六帧定向通过。真实UE a5907a66…的1,479帧首槽/
+106 producer来源全部匹配，仍CPU证据。库37063340…；全量未跑，新增UI未验，
+完整UE未完成，持续目标active。继续真实UE更新shader的单pass GPU验证。
+
+
+2026-10-01 [B339](BATCH339_UE_NATIVE_DESCRIPTOR_FIELDS.md) / [B340](BATCH340_GPU_TEXTURE_DESCRIPTOR_UPDATES.md)：
+UE原生buffer/texture/sampler字段及Texture4/5 buffer view接通；GPU纹理描述符
+计算更新后实际采样122→186/186→122、双捕获/seek/像素通过。十一类tiny /171
+API+CLI负例、3D/BC上传GPU407及12负例、旧六帧定向通过。新UE b341dea4…
+1,477帧首槽/31 producer来源匹配；仍CPU证据。全量未跑，新增UI未验，完整UE
+图像/MRT/pass replay未完成；持续目标active，继续frame births/alias/render。
+最终库a0f35fed…，未提交/推送。
+
+
+2026-10-01 [BATCH338](BATCH338_SOURCED_COMPUTE_PRODUCERS.md)：计算更新tiny实际
+GPU与seek通过，九类/123 API+CLI负例及旧六帧通过。真实UE新帧5039ca0f…的
+1,477帧首槽和118 GPU producer/expected/source关联全部匹配；仍仅CPU证据。
+下一项对齐UE真实Buffer/Texture/Sampler类型，再扩展frame/alias/render。
+全量未跑，新增UI未验，完整UE未完成，持续目标active。库78130e17…。
+
+
+2026-10-01 [BATCH337](BATCH337_SOURCED_GPU_DESCRIPTOR_COPY.md)：sourced slot GPU
+复制实际41→80、GPU初始状态80→41及回跳通过；八类tiny/99 API+CLI负例通过，
+库4bd948d2…。全量未跑，新增UI未验，完整UE仍未完成；继续计算scatter路径。
+
+
+## M10 / BATCH334–336：UE 帧首来源闭合，小帧 sourced replay 与应用队列同步通过
+
+B334 完成临时 payload、static sampler、各 stage inline 显式来源与冻结 BG
+metadata。B335 sourced slot/inline 实际 GPU 80、普通常量及重复 seek 通过。
+B336 对照 D3D12/Vulkan 修复应用队列帧首等待、每队列 enqueue/epoch 与自动
+present 锁；真实 UE 新帧 a08ef579…的 1,476 个活槽均与 Initial Contents 完全
+一致（旧帧 10 处 GPUExpected 差异）。tiny 两队列/回调/失败恢复/API+CLI
+通过；七种描述符及 78 负例、旧六帧终端通过。当前库 12dd80aa…。
+**全量未跑，本批人工 UI 未验，完整 UE 图像/MRT/pass replay 仍未完成。**
+持续目标 active，继续 GPU 更新/多提交生命周期，不提交或推送。见
+[B334](BATCH334_UE_SOURCES_AND_FROZEN_SNAPSHOT.md)、
+[B335](BATCH335_SOURCED_SLOT_REPLAY.md)、
+[B336](BATCH336_CAPTURE_QUEUE_COMPLETION.md)。
+
+
+## M10 / BATCH332–333：inline小帧通过，官方局部MetalRHI provider进入真实截帧验证
+
+compute typed setBytes的VA/常量/GPU字节/seek及56组负例通过；B333槽位两代诊断
+六条payload/顺序与GPU前拒绝通过。六类tiny终端通过，当前库1ee8ba5e…；
+**全量未跑，新增Viewer未验，完整UE replay仍未完成。** 官方5.8.3局部源码已取到，
+无需用户另提供源码版；隔离MetalRHI 98/98导出、NullRHI成功、正常Metal NewMap
+启动成功，capture倒计时修复后自动重截/CPU审计进行中。早期UBT导出误删123库
+已按官方manifest全部恢复且复核。持续目标active，不提交/推送。见
+[BATCH332](BATCH332_INLINE_DESCRIPTOR_BYTES.md)、[BATCH333](BATCH333_UE_PARTIAL_PROVIDER.md)。
+
+## M10 / BATCH331：帧内buffer/view小帧重定位通过，UE provider仍缺失
+
+coverage v3接通Shared/Private非重叠frame placement及支持的buffer-backed view，
+先按CPU创建时序检查所有typed更新，回跳保留GPU等待并重建对象。五种小例各
+两捕获、GPU输出/像素/seek和48API+CLI负例通过；旧六帧终端通过。最终库/app
+`5fab70bfcc92…`，Private view人工Viewer EID15/36/15输出89/167/89通过；
+**全量未跑，完整UE仍metadata拒绝，目标未完成。** 现有UE为预编译安装版，
+插件缺私有slot/临时表/CPU来源/inline布局provider，已询问可重编译源码环境路径。
+无需现在重截。见[BATCH331](BATCH331_FRAME_DESCRIPTOR_RESOURCES.md)。
+
+## M10 / BATCH330：重复身份误拒绝修复，两类小帧人工UI通过
+
+用户已解锁。508条帧内身份分为164条完全相同副本、344条新身份；修复副本
+误拒绝，并拒绝状态冲突的sampler别名。真实延迟getter用例、两类GPU/seek、
+15API+CLI负例和旧六帧通过。最终库/app `78e3cecc338b…`；人工Viewer两类
+小帧的122/161/122与41/121/160/41、哨兵通过，正常退出。UE344个新身份
+（278placement buffer、66buffer-backed view）及临时表/槽位/provenance/render
+仍未支持，整帧GPU前拒绝。**定向终端与这两类小帧人工UI通过；全量未跑；
+完整UE目标未完成，旧待验保留。** 见[BATCH330](BATCH330_DUPLICATE_IDENTITIES_AND_VIEWER.md)。
+
+## M10 / BATCH328–329：小表真实 replay 通过，UE 保存崩溃已修，完整回放仍未完成
+
+显式 typed descriptor 重定位接入 replay，CPU partial diff 与 GPU copy/显式 CPU
+entry 混合更新分别得到122/161、41/121/160，双向seek与13个API+CLI负例通过。
+最终库/app `bd255367cb60…`，旧六帧API+CLI通过。UE插件已记录实际primary表
+布局，并修复present前end和thumbnail drawable生命周期；一次UE应用崩溃后
+自动重截end=1，新帧 `7cd838c7…` 已保护备份。CPU证据有508条帧内首次身份
+查询、至少344条来自帧内新资源，且缺临时表/有效槽位/CPU写入来源coverage。
+完整UE仍在GPU前拒绝，未提交整帧。见[BATCH328](BATCH328_EXPLICIT_DESCRIPTOR_REPLAY.md)
+与[BATCH329](BATCH329_UE_DESCRIPTOR_LAYOUTS_AND_DRAWABLE_LIFETIME.md)。
+**定向终端通过；全量未跑；人工UI被本机锁屏阻止，已请求手动解锁；UE replay
+目标未完成，无需再次重截。没有提交/推送，旧待验保留。**
+
+## M10 / BATCH327：间接资源捕获遗漏已修，自动重截完成，UE replay仍未实现重定位
+
+用户1f6b4010…帧已取得899条地址/ID诊断，却缺全部sampler创建；原生105
+小夹具复现useHeap/raw packet间接资源被过滤。参照D3D12 RefBuffers，capture
+开始保守引用所有查询过GPU身份的live对象，缓存getter也保留frame引用。
+三变体×两次捕获、已销毁对象排除与GPU前拒绝通过，旧六帧API/CLI通过。
+助手使用插件自动入口重截NewMap（无需用户再次操作），新帧1e4a2f80…含
+68个sampler创建，109个非零sampler条目全部有唯一或同描述符别名候选；资源
+表在最后CPU快照后仍缺32个VA/123个texture ID，不能证明其无shader访问。
+独立进程原生typed packet重编码保留+4 offset/常量并得到122，但未接入UE
+replay/GPU descriptor更新。当前库/app `6c0e5d6f8cfe…`；无遗留UE进程。
+详见 [BATCH327](BATCH327_GPU_IDENTITY_RESOURCE_CLOSURE.md)。
+**定向终端通过；UE API/CLI是GPU前预期拒绝；全量未跑；人工UI未验。
+UE正常开启与replay目标仍未完成，已有帧可继续开发，不要求再次重截。**
+
+## M10 / BATCH326：本地新UE帧缺GPU身份映射，诊断库已就绪，需用户重截
+
+2026-09-30用户新帧 `UE58_capture.rdc` SHA `5d73323bafc3…` 仅CPU审计：
+7912 chunks、181 draw、83 pass、10 MRT、59 commit；12 heap声明6 GiB。
+用户实际新建NewMap Default模板，有Lumen/VSM/sky scope。buffer view创建
+顺序正确，两个terminal Empty后无显式引用；资源表Buffer24保留886个GPU VA
+和2106个texture ID，而捕获缺少原生身份映射，不能安全直接回放。
+新增三个getter的诊断chunk1397与GPU前保守拒绝，不代表descriptor重定位。
+极小原生/注入（两种时序×两份capture）/CPU metadata/API+CLI拒绝、旧
+T01/T09/T35/T49/T52/T62 API/CLI及20次lifecycle、terminal Empty bytes/seek与
+负例通过。最终库/app `c7cb40b786ff…`。原UE帧已另存同hash备份，.command
+改为启动已存在的NewMap。**第一项待办：用户用同一.command的新库重截；
+再检查descriptor原地址/ID归属，设计完整重定位。** 当前UE未启动。
+详见 [BATCH326](BATCH326_GPU_IDENTITY_DIAGNOSTICS.md)。
+**定向诊断/旧小帧终端通过；全量未跑；UI未验；新UE帧未GPU回放，目标未完成。**
+
+## M10 / 本地 M2 Pro 接手：小夹具通过，Testproj 插件就绪，等待新帧
+
+2026-09-30：干净工作树从 e0a26f7e6 快进到 GitHub 默认分支
+`c4be68bb7fce662e4dd8498408981fa2e824c3b6`；未提交或推送。本机 M2 Pro /
+16 GiB / macOS 26.1 / Xcode 26.0.1，UE 5.8.3 Testproj 插件、终端库及 viewer
+均编译成功，库/app 内嵌库 `f4f4e9a4cae5…`。4 KiB 原生/注入/API/CLI、
+GPU 字节/seek、一个 terminal Empty 新负例及 T35/T62 API/CLI、T62 十个
+旧负例定向通过。增加 CPU audit 的 heap/CB/event 明细；修正 UE 启动脚本
+的地图参数位置。Entry 重截会话 `20260930-175932` 已由日志确认 API 解析、
+引擎初始化、Entry MAP LOAD 与 15 FPS/50%/Nanite off，待用户按钮截帧。
+远端 UE 原件不在本机，未开完整大帧。详细命令、hash、
+修改与下一步见 [本地接手记录](LOCAL_M2_SETUP_2026-09-30.md)。
+**仅定向终端通过；全量回归未跑；人工 UI 未验收；UE 真帧 replay 仍未证明。**
 
 本地 Mac 接手文字见 [2026-09-30 交接 prompt](LOCAL_MAC_AGENT_HANDOFF_2026-09-30.md)；
 远程机停止 UE 大帧 GPU/GUI 回放。
@@ -3114,3 +3435,25 @@ instance 0/1 正确显示 baseInstance 后的 offset/colour，两个 Buffer View
 
 | 2026-09-24 | BATCH29-30 自动完成，L4 待用户 | T28/T29 native/capture/XML/Replay API、10 类异常拒绝、联合 T11/T10/T01/T18/T19/T12/T16/T17、11×10 lifecycle 全部通过；合并 GUI 验收单 `QA_BATCH29-30.md`，T28/T29 均待人工 QA，批次未关闭 |
 | 2026-09-24 | BATCH29-30 关闭 | T28/T29 的缩略图、T29 `$action()` 及先前 GUI 项由用户同轮确认；T28 DDS、T22/T25 新事件树复验通过。自动定向、逐份 CLI 与 lifecycle 通过，L3 未触发；下一批 BATCH31-32 P31.1 |
+
+2026-10-02 B381最终库150e4d323ec1343139960cf7f7f98ce7355a40ae87da58e6877010e54d9860e6，
+大frame buffer定向6 captures/24 seeks/67 negative groups通过，详见BATCH381。
+组合全量958d133d…308/7786/3080（resident growth12632064B）仅包含更早v40候选。
+provider临时堆Count误用rounded Native容量，逻辑槽位数修复/隔离构建/实际UE重截进行中。
+人工UI仍锁屏未验；实际UE未整帧GPU提交。持续目标active，无提交或推送。
+
+2026-10-02 B382大typed table定向库4322af8c…：2 captures/16 dispatch seeks+8 EID0/21 API+CLI negatives通过；18MiB主表与98304B sampler表、逐空槽普通metadata/bias校验通过。UE0b2dbec9临时heap42→10，仍存在4 unknown非零，按UE精确三handle范围修正后模块7b160b…重新截帧中。精确全量/UI未验，实际UE未整帧GPU提交；详见BATCH382。
+
+- B395 精确5b329da9全量通过：308/7786/3080，growth10403840B；B396正在修复逐调用compute indirect参数（参考Vulkan FetchIndirectData），未验证整帧UE。
+
+- B396 精确5473713a定向4 captures/28 reset seeks通过，原v52复现EID11错误0/1/1、新版1/3/2正确；serial/concurrent、inline/batch-offset绑定恢复正常。精确全量进行中，实际UE仍未整帧GPU回放。
+
+- B396 精确5473713a全量通过：308/7786/3080，growth11026432B，端点哈希不变。B397深度附件候选开始定向，未验实际UE/UI。
+
+- B397 精确b38753a6：14captures/56cycles/236API+CLI negatives深度/MRT通过；间接4/28和late prefix11copies4/16/+16/144交叉通过。精确全量进行中，UE整帧/UI未验。
+
+- B397 精确b38753a6全量通过：308/7786/3080，growth11321344B，端点哈希不变。B398 render/compute counter共用验证器候选开始定向；实际UE和人工UI未验。
+
+B409候选62新CPU payload槽位：c4c60375定向6/24/108+24通过；真实UE CPU预检推进到dispatch streamOffset182336。最终全量/UI/完整UE GPU仍待验证，持续推进。
+
+B410/411：候选63/64定向各6/24，保留producer/CPU源反例；真实UE预检越过两次descriptor dispatch与mixed CPU新槽位，推进到frame buffer texture view stream240320。完整UE GPU/UI仍未通过，目标active。

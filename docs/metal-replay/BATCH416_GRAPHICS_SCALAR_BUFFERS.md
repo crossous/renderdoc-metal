@@ -1,0 +1,13 @@
+# B416：vertex/fragment scalar buffer绑定
+
+实际UE encoder17684通过setVertexBuffer绑定buffer24/index0与buffer25/index1；此前descriptor preflight只支持graphics typed inline bytes，并在fallback拒绝所有setVertexBuffer/setFragmentBuffer。
+
+候选65对scalar setVertexBuffer/setFragmentBuffer记录stage/slot/resource/offset/剩余长度，验证live encoder、资源Native或已出生frame身份、未retire、index<31、4B offset对齐及范围；nil只允许offset0并清空slot。bytes替换buffer时删除对应buffer snapshot，buffer替换bytes时删除对应bytes及vertex drawConstants。draw仍通过现有Native reflected最低长度/对齐/只读条件检查。未支持vertex fetch布局；没有创建新的draw或修改PSO。
+
+Native vertex setter与既有fragment setter统一合法nil解绑，并新增type/real/alignment检查。D3D12 Serialise_IASetVertexBuffers、Vulkan Serialise_vkCmdBindVertexBuffers均转交原Native参数并保存per-command replay binding状态；采用已有Metal BindVertexBuffer/BindFragmentBuffer机制。
+
+8ce4f136/metal-graphics-buffers.sGMaoI：6captures/24reset-seeks/108indirect+24fresh+24mixed+51graphics buffer API+CLI反例组通过。原Native V/F shader读取32B Shared buffer offset16的0xdecafbad；错误值导致MRT像素失败。测试nil slot3、buffer slot0由typed setBytes替换、Shared/Private/parallel；资源错误/type/range/alignment/index/nil-offset/after-end/缺active binding反例全部在GPU前拒绝。
+
+早期fixture误将带guard的vertex PSO复用于resolve而未绑定guard，Native validation在小用例捕获时拒绝；修正fixture resolve保持原vertex PSO后通过。gate初稿Sampler字段名误用，改为实际SamplerState字段后全部通过。未发生系统重启，没有UE GPU提交。
+
+真实UE推进至encodeSignalEvent；精准diagnostic确认signal所在command没有live encoder，但其他command存在一个未完成inline layout。继续B417。

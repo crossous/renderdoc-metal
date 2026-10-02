@@ -34,6 +34,14 @@ public:
 
   enum { TypeEnum = eResHeap };
   void ResetFramePlacementRanges();
+  bool CanImplicitlyAliasBuffers(uint64_t begin, uint64_t end, ResourceId after);
+  bool HasPlacementOverlap(uint64_t begin, uint64_t end) const
+  {
+    for(const PlacementRange &range : m_PlacementRanges)
+      if(begin < range.end && range.begin < end)
+        return true;
+    return false;
+  }
 
 private:
   struct PlacementRange

@@ -66,6 +66,75 @@ public:
   }
   void SetState(CaptureState state) { m_State = state; }
   CaptureState GetState() { return m_State; }
+  WrappedMTLObject *FindAnnotationObject(void *object)
+  {
+    SCOPED_LOCK(m_Lock);
+    for(const auto &entry : m_ResourceMap)
+      if((void *)entry.second == object)
+        return entry.second;
+    return NULL;
+  }
+  void RefGPUIdentityResources()
+  {
+    // Native-address descriptor tables do not expose their resource dependencies through
+    // encoder setters. Like D3D12 RefBuffers, conservatively retain every live resource
+    // whose identity the application queried, including samplers (which have no heap).
+    // Explicitly retired heap allocations are excluded even when a completed native command
+    // buffer still retains their proxies; historical descriptor bindings need no live allocation.
+    SCOPED_LOCK(m_Lock);
+    for(const auto &entry : m_ResourceMap)
+      if(entry.second && !Atomic::CmpExch32(&entry.second->m_CapturedAliasable, 0, 0) &&
+         Atomic::CmpExch32(&entry.second->m_CapturedGPUIdentity, 0, 0))
+        MarkResourceFrameReferenced(entry.first, eFrameRef_Read);
+  }
+  void AddSharedHeapBufferReferences(std::unordered_set<ResourceId> &references)
+  {
+    // useHeap(s) permits indirect access to every allocation on the heap. As with
+    // D3D12's bindless buffer references, explicit setBuffer/useResource calls are
+    // insufficient to discover the mapped CPU bytes consumed by this submission.
+    SCOPED_LOCK(m_Lock);
+    std::set<MTL::Heap *> heaps;
+    for(ResourceId id : references)
+    {
+      auto found = m_ResourceMap.find(id);
+      if(found != m_ResourceMap.end() && found->second && found->second->m_Type == eResHeap &&
+         found->second->m_Real)
+        heaps.insert((MTL::Heap *)found->second->m_Real);
+    }
+    if(heaps.empty()) return;
+    for(const auto &entry : m_ResourceMap)
+    {
+      WrappedMTLObject *object = entry.second;
+      if(object && object->m_Type == eResBuffer && object->m_Real &&
+         !Atomic::CmpExch32(&object->m_CapturedAliasable, 0, 0))
+      {
+        MTL::Buffer *buffer = (MTL::Buffer *)object->m_Real;
+        if(buffer->storageMode() == MTL::StorageModeShared && heaps.count(buffer->heap()))
+          references.insert(entry.first);
+      }
+    }
+  }
+  void MarkCapturedTextureViewsRetired(WrappedMTLObject *source)
+  {
+    if(!source || source->m_Type != eResTexture || !source->m_Real) return;
+    SCOPED_LOCK(m_Lock);
+    MTL::Texture *native = (MTL::Texture *)source->m_Real;
+    for(const auto &entry : m_ResourceMap)
+    {
+      WrappedMTLObject *object = entry.second;
+      if(!object || object->m_Type != eResTexture || !object->m_Real || object == source) continue;
+      for(MTL::Texture *parent = ((MTL::Texture *)object->m_Real)->parentTexture();
+          parent; parent = parent->parentTexture())
+        if(parent == native)
+        {
+          // Views cannot keep a logically retired placement allocation alive.
+          // Keep native retention for submitted GPU work; only conservative
+          // next-capture initial references inherit the parent's retirement.
+          Atomic::CmpExch32(&object->m_CapturedAliasable, 0, 1);
+          break;
+        }
+    }
+  }
   ~MetalResourceManager() {}
   void ClearWithoutReleasing()
   {

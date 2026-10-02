@@ -73,6 +73,7 @@ def main():
             cases.append(('second-dependency-zero', variant))
 
         for tag, variant in cases:
+            for chunk in variant.findall('./chunks/chunk'): chunk.set('length', '0')
             xml = directory / f'{tag}.zip.xml'
             variant.write(xml, encoding='unicode', xml_declaration=True)
             shutil.copyfile(str(original)[:-4], str(xml)[:-4])
@@ -86,6 +87,7 @@ def main():
         variant = copy.deepcopy(tree)
         child(variant.findall('./chunks/chunk')[dynamic_index], 'origin').text = \
             '/no/such/T216/library.metallib'
+        for chunk in variant.findall('./chunks/chunk'): chunk.set('length', '0')
         xml = directory / 'remapped.zip.xml'
         variant.write(xml, encoding='unicode', xml_declaration=True)
         shutil.copyfile(str(original)[:-4], str(xml)[:-4])

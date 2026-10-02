@@ -462,10 +462,14 @@ struct RenderPassAttachmentDescriptor
   RenderPassAttachmentDescriptor(MTL::RenderPassAttachmentDescriptor *objc);
   void CopyTo(MTL::RenderPassAttachmentDescriptor *objc);
   WrappedMTLTexture *texture = NULL;
+  // Preserve the captured identity when CPU preflight sees a frame-born texture
+  // whose native object has not been created yet. These do not add wire fields.
+  ResourceId textureId;
   NS::UInteger level = 0;
   NS::UInteger slice = 0;
   NS::UInteger depthPlane = 0;
   WrappedMTLTexture *resolveTexture = NULL;
+  ResourceId resolveTextureId;
   NS::UInteger resolveLevel = 0;
   NS::UInteger resolveSlice = 0;
   NS::UInteger resolveDepthPlane = 0;

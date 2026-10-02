@@ -1,3 +1,36 @@
+# 本地 M2 / Testproj 当前运行入口（2026-10-02）
+
+当前提交作为后续画面差异调查的基线；已有验证结果与尚未覆盖的范围见
+[2026-10-02 checkpoint](../../docs/metal-replay/CHECKPOINT_2026-10-02_UE_REPLAY.md)。用户最终画面验收仍待反馈。
+
+已安装的 UE5.8.3 Testproj 插件、隔离 MetalRHI provider 与 `build-macos-debug` 配合使用。启动前关闭正在进行回放的 qrenderdoc 与 UE Editor；自动截帧需要已解锁的桌面。隔离 provider 仅用于本次进程，不替换安装引擎。本入口保留当前已有 capture，然后等待45秒自动截一帧并退出 UE，严格 pre-submit 检查通过后生成独立 `replay.rdc`，执行正常 OpenCapture、两次 EID0 重置及原生呈现纹理读回，按官方缩放/jpge90与原始捕获缩略图逐字节比较。不会自动跑全量、提交或推送。
+
+```bash
+cd /Users/crossous/Developer/renderdoc-metal
+# 只检查工程、插件、库和隔离 provider 的路径与哈希
+python3 util/ue/run_testproj_metal_replay_macos.py --check
+# 自动新截帧、严格预检、生成副本、真实 GPU 图像验证
+python3 util/ue/run_testproj_metal_replay_macos.py --capture
+# 对已有原始截帧执行相同流程（保留原件）
+python3 util/ue/run_testproj_metal_replay_macos.py --replay '/absolute/path/original.rdc'
+# 打开上一步日志给出的绝对 candidate 路径；采用正常打开，无诊断覆盖标志
+python3 util/ue/run_testproj_metal_replay_macos.py --ui '/absolute/path/replay.rdc'
+```
+
+当前已验收副本（b814fdbb，原始 faa8540e 全部命令及 binary 保留）：
+
+```bash
+python3 util/ue/run_testproj_metal_replay_macos.py --ui '/Users/crossous/Developer/renderdoc-metal/build-macos-debug/local-m2-descriptor-replay/testproj-20261002-211846-505594/replay.rdc'
+```
+
+此命令在前台等待 qrenderdoc 退出，终端保持占用是正常的。已验证正常打开、完整900×640图像、BasePass五MRT和体积MRT末层；详细定向、当前库全量、真实UE与UI结果见 [B439](../../docs/metal-replay/BATCH439_RETIRED_PRIVATE_TEXTURE_BACKING.md)。新截帧仍按上方 `--capture` 流程逐份严格审计和验证。
+
+历史诊断和可复用构建已按文件SHA256归档到 `/Volumes/CauseUseMac/RenderDocMetalArchives/20261002-2050`，原路径用软链接保留；使用历史产物时需连接此外置磁盘。34份项目原始截帧均留在本机，当前库、隔离provider和已验收副本留在本机。归档清单、每文件校验及恢复说明见外置目录的 `README.md`、`migration.jsonl` 和 `additional-migration.jsonl`。
+
+结果输出到 `build-macos-debug/local-m2-descriptor-replay/testproj-时间/`：`results.json` 单独记录真实UE、定向、全量、UI状态；`audit/candidate-audit.json` 证明原命令/元数据及全部binary/thumbnail保留；`images/normal-replay.log` 和三次原生 `.bin` 记录实际 GPU 进展。`--verify '/absolute/path/replay.rdc'` 可单独重做已有候选的图像验证。若失败，只运行一次并保留日志，没有自动重试或跳过 GPU 工作。
+
+原始 UE `.rdc` 不声明完整 descriptor coverage：主堆布局本身不够。新候选只增加一个 coverage65 声明；生成前必须经过同一库的严格 provenance/order/lifetime pre-submit 检查，转换后审计每一原始chunk和binary。候选预检通过不等于真实GPU或UI通过，三者分别记录。此流程只覆盖当前有界 UE 捕获内容，不能用于宣称任意UE图形功能已经支持。首次GPU偏差及局部提交前缀修复见 [B434](../../docs/metal-replay/BATCH434_RETIRED_DESCRIPTOR_UNIFORM_REUSE.md)、[B435](../../docs/metal-replay/BATCH435_LATE_SIGNAL_SUBMISSION_PREFIX.md)。下方旧机器/旧库入口保留作历史记录。
+
 # UE 5.8 Metal 首帧接入
 
 **当前入口（2026-09-29 BATCH320）：** 项目按钮已改为受控抓取当前 scene

@@ -37,6 +37,7 @@
 #include "metal_resource_commands.h"
 #include "metal_sampler_state.h"
 #include "metal_indirect_command_buffer.h"
+#include "metal_parallel_render_command_encoder.h"
 #include "metal_texture.h"
 
 WrappedMTLRenderCommandEncoder::WrappedMTLRenderCommandEncoder(
@@ -2446,17 +2447,13 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexBuffer(SerialiserType &s
        RenderCommandEncoder != m_Device->GetReplayRenderCommandEncoder(RenderCommandEncoder))
       return false;
 
-    if(RenderCommandEncoder == NULL || buffer == NULL)
-    {
-      RDCERR("Missing Metal vertex buffer at slot %llu", (uint64_t)index);
-      return false;
-    }
-    if(index >= 31)
+    if(index >= 31 || (!buffer && offset != 0) || (buffer &&
+        (buffer->m_Type != eResBuffer || !buffer->m_Real || offset % 4)))
     {
       RDCERR("Invalid Metal vertex buffer slot %llu", (uint64_t)index);
       return false;
     }
-    if(offset >= Unwrap(buffer)->length())
+    if(buffer && offset >= Unwrap(buffer)->length())
     {
       RDCERR("Invalid Metal vertex buffer offset %llu for %llu-byte buffer at slot %llu",
              (uint64_t)offset, (uint64_t)Unwrap(buffer)->length(), (uint64_t)index);
@@ -2520,8 +2517,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setVertexBytes(SerialiserType &se
              (uint64_t)index, (uint64_t)data.size());
       return false;
     }
+    if(!m_Device->RelocateGraphicsDescriptorBytes(GetResID(RenderCommandEncoder), 1, index, data))
+      return false;
     Unwrap(RenderCommandEncoder)->setVertexBytes(data.data(), data.size(), index);
-    m_Device->GetReplay()->BindVertexBuffer((uint32_t)index, ResourceId(), 0);
+    m_Device->GetReplay()->BindGraphicsBytes(1, (uint32_t)index, data.size());
   }
   return true;
 }
@@ -3303,8 +3302,10 @@ bool WrappedMTLRenderCommandEncoder::Serialise_setFragmentBytes(SerialiserType &
              (uint64_t)index, (uint64_t)data.size());
       return false;
     }
+    if(!m_Device->RelocateGraphicsDescriptorBytes(GetResID(RenderCommandEncoder), 2, index, data))
+      return false;
     Unwrap(RenderCommandEncoder)->setFragmentBytes(data.data(), data.size(), index);
-    m_Device->GetReplay()->BindFragmentBuffer((uint32_t)index, ResourceId(), 0);
+    m_Device->GetReplay()->BindGraphicsBytes(2, (uint32_t)index, data.size());
   }
   return true;
 }
@@ -3628,6 +3629,9 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResource(SerialiserType &ser,
       return false;
     }
     Unwrap(RenderCommandEncoder)->useResource(Unwrap(resource), usage);
+    if(IsLoading(m_State) && (usageValue & MTL::ResourceUsageWrite))
+      m_Device->GetReplay()->NoteRenderIndirectWrite(
+          RenderCommandEncoder->GetParallelParent()?GetResID(RenderCommandEncoder->GetParallelParent()):GetResID(RenderCommandEncoder),resource);
   }
   return true;
 }
@@ -3635,6 +3639,8 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResource(SerialiserType &ser,
 void WrappedMTLRenderCommandEncoder::useResource(WrappedMTLResource *resource,
                                                  MTL::ResourceUsage usage)
 {
+  if(usage & MTL::ResourceUsageWrite) CaptureIndirectWrite(resource);
+
   SERIALISE_TIME_CALL(Unwrap(this)->useResource(Unwrap(resource), usage));
   if(IsCaptureMode(m_State))
   {
@@ -4607,6 +4613,8 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawPrimitives(
     replay->SetPrimitiveTopology(primitiveType);
     replay->SetIndirectBuffer(GetResID(indirectBuffer), indirectBufferOffset,
                               IndirectArgumentSize);
+    if(IsLoading(m_State) && !replay->RegisterRenderIndirectAction(replay->GetNextEventID(),
+        RenderCommandEncoder,GetResID(indirectBuffer),indirectBufferOffset,4))return false;
     Unwrap(RenderCommandEncoder)
         ->drawPrimitives(primitiveType, realBuffer, indirectBufferOffset);
 
@@ -4637,6 +4645,9 @@ void WrappedMTLRenderCommandEncoder::drawPrimitives(MTL::PrimitiveType primitive
                                                     WrappedMTLBuffer *indirectBuffer,
                                                     NS::UInteger indirectBufferOffset)
 {
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  CaptureIndirectArguments(indirectBuffer,indirectBufferOffset,4);
+
   SERIALISE_TIME_CALL(Unwrap(this)->drawPrimitives(primitiveType, Unwrap(indirectBuffer),
                                                    indirectBufferOffset));
 
@@ -4899,12 +4910,17 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResourceWithStages(SerialiserT
       return false;
     }
     Unwrap(RenderCommandEncoder)->useResource(Unwrap(resource), (MTL::ResourceUsage)usageValue, (MTL::RenderStages)stagesValue);
+    if(IsLoading(m_State) && (usageValue & MTL::ResourceUsageWrite))
+      m_Device->GetReplay()->NoteRenderIndirectWrite(
+          RenderCommandEncoder->GetParallelParent()?GetResID(RenderCommandEncoder->GetParallelParent()):GetResID(RenderCommandEncoder),resource);
   }
   return true;
 }
 
 void WrappedMTLRenderCommandEncoder::useResourceWithStages(WrappedMTLResource *resource, MTL::ResourceUsage usage, MTL::RenderStages stages)
 {
+  if(usage & MTL::ResourceUsageWrite) CaptureIndirectWrite(resource);
+
   SERIALISE_TIME_CALL(Unwrap(this)->useResource(Unwrap(resource), usage, stages));
   if(IsCaptureMode(m_State))
   {
@@ -4936,6 +4952,9 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResources(SerialiserType &ser,
       RDCERR("Invalid Metal render resource declaration");
       return false;
     }
+    if(IsLoading(m_State) && (usageValue & MTL::ResourceUsageWrite))
+      for(auto resource:resources)m_Device->GetReplay()->NoteRenderIndirectWrite(
+          RenderCommandEncoder->GetParallelParent()?GetResID(RenderCommandEncoder->GetParallelParent()):GetResID(RenderCommandEncoder),resource);
     const auto real = UnwrapMetalResources(resources);
     if(!real.empty())
       Unwrap(RenderCommandEncoder)->useResources(real.data(), real.size(), (MTL::ResourceUsage)usageValue);
@@ -4945,6 +4964,8 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResources(SerialiserType &ser,
 
 void WrappedMTLRenderCommandEncoder::useResources(rdcarray<WrappedMTLResource *> resources, MTL::ResourceUsage usage)
 {
+  if(usage & MTL::ResourceUsageWrite) for(auto resource:resources)CaptureIndirectWrite(resource);
+
   const auto real = UnwrapMetalResources(resources);
   if(!real.empty())
   {
@@ -4982,6 +5003,9 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResourcesWithStages(Serialiser
       RDCERR("Invalid Metal render resource declaration");
       return false;
     }
+    if(IsLoading(m_State) && (usageValue & MTL::ResourceUsageWrite))
+      for(auto resource:resources)m_Device->GetReplay()->NoteRenderIndirectWrite(
+          RenderCommandEncoder->GetParallelParent()?GetResID(RenderCommandEncoder->GetParallelParent()):GetResID(RenderCommandEncoder),resource);
     const auto real = UnwrapMetalResources(resources);
     if(!real.empty())
       Unwrap(RenderCommandEncoder)->useResources(real.data(), real.size(), (MTL::ResourceUsage)usageValue, (MTL::RenderStages)stagesValue);
@@ -4991,6 +5015,8 @@ bool WrappedMTLRenderCommandEncoder::Serialise_useResourcesWithStages(Serialiser
 
 void WrappedMTLRenderCommandEncoder::useResourcesWithStages(rdcarray<WrappedMTLResource *> resources, MTL::ResourceUsage usage, MTL::RenderStages stages)
 {
+  if(usage & MTL::ResourceUsageWrite) for(auto resource:resources)CaptureIndirectWrite(resource);
+
   const auto real = UnwrapMetalResources(resources);
   if(!real.empty())
   {
@@ -5293,6 +5319,9 @@ bool WrappedMTLRenderCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
     if(!RenderCommandEncoder->GetParallelParent())
       RenderCommandEncoder->ResolveDeferredStoreActions();
     Unwrap(RenderCommandEncoder)->endEncoding();
+    if(IsLoading(m_State) && !RenderCommandEncoder->GetParallelParent() &&
+       !m_Device->GetReplay()->FlushRenderIndirectActions(GetResID(RenderCommandEncoder),
+           Unwrap(RenderCommandEncoder->GetCommandBuffer())))return false;
     m_Device->SetReplayRenderCommandEncoder(NULL);
 
     if(RenderCommandEncoder->GetParallelParent())
@@ -5334,6 +5363,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
 void WrappedMTLRenderCommandEncoder::endEncoding()
 {
   SERIALISE_TIME_CALL(Unwrap(this)->endEncoding());
+  if(!m_ParallelParent)m_Device->FlushRenderIndirectCaptures(m_CommandBuffer,m_ID);
 
   if(IsCaptureMode(m_State))
   {
@@ -6274,10 +6304,17 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPrimitives(
     }
 
     MTL::DrawIndexedPrimitivesIndirectArguments args = {};
-    if(!privateArguments)
+    const bool capturedArguments=IsLoading(m_State) && m_Device->m_HasCapturedRenderIndirectArguments;
+    if(IsLoading(m_State) && !m_Device->GetReplay()->RegisterRenderIndirectAction(
+        m_Device->GetReplay()->GetNextEventID(),RenderCommandEncoder,GetResID(indirectBuffer),
+        indirectBufferOffset,5,(uint32_t *)&args))return false;
+    if(!privateArguments && !capturedArguments)
     {
       memcpy(&args, (const byte *)realIndirect->contents() + indirectBufferOffset, sizeof(args));
-      if(!args.indexCount || !args.instanceCount ||
+    }
+    if(!privateArguments || capturedArguments)
+    {
+      if((!capturedArguments && (!args.indexCount || !args.instanceCount)) ||
          args.indexStart > (realIndex->length() - indexBufferOffset) / indexStride ||
          args.indexCount > (realIndex->length() - indexBufferOffset) / indexStride - args.indexStart)
       {
@@ -6313,6 +6350,8 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPrimitives(
         action.flags |= ActionFlags::Instanced;
       action.numIndices = args.indexCount;
       action.numInstances = args.instanceCount;
+      // The Metal pipeline snapshot binds the selected index byte range above.
+      // Action indices are relative to that binding, as for existing indexed draws.
       action.indexOffset = 0;
       action.baseVertex = args.baseVertex;
       action.instanceOffset = args.baseInstance;
@@ -6329,6 +6368,9 @@ void WrappedMTLRenderCommandEncoder::drawIndexedPrimitives(
     WrappedMTLBuffer *indexBuffer, NS::UInteger indexBufferOffset,
     WrappedMTLBuffer *indirectBuffer, NS::UInteger indirectBufferOffset)
 {
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  CaptureIndirectArguments(indirectBuffer,indirectBufferOffset,5);
+
   SERIALISE_TIME_CALL(Unwrap(this)->drawIndexedPrimitives(
       primitiveType, indexType, Unwrap(indexBuffer), indexBufferOffset,
       Unwrap(indirectBuffer), indirectBufferOffset));

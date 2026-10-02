@@ -524,6 +524,13 @@ WrappedMTLDevice::WrappedMTLDevice(MTL::Device *realMTLDevice, ResourceId objId)
 
 WrappedMTLDevice::~WrappedMTLDevice()
 {
+  for(MTL::CommandBuffer *buffer : m_CapturePendingGPU)
+    buffer->release();
+  m_CapturePendingGPU.clear();
+  ClearDescriptorHistorySnapshot();
+  for(const DescriptorHistoryChunk &entry : m_DescriptorHistory)
+    entry.chunk->Delete();
+  m_DescriptorHistory.clear();
   // A malformed capture can abort initial replay before its pending command buffer reaches the
   // normal completion path. Keep the encoders and their resources alive until the GPU is done.
   if(m_ReplayCommandBuffer || m_ReplayRenderCommandEncoder || m_ReplayComputeCommandEncoder ||
@@ -1059,6 +1066,17 @@ bool WrappedMTLDevice::Serialise_newBufferWithBytes(SerialiserType &ser, Wrapped
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    WrappedMTLObject *previous = GetResourceManager()->GetResource(Buffer, true);
+    // Ordinary frame buffers also occur in legacy captures without descriptor annotations
+    // (e.g. AS scratch/output). Recreate them on every seek through the same owned lifecycle.
+    const bool frameBuffer = GetReplayEpoch() != 0 &&
+        (!m_DescriptorCoverage || (m_DescriptorCoverage >= 8 && m_DescriptorFrameBuffers.count(Buffer)));
+    if(Buffer == ResourceId() || !length ||
+       (!initialData.empty() && (initialData.size() != length ||
+        (uint64_t(options) & 0xf0ULL) >= uint64_t(MTL::ResourceStorageModePrivate))) ||
+       (previous && !(frameBuffer && IsActiveReplaying(m_State) &&
+                      previous->m_Type == eResBuffer && !previous->m_Real)))
+      return false;
     MTL::Buffer *realMTLBuffer;
     if(initialData.isEmpty())
     {
@@ -1069,12 +1087,20 @@ bool WrappedMTLDevice::Serialise_newBufferWithBytes(SerialiserType &ser, Wrapped
       RDCASSERT(initialData.size() == length);
       realMTLBuffer = Unwrap(this)->newBuffer(initialData.data(), initialData.size(), options);
     }
-    WrappedMTLBuffer *wrappedMTLBuffer;
-    GetResourceManager()->WrapResource(Buffer, realMTLBuffer, wrappedMTLBuffer, true);
-
-    AddResource(Buffer, ResourceType::Buffer, "Buffer");
-    GetReplay()->AddBuffer(Buffer, length);
-    DerivedResource(this, Buffer);
+    if(!realMTLBuffer) return false;
+    if(GetReplayEpoch() == 0 && initialData.size() == length)
+      m_ReplayBuffersWithCreationContents.insert(Buffer);
+    WrappedMTLBuffer *wrappedMTLBuffer = (WrappedMTLBuffer *)previous;
+    if(previous)
+      GetResourceManager()->ReplaceRealResource(wrappedMTLBuffer, realMTLBuffer, true);
+    else
+    {
+      GetResourceManager()->WrapResource(Buffer, realMTLBuffer, wrappedMTLBuffer, true);
+      AddResource(Buffer, ResourceType::Buffer, "Buffer");
+      GetReplay()->AddBuffer(Buffer, length);
+      DerivedResource(this, Buffer);
+    }
+    if(frameBuffer) RegisterFramePlacementResource(Buffer, NULL);
   }
   return true;
 }
@@ -1121,6 +1147,7 @@ bool WrappedMTLDevice::Serialise_newBufferWithBytesNoCopy(SerialiserType &ser,
     AddResource(Buffer, ResourceType::Buffer, "Buffer");
     GetReplay()->AddBuffer(Buffer, length);
     DerivedResource(this, Buffer);
+    if(GetReplayEpoch() == 0) m_ReplayBuffersWithCreationContents.insert(Buffer);
   }
   return true;
 }
@@ -1431,7 +1458,10 @@ bool WrappedMTLDevice::Serialise_newRenderPipelineStateWithDescriptor(
           return false;
       return true;
     };
-    if(!validPreloads(descriptor.vertexPreloadedLibraries) ||
+    if(!ValidateMetalPipelineFunction(descriptor.vertexFunction, MTL::FunctionTypeVertex) ||
+       (descriptor.fragmentFunction &&
+        !ValidateMetalPipelineFunction(descriptor.fragmentFunction, MTL::FunctionTypeFragment)) ||
+       !validPreloads(descriptor.vertexPreloadedLibraries) ||
        !validPreloads(descriptor.fragmentPreloadedLibraries) ||
        descriptor.binaryArchives.size() > 8 ||
        !validVisibleLinks(descriptor.vertexLinkedFunctions) ||
@@ -2039,6 +2069,17 @@ bool WrappedMTLDevice::Serialise_newTextureWithDescriptor(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
+    const bool cube = descriptor.textureType == MTL::TextureTypeCube ||
+                      descriptor.textureType == MTL::TextureTypeCubeArray;
+    if(!ValidTextureMipCount(descriptor.width, descriptor.height, descriptor.depth,
+                             descriptor.mipmapLevelCount) ||
+       (cube && (descriptor.width != descriptor.height || descriptor.depth != 1 ||
+                 !descriptor.arrayLength || descriptor.sampleCount != 1 ||
+                 (descriptor.textureType == MTL::TextureTypeCube && descriptor.arrayLength != 1))))
+    {
+      RDCERR("Invalid Metal texture dimensions or mip count");
+      return false;
+    }
     // Ensure the created textures can be read by a shader
     // Metal driver will treat TextureUsageUnknown as all options
     if(descriptor.usage != MTL::TextureUsageUnknown)
@@ -2047,6 +2088,7 @@ bool WrappedMTLDevice::Serialise_newTextureWithDescriptor(SerialiserType &ser,
     MTL::TextureDescriptor *mtlDescriptor(descriptor);
     MTL::Texture *realMTLTexture = Unwrap(this)->newTexture(mtlDescriptor);
     mtlDescriptor->release();
+    if(!realMTLTexture) return false;
     WrappedMTLTexture *wrappedMTLTexture;
     ResourceId liveID =
         GetResourceManager()->WrapResource(Texture, realMTLTexture, wrappedMTLTexture, true);
@@ -2385,6 +2427,10 @@ WrappedMTLTexture *WrappedMTLDevice::Common_NewTexture(RDMTL::TextureDescriptor 
     }
     MetalResourceRecord *textureRecord = GetResourceManager()->AddResourceRecord(wrappedMTLTexture);
     textureRecord->AddChunk(chunk);
+    if((realMTLTexture->storageMode() == MTL::StorageModePrivate ||
+        realMTLTexture->storageMode() == MTL::StorageModeShared ||
+        realMTLTexture->storageMode() == MTL::StorageModeManaged) && !ioSurfaceTexture)
+      GetResourceManager()->MarkDirtyResource(id);
   }
   if(ioSurfaceTexture)
   {
@@ -2435,6 +2481,29 @@ WrappedMTLTexture *WrappedMTLDevice::WrapDrawableTexture(MTL::Texture *realTextu
         GetResourceManager()->AddResourceRecord(wrappedMTLTexture);
     textureRecord->AddChunk(chunk);
 
+    // A retained drawable may still be a bindless source in the next capture.
+    // Snapshot its GPU contents at capture start like other background images;
+    // its initial pixels cannot be inferred from the current frame's presentation.
+    if(!realTexture->framebufferOnly() &&
+       (realTexture->storageMode() == MTL::StorageModePrivate ||
+        realTexture->storageMode() == MTL::StorageModeShared ||
+        realTexture->storageMode() == MTL::StorageModeManaged))
+    {
+      GetResourceManager()->MarkDirtyResource(GetResID(wrappedMTLTexture));
+      // A newly acquired drawable can Load pixels from its previous presentation.
+      // It did not exist at StartFrameCapture, so preserve its acquired contents
+      // before returning it to the application and before any frame encoding.
+      if(IsActiveCapturing(m_State)) {
+        const bool preserved=Prepare_InitialState(wrappedMTLTexture);
+        if(getenv("RENDERDOC_METAL_TRACE_DRAWABLE_INITIAL"))
+          fprintf(stderr,"Metal acquired drawable initial: id=%s width=%llu height=%llu format=%llu preserved=%d\n",
+              ToStr(GetResID(wrappedMTLTexture)).c_str(),(unsigned long long)realTexture->width(),
+              (unsigned long long)realTexture->height(),(unsigned long long)realTexture->pixelFormat(),preserved);
+        if(!preserved) RDCERR("Failed to preserve acquired Metal drawable initial contents %s",
+                             ToStr(GetResID(wrappedMTLTexture)).c_str());
+      }
+    }
+
     SCOPED_LOCK(m_CapturePotentialBackBuffersLock);
     m_CapturePotentialBackBuffers.insert(wrappedMTLTexture);
   }
@@ -2446,6 +2515,7 @@ WrappedMTLBuffer *WrappedMTLDevice::Common_NewBuffer(bool withBytes, const void 
                                                      NS::UInteger length,
                                                      MTL::ResourceOptions options)
 {
+  SCOPED_READLOCK(m_CapTransitionLock);
   MTL::Buffer *realMTLBuffer;
   SERIALISE_TIME_CALL(realMTLBuffer = withBytes ? Unwrap(this)->newBuffer(pointer, length, options)
                                                 : Unwrap(this)->newBuffer(length, options));
@@ -2465,6 +2535,11 @@ WrappedMTLBuffer *WrappedMTLDevice::Common_NewBuffer(bool withBytes, const void 
 
     MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrappedMTLBuffer);
     record->AddChunk(chunk);
+    if(IsActiveCapturing(m_State))
+    {
+      AddFrameCaptureRecordChunk(chunk->Duplicate());
+      RegisterCapturedFrameResource(id);
+    }
 
     MTL::StorageMode mode = realMTLBuffer->storageMode();
     record->bufInfo = new MetalBufferInfo(mode);

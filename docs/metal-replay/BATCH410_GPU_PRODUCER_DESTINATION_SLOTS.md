@@ -1,0 +1,9 @@
+# B410：GPU producer目标表中的未写值allocation
+
+真实UE第二次descriptor update dispatch被全live-slot读取检查拒绝：主表24的几十个新allocation仍data0，更新shader只是写入目标表，不读取这些尚未物化的槽位。
+
+候选63在existingCPU ownership预扫描收集每个producer encoder的明确目标buffer；这些chunk仍在正常frame扫描中逐条验证source/offset/slot/data/type/identity与单dispatch。仅producer dispatch对其GPUWritten目标表的empty live allocation免做读值重定位；draw与一般dispatch保留原检查。Native Overlay/部分seek提交也保留该empty目标slot的原字节，不伪造CPU GPUValue或dispatch。
+
+修复部分seek的提交检查后，6fe54533/metal-unused-producer-slot.xvjmhd：6captures/24reset seeks/108indirect +24fresh CPU +9unused-producer API+CLI反例组通过。Shared、未声明payload表、parallel Private均通过Native像素/ordinarymetadata/原producer。反例覆盖coverage62、producer缺失、未写槽位进入后续reader；全在GPU前拒绝。早期小例曾触发错误退出后的Native CB释放断言，系统未重启；最终有效例seek已通过。
+
+实际UE pre-submit63越过第二descriptor update dispatch，下一CPU value为buffer24/off24384/gen6489，stream209856。完整UE GPU/UI仍未验收，持续目标active。

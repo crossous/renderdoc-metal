@@ -1,4 +1,35 @@
+2026-10-02 [B438](BATCH438_INTERLEAVED_GPU_PRODUCER_OWNERSHIP.md)/[B439](BATCH439_RETIRED_PRIVATE_TEXTURE_BACKING.md)：当前 b814fdbb 已通过同一 UE faa8540e 的严格审计、正常 OpenCapture、整帧 EID9924 与反复 EID0 重置。三份原生900×640图像逐字节一致，重编码JPEG与原捕获缩略图逐字节一致；EID2017实际indirect为8,1,1，BasePass五MRT及两组64³体积MRT重复读回稳定。修复各自定向后立即返回同一UE，再进行一次当前库验收全量308/7786/3080，通过后再次返回同一UE通过。当前库 qrenderdoc 正常加载，实际第五MRT、体积Slice63及完整编辑器/天空/黄色平台观察通过，正常退出；这是助手UI操作记录，未声称用户人工验收或独立原始无损图像golden。校验归档763历史目标至外置CauseUseMac（12.22GiB逻辑数据），34原始项目截帧全部保留，清理后构建约3.2GiB，后续验收产物生成后约3.7GiB、可用约13GiB。无提交推送。当前使用入口及已验收副本见 [运行说明](../../util/ue/README.md)。
+
 # 集中 GUI QA 总入口
+
+2026-10-01 BATCH332–333：六类tiny终端、56负例及slot诊断导出/拒绝通过。
+本批新增Viewer人工验收未运行；UE NewMap编辑器正常启动观察不算UE replay
+人工验收。完整UE、MRT/pass scope与旧T待验保持，全量未跑。见[BATCH333](BATCH333_UE_PARTIAL_PROVIDER.md)。
+
+2026-10-01 BATCH331：最终5fab70bf…库/app真实Viewer Private view小帧
+89/167/89、哨兵与绑定正确，正常退出。plain Private最终UI另次被锁屏阻止，
+不算通过；完整UE与旧T待验保持，全量未跑。见[BATCH331](BATCH331_FRAME_DESCRIPTOR_RESOURCES.md)。
+
+2026-09-30 BATCH330：人工UI新增通过两类descriptor小帧。最终78e3cecc…库
+table EID9/25/9输出122/161/122，混合EID15/34/53/15输出41/121/160/41，哨兵
+不变；窗口loaded/no problems detected、正常退出。此结果不验收UE真帧或旧T
+系列，旧待验保留。全量未跑。见[BATCH330](BATCH330_DUPLICATE_IDENTITIES_AND_VIEWER.md)。
+
+2026-09-30 BATCH328–329：最终库/app `bd255367cb60…`，实际typed小帧GPU replay
+与GPU/CPU混合entry更新通过；UE自动重截end=1、primary布局记录通过，UE
+完整replay仍未达到。Computer Use返回macOS锁屏，人工Viewer验收未完成，
+已请求手动解锁；成功UI QA增量0，旧待验保留。见
+[BATCH329](BATCH329_UE_DESCRIPTOR_LAYOUTS_AND_DRAWABLE_LIFETIME.md)。
+
+2026-09-30 BATCH327：修复间接资源capture过滤，助手已自动重截NewMap。
+最终库/app `6c0e5d6f8cfe…`，sampler表映射覆盖已有CPU证据；UE回放仍在
+未实现descriptor relocation处拒绝。没有新人工UI验收，全部旧项继续保留。
+不再要求用户重截，见 [BATCH327](BATCH327_GPU_IDENTITY_RESOURCE_CLOSURE.md)。
+
+2026-09-30 BATCH326：本地NewMap新UE帧只有CPU审计证据，缺原生GPU身份映射。
+新诊断库保守拒绝该族的GPU回放，尚未实现descriptor重定位；无新GUI通过。
+库/app `c7cb40b786ff…`，用户需重截获取地址诊断数据，见
+[BATCH326](BATCH326_GPU_IDENTITY_DIAGNOSTICS.md)。所有旧待验项继续保留。
 
 2026-09-30 BATCH325 增量：确认 23:15 WindowServer watchdog 整机重启，
 没有新的 GUI 验收；当前远程机暂停 UE 大帧 GPU/GUI 测试。累计成功

@@ -1,5 +1,41 @@
 # Metal Replay 测试矩阵
 
+2026-10-01 BATCH332–333：六种typed tiny各两次capture，GPU字节/像素/seek、
+56组API+CLI负例通过；slot六条generation/payload顺序、四项非法annotation拒绝、
+metadata gate API+CLI拒绝通过。独立MetalRHI编译/98导出、NullRHI exit0、
+正常Metal NewMap启动通过；完整UE replay未验，全量未跑，新增Viewer未验。
+当前库1ee8ba5e…，日志metal-descriptors.h6ILpf。见[BATCH333](BATCH333_UE_PARTIAL_PROVIDER.md)。
+
+2026-10-01 BATCH331：五类typed小例各两次capture的GPU字节/像素/seek通过，
+Shared/Private frame placement、Private buffer texture view VA/ID重定位与帧首
+reset新增通过；48API+CLI负例、旧六帧终端通过。最终库/app5fab70bf…Private
+view人工89/167/89通过；全量未跑，完整UE仍GPU前拒绝。见[BATCH331](BATCH331_FRAME_DESCRIPTOR_RESOURCES.md)。
+
+2026-09-30 BATCH330：pre-existing资源首次getter在帧内的真实重复metadata
+捕获/replay通过；冲突身份、冲突sampler别名拒绝，等价别名正例通过，合计15
+负例API+CLI。两类小帧最终库人工Viewer输出/seek通过；UE仍GPU前拒绝，
+全量未跑。见[BATCH330](BATCH330_DUPLICATE_IDENTITIES_AND_VIEWER.md)。
+
+2026-09-30 BATCH328–329：显式Shared typed表的真实GPU relocation、offset/常量
+保留、CPU partial diff、GPU copy+显式CPU完整entry、12/15次seek与两次capture
+通过；13API+CLI负例、旧六帧API+CLI通过。六次drawable present/引用释放后
+thumbnail保存通过；UE新捕获end=1/primary布局导出通过。**完整UE预期拒绝；
+全量未跑；人工UI锁屏未验**。见[BATCH328](BATCH328_EXPLICIT_DESCRIPTOR_REPLAY.md)
+和[BATCH329](BATCH329_UE_DESCRIPTOR_LAYOUTS_AND_DRAWABLE_LIFETIME.md)。
+
+2026-09-30 BATCH327：查询过GPU身份的live间接资源保守capture引用、缓存
+getter依赖保留、已销毁对象排除，三变体×两次capture与CPU/API+CLI拒绝通过；
+旧六帧终端通过。两个独立原生进程的typed packet重编码（buffer+4 offset、
+texture、sampler、常量保留）得到122。**重定位只到原生算法验证；没有UE
+replay/GPU descriptor更新支持或人工UI验收。** 见
+[BATCH327](BATCH327_GPU_IDENTITY_RESOURCE_CLOSURE.md)。
+
+2026-09-30 BATCH326增量：buffer gpuAddress、texture/sampler gpuResourceID的
+原生返回值可捕获为身份诊断metadata；pre-frame/active query、跨两次capture
+持久性和CPU导出通过；含该族的capture在GPU前拒绝。**只支持诊断，未支持
+Shader Converter descriptor重定位或任意raw GPU地址replay。** 旧六帧API/CLI
+与20次lifecycle通过，具体清单见 [BATCH326](BATCH326_GPU_IDENTITY_DIAGNOSTICS.md)。
+
 ## 优先级
 
 - P0：首条可用 replay 链路必须覆盖。

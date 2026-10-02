@@ -77,7 +77,10 @@ def make_cases(tree):
     for method in ('dispatchThreadgroups', 'dispatchThreads'):
         for field, value in [('threadsPerGroup.width', 0), ('threadsPerGroup.height', 0),
                              ('threadsPerGroup.width', 2**64 - 1),
-                             ('threadsPerGroup.width', 1025), ('threadsPerGroup.depth', 2),
+                             ('threadsPerGroup.width', 1025),
+                             # dispatchThreadgroups permits a 3D local size. Reject the
+                             # actual total-thread limit, not a legal depth of two.
+                             ('threadsPerGroup.depth', 1025),
                              ('ComputeCommandEncoder', 0)]:
             edit(f'{method}-{field}-{value}', method, field, value)
     return cases

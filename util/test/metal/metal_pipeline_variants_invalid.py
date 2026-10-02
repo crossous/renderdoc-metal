@@ -39,7 +39,8 @@ def make_cases(tree):
         # A later creation cannot reuse an already-live pipeline ID.
         first = next(n for n in chunks if int(n.get('id')) == chunk_id)
         edit(chunk_id, resource, child(first, resource).text, occurrence=1)
-        for value in (4, 7, 8, 2**63, 2**64 - 1):
+        # Bit 4 is the supported archive-miss policy; unknown option bits are illegal.
+        for value in (8, 12, 16, 2**63, 2**64 - 1):
             edit(chunk_id, 'optionsValue', value)
         function_field = ('descriptor.vertexFunction' if chunk_id == 1022 else
                           'descriptor.computeFunction' if chunk_id == 1025 else 'computeFunction')
@@ -114,7 +115,7 @@ def main():
             if not re.search(r'failed|invalid|unsupported|missing|Couldn.t load', message, re.I):
                 raise RuntimeError(f'missing diagnostic: {tag}: {message}')
         # Exercise the two individual reflection bits as valid alternatives, not just 0 and 3.
-        for option in (1, 2):
+        for option in (1, 2, 4, 7):
             variant = copy.deepcopy(tree)
             for node in variant.findall('./chunks/chunk'):
                 if int(node.get('id')) in (1022, 1024, 1025):
@@ -125,7 +126,7 @@ def main():
             valid = directory / f'valid-option-{option}.rdc'
             run(command, 'convert', '-f', xml, '-o', valid, '-c', 'rdc')
             run(command, 'replay', '--loops', '2', valid)
-    print(f'T47 malformed captures rejected without crash: {len(cases)} cases; 2 valid option variants')
+    print(f'T47 malformed captures rejected without crash: {len(cases)} cases; 4 valid option variants')
 
 
 if __name__ == '__main__':

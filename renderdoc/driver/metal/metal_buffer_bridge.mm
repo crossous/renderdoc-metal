@@ -194,7 +194,9 @@
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_13_0
 - (uint64_t)gpuAddress API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  return self.real.gpuAddress;
+  uint64_t address = self.real.gpuAddress;
+  GetWrapped(self)->m_Device->CaptureGPUIdentity(GetWrapped(self), 0, address);
+  return address;
 }
 #endif
 

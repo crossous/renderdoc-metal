@@ -698,6 +698,82 @@ static BlockShape GetBlockShape(MTL::PixelFormat mtlFormat, uint32_t plane)
       return {2, 1, 4};
     case MTL::PixelFormatInvalid: return {1, 1, 1};
   }
+  return {0, 0, 0};
+}
+
+bool GetTextureDataBlockShape(MTL::PixelFormat format, uint32_t &width,
+                                     uint32_t &height, uint32_t &bytes)
+{
+  switch(format)
+  {
+    case MTL::PixelFormatR8Unorm_sRGB:
+    case MTL::PixelFormatR16Unorm:
+    case MTL::PixelFormatR16Uint:
+    case MTL::PixelFormatRG16Unorm:
+    case MTL::PixelFormatRG16Uint:
+    case MTL::PixelFormatRG32Uint:
+    case MTL::PixelFormatRGBA16Unorm:
+    case MTL::PixelFormatRGBA8Uint:
+    case MTL::PixelFormatRGBA32Uint:
+    case MTL::PixelFormatBC2_RGBA:
+    case MTL::PixelFormatBC2_RGBA_sRGB:
+    case MTL::PixelFormatBC3_RGBA:
+    case MTL::PixelFormatBC3_RGBA_sRGB:
+    case MTL::PixelFormatBC4_RUnorm:
+    case MTL::PixelFormatBC4_RSnorm:
+    case MTL::PixelFormatBC5_RGSnorm:
+    case MTL::PixelFormatBC6H_RGBFloat:
+    case MTL::PixelFormatBC6H_RGBUfloat:
+    case MTL::PixelFormatBC7_RGBAUnorm:
+    case MTL::PixelFormatBC7_RGBAUnorm_sRGB:
+    case MTL::PixelFormatDepth16Unorm:
+    case MTL::PixelFormatDepth32Float:
+    case MTL::PixelFormatBC1_RGBA:
+    case MTL::PixelFormatBC1_RGBA_sRGB:
+    case MTL::PixelFormatBC5_RGUnorm:
+    case MTL::PixelFormatR8Unorm:
+    case MTL::PixelFormatR8Uint:
+    case MTL::PixelFormatR16Float:
+    case MTL::PixelFormatR32Sint:
+    case MTL::PixelFormatRGBA8Snorm:
+    case MTL::PixelFormatRGBA16Snorm:
+    case MTL::PixelFormatR32Uint:
+    case MTL::PixelFormatR32Float:
+    case MTL::PixelFormatRG8Unorm:
+    case MTL::PixelFormatRG16Float:
+    case MTL::PixelFormatRG32Float:
+    case MTL::PixelFormatRGBA8Unorm:
+    case MTL::PixelFormatRGBA8Unorm_sRGB:
+    case MTL::PixelFormatBGRA8Unorm:
+    case MTL::PixelFormatBGRA8Unorm_sRGB:
+    case MTL::PixelFormatRGB10A2Unorm:
+    case MTL::PixelFormatRG11B10Float:
+    case MTL::PixelFormatRGBA16Float:
+    case MTL::PixelFormatRGBA32Float:
+      return GetTextureBlockShape(format, width, height, bytes);
+    default: return false;
+  }
+}
+
+bool ValidTextureMipCount(uint64_t width, uint64_t height, uint64_t depth, uint64_t levels)
+{
+  if(!width || !height || !depth || !levels) return false;
+  uint64_t largest = RDCMAX(RDCMAX(width, height), depth);
+  uint32_t maximum = 0;
+  do { maximum++; largest >>= 1; } while(largest);
+  return levels <= maximum;
+}
+
+bool GetTextureBlockShape(MTL::PixelFormat format, uint32_t &width, uint32_t &height,
+                          uint32_t &bytes)
+{
+  if(format == MTL::PixelFormatInvalid)
+    return false;
+  const BlockShape shape = GetBlockShape(format, 0);
+  width = shape.width;
+  height = shape.height;
+  bytes = shape.bytes;
+  return width && height && bytes;
 }
 
 static uint32_t GetPlaneByteSize(uint32_t width, uint32_t height, uint32_t depth,

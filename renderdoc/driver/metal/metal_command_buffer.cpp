@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 #include "metal_command_buffer.h"
+#include "metal_command_queue.h"
 #include <cmath>
 #include "metal_buffer.h"
 #include "metal_blit_command_encoder.h"
@@ -43,6 +44,21 @@ WrappedMTLCommandBuffer::WrappedMTLCommandBuffer(MTL::CommandBuffer *realMTLComm
 {
   if(realMTLCommandBuffer && objId != ResourceId() && IsCaptureMode(m_State))
     AllocateObjCBridge(this);
+}
+
+WrappedMTLCommandBuffer::~WrappedMTLCommandBuffer()
+{
+  if(m_CaptureQueueProxy) m_CaptureQueueProxy->release();
+}
+
+void WrappedMTLCommandBuffer::SetCommandQueue(WrappedMTLCommandQueue *queue)
+{
+  if(queue == m_CommandQueue) return;
+  NS::Object *proxy = IsCaptureMode(m_State) && queue && queue->m_ObjcBridge ?
+      ((NS::Object *)queue)->retain() : NULL;
+  if(m_CaptureQueueProxy) m_CaptureQueueProxy->release();
+  m_CaptureQueueProxy = proxy;
+  m_CommandQueue = queue;
 }
 
 bool WrappedMTLCommandBuffer::ReplayComputeCommandEncoder(
@@ -538,44 +554,13 @@ bool WrappedMTLCommandBuffer::Serialise_computeCommandEncoderWithDescriptor(
       RDCERR("Invalid Metal compute pass descriptor or encoder identity");
       return false;
     }
+    if(ser.VersionAtLeast(0xE) && !ValidateMetalComputePassCounters(m_Device, attachments)) return false;
     MTL::ComputePassDescriptor *descriptor = MTL::ComputePassDescriptor::alloc()->init();
     descriptor->setDispatchType(dispatchType);
     for(size_t i = 0; i < attachments.size(); i++)
     {
       const auto &attachment = attachments[i];
-      if((attachment.sampleBufferId != ResourceId() &&
-          (!attachment.sampleBuffer ||
-           GetResID(attachment.sampleBuffer) != attachment.sampleBufferId)) ||
-         (attachment.sampleBufferId == ResourceId() && attachment.sampleBuffer) ||
-         (attachment.sampleBuffer &&
-          (attachment.sampleBuffer->m_Type != eResCounterSampleBuffer ||
-           !attachment.sampleBuffer->m_Real || attachment.sampleBuffer->m_Device != m_Device)))
-      {
-        RDCERR("Invalid Metal compute pass counter sample buffer identity");
-        descriptor->release();
-        return false;
-      }
-      if(!attachment.sampleBuffer)
-      {
-        if(attachment.startOfEncoderSampleIndex != MTLCounterDontSample ||
-           attachment.endOfEncoderSampleIndex != MTLCounterDontSample)
-        {
-          RDCERR("Metal compute pass has sample indices without a counter buffer");
-          descriptor->release();
-          return false;
-        }
-        continue;
-      }
-      const uint64_t count = Unwrap(attachment.sampleBuffer)->sampleCount();
-      if((attachment.startOfEncoderSampleIndex != MTLCounterDontSample &&
-          attachment.startOfEncoderSampleIndex >= count) ||
-         (attachment.endOfEncoderSampleIndex != MTLCounterDontSample &&
-          attachment.endOfEncoderSampleIndex >= count))
-      {
-        RDCERR("Invalid Metal compute pass counter sample index");
-        descriptor->release();
-        return false;
-      }
+      if(!attachment.sampleBuffer) continue;
       auto *native = descriptor->sampleBufferAttachments()->object(i);
       native->setSampleBuffer(Unwrap(attachment.sampleBuffer));
       native->setStartOfEncoderSampleIndex(attachment.startOfEncoderSampleIndex);
@@ -712,6 +697,56 @@ WrappedMTLComputeCommandEncoder *WrappedMTLCommandBuffer::computeCommandEncoder(
   return wrappedEncoder;
 }
 
+static bool ValidateMetalPassCounterBuffer(WrappedMTLDevice *device,
+    WrappedMTLCounterSampleBuffer *buffer, ResourceId id, const rdcarray<uint64_t> &indices,
+    bool absentIndicesDisabled)
+{
+  if((id != ResourceId() && (!buffer || GetResID(buffer) != id)) ||
+     (id == ResourceId() && buffer) ||
+     (buffer && (buffer->m_Type != eResCounterSampleBuffer || !buffer->m_Real || buffer->m_Device != device)))
+  { RDCERR("Invalid Metal pass counter sample buffer identity or owner"); return false; }
+  for(uint64_t index : indices)
+    if(index != MTLCounterDontSample && (buffer ? index >= Unwrap(buffer)->sampleCount() : absentIndicesDisabled))
+    { RDCERR("Invalid Metal pass counter sample index"); return false; }
+  return true;
+}
+
+bool ValidateMetalRenderPassCounters(WrappedMTLDevice *device,
+    const rdcarray<RDMTL::RenderPassSampleBufferAttachmentDescriptor> &attachments)
+{
+  if(attachments.size() > MAX_RENDER_PASS_SAMPLE_BUFFER_ATTACHMENTS) return false;
+  for(const auto &a : attachments)
+    if(!ValidateMetalPassCounterBuffer(device, a.sampleBuffer, a.sampleBufferId,
+        {uint64_t(a.startOfVertexSampleIndex), uint64_t(a.endOfVertexSampleIndex),
+         uint64_t(a.startOfFragmentSampleIndex), uint64_t(a.endOfFragmentSampleIndex)}, false)) return false;
+  return true;
+}
+
+bool ValidateMetalComputePassCounters(WrappedMTLDevice *device,
+    const rdcarray<RDMTL::ComputePassSampleBufferAttachmentDescriptor> &attachments)
+{
+  if(attachments.size() != MAX_COMPUTE_PASS_SAMPLE_BUFFER_ATTACHMENTS) return false;
+  for(const auto &a : attachments)
+    if(!ValidateMetalPassCounterBuffer(device, a.sampleBuffer, a.sampleBufferId,
+        {uint64_t(a.startOfEncoderSampleIndex), uint64_t(a.endOfEncoderSampleIndex)}, true)) return false;
+  return true;
+}
+
+static bool ValidRenderPassTextureIdentities(const RDMTL::RenderPassDescriptor &descriptor)
+{
+  auto validAttachment = [](const RDMTL::RenderPassAttachmentDescriptor &attachment) {
+    auto valid = [](ResourceId id, WrappedMTLTexture *texture) {
+      return id == ResourceId() ? texture == NULL :
+          texture && GetResID(texture) == id && texture->m_Type == eResTexture && texture->m_Real;
+    };
+    return valid(attachment.textureId, attachment.texture) &&
+           valid(attachment.resolveTextureId, attachment.resolveTexture);
+  };
+  for(const auto &attachment : descriptor.colorAttachments)
+    if(!validAttachment(attachment)) return false;
+  return validAttachment(descriptor.depthAttachment) && validAttachment(descriptor.stencilAttachment);
+}
+
 template <typename SerialiserType>
 bool WrappedMTLCommandBuffer::Serialise_renderCommandEncoderWithDescriptor(
     SerialiserType &ser, WrappedMTLRenderCommandEncoder *encoder,
@@ -750,35 +785,8 @@ bool WrappedMTLCommandBuffer::Serialise_renderCommandEncoderWithDescriptor(
       RDCERR("Metal render pass rasterization rate map layer count does not match target array length");
       return false;
     }
-    for(const auto &attachment : descriptor.sampleBufferAttachments)
-    {
-      if((attachment.sampleBufferId != ResourceId() &&
-          (!attachment.sampleBuffer ||
-           GetResID(attachment.sampleBuffer) != attachment.sampleBufferId)) ||
-         (attachment.sampleBufferId == ResourceId() && attachment.sampleBuffer))
-      {
-        RDCERR("Invalid Metal render pass counter sample buffer identity");
-        return false;
-      }
-      if(!attachment.sampleBuffer)
-        continue;
-      if(attachment.sampleBuffer->m_Type != eResCounterSampleBuffer ||
-         !attachment.sampleBuffer->m_Real)
-      {
-        RDCERR("Invalid Metal render pass counter sample buffer identity");
-        return false;
-      }
-      const uint64_t count = Unwrap(attachment.sampleBuffer)->sampleCount();
-      for(uint64_t index : {uint64_t(attachment.startOfVertexSampleIndex),
-                            uint64_t(attachment.endOfVertexSampleIndex),
-                            uint64_t(attachment.startOfFragmentSampleIndex),
-                            uint64_t(attachment.endOfFragmentSampleIndex)})
-        if(index != MTLCounterDontSample && index >= count)
-        {
-          RDCERR("Invalid Metal render pass counter sample index");
-          return false;
-        }
-    }
+    if(!ValidateMetalRenderPassCounters(m_Device, descriptor.sampleBufferAttachments)) return false;
+    if(!ValidRenderPassTextureIdentities(descriptor)) return false;
     MTL::RenderPassDescriptor *mtlDescriptor(descriptor);
     // Keep deferred store actions unknown so the application's encoder setters remain legal.
     // Only unattached slots can be finalised immediately; attached slots are resolved at
@@ -876,6 +884,7 @@ WrappedMTLRenderCommandEncoder *WrappedMTLCommandBuffer::renderCommandEncoderWit
   ResourceId id = GetResourceManager()->WrapResource(ResourceId(), realMTLRenderCommandEncoder,
                                                      wrappedMTLRenderCommandEncoder);
   wrappedMTLRenderCommandEncoder->SetCommandBuffer(this);
+  m_Device->CaptureRenderIndirectAttachments(this,GetResID(wrappedMTLRenderCommandEncoder),descriptor);
   if(IsCaptureMode(m_State))
   {
     Chunk *chunk = NULL;
@@ -959,32 +968,8 @@ bool WrappedMTLCommandBuffer::Serialise_parallelRenderCommandEncoderWithDescript
       RDCERR("Invalid Metal parallel render pass rasterization rate map identity");
       return false;
     }
-    for(const auto &attachment : descriptor.sampleBufferAttachments)
-    {
-      if((attachment.sampleBufferId != ResourceId() &&
-          (!attachment.sampleBuffer ||
-           GetResID(attachment.sampleBuffer) != attachment.sampleBufferId)) ||
-         (attachment.sampleBufferId == ResourceId() && attachment.sampleBuffer) ||
-         (attachment.sampleBuffer &&
-          (attachment.sampleBuffer->m_Type != eResCounterSampleBuffer ||
-           !attachment.sampleBuffer->m_Real || attachment.sampleBuffer->m_Device != m_Device)))
-      {
-        RDCERR("Invalid Metal parallel render pass counter sample buffer identity");
-        return false;
-      }
-      if(!attachment.sampleBuffer)
-        continue;
-      const uint64_t count = Unwrap(attachment.sampleBuffer)->sampleCount();
-      for(uint64_t index : {uint64_t(attachment.startOfVertexSampleIndex),
-                            uint64_t(attachment.endOfVertexSampleIndex),
-                            uint64_t(attachment.startOfFragmentSampleIndex),
-                            uint64_t(attachment.endOfFragmentSampleIndex)})
-        if(index != MTLCounterDontSample && index >= count)
-        {
-          RDCERR("Invalid Metal parallel render pass counter sample index");
-          return false;
-        }
-    }
+    if(!ValidateMetalRenderPassCounters(m_Device, descriptor.sampleBufferAttachments)) return false;
+    if(!ValidRenderPassTextureIdentities(descriptor)) return false;
     MTL::RenderPassDescriptor *nativeDescriptor(descriptor);
     uint16_t deferredStoreActions = 0;
     for(NS::UInteger i = 0; i < descriptor.colorAttachments.size(); i++)
@@ -1067,6 +1052,7 @@ WrappedMTLCommandBuffer::parallelRenderCommandEncoderWithDescriptor(
   WrappedMTLParallelRenderCommandEncoder *wrapped = NULL;
   GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
   wrapped->SetCommandBuffer(this);
+  m_Device->CaptureRenderIndirectAttachments(this,GetResID(wrapped),descriptor);
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();
@@ -1207,6 +1193,13 @@ void WrappedMTLCommandBuffer::CapturePresent(MTL::Drawable *drawable, MetalChunk
         chunk = scope.Get();
       }
       MetalResourceRecord *bufferRecord = GetRecord(this);
+      MetalCmdBufferRecordingInfo *retained = bufferRecord->cmdInfo;
+      if(retained->retainedPresentedTextureNative) retained->retainedPresentedTextureNative->release();
+      if(retained->retainedPresentedTextureProxy) retained->retainedPresentedTextureProxy->release();
+      if(retained->retainedDrawable) retained->retainedDrawable->release();
+      retained->retainedPresentedTextureNative = Unwrap(presentedImage)->retain();
+      retained->retainedPresentedTextureProxy = ((NS::Object *)presentedImage)->retain();
+      retained->retainedDrawable = drawable->retain();
       bufferRecord->AddChunk(chunk);
       bufferRecord->cmdInfo->presented = true;
       bufferRecord->cmdInfo->outputLayer = info.mtlLayer;
@@ -1249,33 +1242,46 @@ bool WrappedMTLCommandBuffer::Serialise_commit(SerialiserType &ser)
 
 void WrappedMTLCommandBuffer::commit()
 {
-  MTL::CommandBuffer *mtlCommandBuffer = Unwrap(this);
-  bool isCapture = IsCaptureMode(m_State);
-  // During capture keep the real resource alive
-  // It will be released when it is no longer required to be tracked
-  if(isCapture)
+  // Submission and capture-start cutoff are atomic. Only committed work enters the
+  // initial-state wait; an enqueued, uncommitted buffer must never be waited on here.
+  WrappedMTLDevice *device = m_Device;
+  rdcarray<WrappedMTLDevice::PendingCapturePresent> presents;
   {
-    MetalCmdBufferRecordingInfo *info = GetRecord(this)->cmdInfo;
-    RDCASSERT(info && !info->retainedProxy && !info->retainedNative && m_ObjcBridge);
-    // The record still refers to this wrapper at frame end. Retaining only the native
-    // command buffer lets an autorelease pool destroy the embedded ObjC proxy and wrapper,
-    // leaving record->m_Resource dangling while we wait for submitted GPU work.
-    info->retainedProxy = ((NS::Object *)this)->retain();
-    mtlCommandBuffer->retain();
-    info->retainedNative = mtlCommandBuffer;
-    // Snapshot before native commit can invoke callbacks or mutate shared memory on the GPU.
-    m_Device->CaptureCmdBufCPUWrites(GetRecord(this));
+    SCOPED_READLOCK(device->GetCaptureTransitionLock());
+    SCOPED_LOCK(device->GetCaptureSubmissionLock());
+    MTL::CommandBuffer *mtlCommandBuffer = Unwrap(this);
+    bool isCapture = IsCaptureMode(m_State);
+    // During capture keep the real resource alive
+    // It will be released when it is no longer required to be tracked
+    if(isCapture)
+    {
+      MetalCmdBufferRecordingInfo *info = GetRecord(this)->cmdInfo;
+      RDCASSERT(info && !info->retainedProxy && !info->retainedNative && m_ObjcBridge);
+      // The record still refers to this wrapper at frame end. Retaining only the native
+      // command buffer lets an autorelease pool destroy the embedded ObjC proxy and wrapper,
+      // leaving record->m_Resource dangling while we wait for submitted GPU work.
+      info->retainedProxy = ((NS::Object *)this)->retain();
+      mtlCommandBuffer->retain();
+      info->retainedNative = mtlCommandBuffer;
+      // Snapshot before native commit can invoke callbacks or mutate shared memory on the GPU.
+      device->CaptureCmdBufCPUWrites(GetRecord(this));
+    }
+    SERIALISE_TIME_CALL(mtlCommandBuffer->commit());
+    if(isCapture)
+      device->RecordCaptureSubmission(mtlCommandBuffer);
+    if(isCapture)
+    {
+      MetalResourceRecord *bufferRecord = GetRecord(this);
+      device->CaptureCmdBufCommit(bufferRecord, presents);
+    }
+    else
+    {
+      // TODO: implement RD MTL replay
+    }
   }
-  SERIALISE_TIME_CALL(mtlCommandBuffer->commit());
-  if(isCapture)
-  {
-    MetalResourceRecord *bufferRecord = GetRecord(this);
-    m_Device->CaptureCmdBufCommit(bufferRecord);
-  }
-  else
-  {
-    // TODO: implement RD MTL replay
-  }
+  // Automatic frame transitions acquire the write lock. Do not invoke them while
+  // this submission holds the cutoff read lock; own presentation objects meanwhile.
+  device->ProcessCapturePresents(presents);
 }
 
 template <typename SerialiserType>
@@ -1288,13 +1294,18 @@ bool WrappedMTLCommandBuffer::Serialise_enqueue(SerialiserType &ser)
   // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
-    CommandBuffer->waitUntilCompleted();
+    if(!CommandBuffer || !m_Device->EnqueueReplayCommandBuffer(CommandBuffer))
+      return false;
   }
   return true;
 }
 
 void WrappedMTLCommandBuffer::enqueue()
 {
+  // Native queue reservations and their records must have the same order even
+  // when another application thread commits on this queue concurrently.
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  SCOPED_LOCK(m_Device->GetCaptureSubmissionLock());
   SERIALISE_TIME_CALL(Unwrap(this)->enqueue());
   if(IsCaptureMode(m_State))
   {
@@ -1422,10 +1433,8 @@ bool WrappedMTLCommandBuffer::Serialise_waitUntilCompleted(SerialiserType &ser)
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
-  {
-  }
+    return m_Device->WaitReplayCommandBuffer(CommandBuffer);
   return true;
 }
 

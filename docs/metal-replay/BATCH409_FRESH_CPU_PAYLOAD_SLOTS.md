@@ -1,0 +1,11 @@
+# B409：临时CPU描述符载荷的新子区间
+
+真实UE eb9386b7在chunk32238拒绝buffer477/off17664/gen6554/full24B CPU value。buffer477为Shared WriteCombined 2MiB上传分配，未DeclareDescriptorTable/GPUWrites。官方UE FlushPendingDescriptorUpdates由TempAllocator分配entries/indices/uniform不同子区间；此前encoder17467/CB17457已经编码，后续CPU写位于新分配子区间。不能仅依据整buffer有借用者拒绝新descriptor allocation。
+
+候选62保存每次资源借用时的live逻辑槽位集合。只有非GPUWritten、未GPU modified、新generation/live且data尚空、此前未借用的完整24B CPU槽位允许在其他命令pending时初始化，并接受对应精确resource binding。旧已借用槽位/整表GPU-write exclusion/非24B/offset/generation/type/source身份/alias仍保留。复用现有ReplayCPUBufferUpdate及已提交CB完成等待，不创建替代Native draw/dispatch或改PSO。
+
+对照RenderDoc Vulkan Serialise_vkUpdateDescriptorSets和D3D12 ExecuteCommandListsInternal，allocation/update/consumption/submit是不同操作，不把unused heap allocation自动当作shader消费。Metal的24B IR entry与UE allocator offset只参与已有Native字段重定位。
+
+c4c60375/metal-fresh-cpu-slot.4g4Wn3：6captures/24reset cycles/108indirect API+CLI negative groups/24fresh-slot negative groups通过。Shared、无table声明的Private间接参数、parallel Private三变体，先已有消费及payload resource借用，再同CB新增payload槽位24并由原Native GPU producer读取；MRT每像素、122/186、普通metadata和seek均验证。反例覆盖旧coverage61、先借用新槽位、GPUWritten payload、短data、错offset/gen、缺/未知source。
+
+真实UE pre-submit62越过buffer477 CPU value，下一拒绝dispatch streamOffset182336。无GPU上传或整帧提交。尚需最终组合全量，人工UI和完整UE replay未通过；连续目标active，未提交推送。

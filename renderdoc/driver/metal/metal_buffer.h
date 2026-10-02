@@ -29,6 +29,11 @@
 #include "metal_resources.h"
 
 
+// Pure descriptor/range/alignment validation, shared by preflight and native creation.
+bool ValidateMetalBufferTexture(MTL::Device *device, const RDMTL::TextureDescriptor &descriptor,
+                               uint64_t bufferLength, MTL::StorageMode bufferStorage,
+                               uint64_t offset, uint64_t bytesPerRow);
+
 class WrappedMTLBuffer : public WrappedMTLObject
 {
 public:

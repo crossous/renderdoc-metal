@@ -76,14 +76,13 @@ static bool ValidTextureRegion(WrappedMTLTexture *texture, NS::UInteger slice, N
 
 // Keep linear transfers bounded before they reach the native driver. BC1/BC5 use 4x4
 // blocks; other packed/compressed and depth/stencil layouts remain rejected here.
-static bool ValidLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slice,
+bool ValidateMetalLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slice,
                                     NS::UInteger level, const MTL::Origin &origin,
-                                    const MTL::Size &size, WrappedMTLBuffer *buffer,
+                                    const MTL::Size &size, uint64_t bufferLength,
                                     NS::UInteger offset, NS::UInteger rowPitch,
                                     NS::UInteger imagePitch, MTL::BlitOption options)
 {
-  if(!ValidTextureRegion(texture, slice, level, origin, size) || !buffer ||
-     buffer->m_Type != eResBuffer || !Unwrap(buffer) ||
+  if(!ValidTextureRegion(texture, slice, level, origin, size) || !bufferLength ||
      options != MTL::BlitOptionNone || Unwrap(texture)->sampleCount() != 1)
     return false;
   MTL::PixelFormat mtlFormat = Unwrap(texture)->pixelFormat();
@@ -107,7 +106,6 @@ static bool ValidLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slic
   const uint64_t rowBytes = (bc1 || bc5) ? ((uint64_t(size.width) + 3) / 4) * pixelBytes :
                                                   uint64_t(size.width) * pixelBytes;
   const uint64_t rows = (bc1 || bc5) ? (uint64_t(size.height) + 3) / 4 : uint64_t(size.height);
-  const uint64_t bufferLength = Unwrap(buffer)->length();
   if(offset > bufferLength || offset % pixelBytes || rowPitch % pixelBytes ||
      rowPitch < rowBytes || rowBytes > bufferLength - offset)
     return false;
@@ -120,6 +118,17 @@ static bool ValidLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slic
       size.depth - 1 > available / imagePitch))
     return false;
   return true;
+}
+
+static bool ValidLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slice,
+                                    NS::UInteger level, const MTL::Origin &origin,
+                                    const MTL::Size &size, WrappedMTLBuffer *buffer,
+                                    NS::UInteger offset, NS::UInteger rowPitch,
+                                    NS::UInteger imagePitch, MTL::BlitOption options)
+{
+  return buffer && buffer->m_Type == eResBuffer && Unwrap(buffer) &&
+      ValidateMetalLinearTextureCopy(texture, slice, level, origin, size,
+          Unwrap(buffer)->length(), offset, rowPitch, imagePitch, options);
 }
 
 static bool ValidTextureCopyRange(WrappedMTLTexture *source, NS::UInteger sourceSlice,
@@ -516,6 +525,10 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromBuffer(
              uint64_t(sourceOffset), uint64_t(size), uint64_t(destinationOffset), uint64_t(size));
       return false;
     }
+
+    if(!m_Device->TrackDescriptorGPUCopy(GetResID(sourceBuffer), sourceOffset,
+          GetResID(destinationBuffer), destinationOffset, size))
+      return false;
 
     Unwrap(BlitCommandEncoder)
         ->copyFromBuffer(Unwrap(sourceBuffer), sourceOffset, Unwrap(destinationBuffer),

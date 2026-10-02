@@ -52,13 +52,17 @@ bool WrappedMTLBuffer::Serialise_makeAliasable(SerialiserType &ser)
       return false;
     }
     Unwrap(Buffer)->makeAliasable();
+    m_Device->RecordReplayAliasable(GetResID(Buffer));
   }
   return true;
 }
 
 void WrappedMTLBuffer::makeAliasable()
 {
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  SCOPED_LOCK(m_Device->GetCaptureSubmissionLock());
   SERIALISE_TIME_CALL(Unwrap(this)->makeAliasable());
+  if(IsCaptureMode(m_State)) Atomic::CmpExch32(&m_CapturedAliasable, 0, 1);
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();
@@ -130,6 +134,68 @@ MTL::PurgeableState WrappedMTLBuffer::setPurgeableState(MTL::PurgeableState stat
 INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLBuffer, MTL::PurgeableState, setPurgeableState,
                                 MTL::PurgeableState);
 
+bool ValidateMetalBufferTexture(MTL::Device *device, const RDMTL::TextureDescriptor &descriptor,
+                               uint64_t bufferLength, MTL::StorageMode bufferStorage,
+                               uint64_t offset, uint64_t bytesPerRow)
+{
+  uint64_t pixelBytes = 0;
+  switch(descriptor.pixelFormat)
+  {
+    case MTL::PixelFormatR8Unorm: pixelBytes = 1; break;
+    case MTL::PixelFormatR16Uint:
+    case MTL::PixelFormatR16Float: pixelBytes = 2; break;
+    case MTL::PixelFormatR32Uint:
+    case MTL::PixelFormatR32Sint:
+    case MTL::PixelFormatR32Float:
+    case MTL::PixelFormatRG16Uint:
+    case MTL::PixelFormatRG16Float:
+    case MTL::PixelFormatRGBA8Uint:
+    case MTL::PixelFormatRGBA8Snorm: pixelBytes = 4; break;
+    case MTL::PixelFormatRG32Uint:
+    case MTL::PixelFormatRG32Float:
+    case MTL::PixelFormatRGBA16Snorm:
+    case MTL::PixelFormatRGBA16Float: pixelBytes = 8; break;
+    case MTL::PixelFormatRGBA32Uint:
+    case MTL::PixelFormatRGBA32Float: pixelBytes = 16; break;
+    // The earlier Shared 2D fixture remains supported.
+    case MTL::PixelFormatRGBA8Unorm:
+    case MTL::PixelFormatBGRA8Unorm: pixelBytes = 4; break;
+    default: break;
+  }
+  const bool textureBuffer = descriptor.textureType == MTL::TextureTypeTextureBuffer;
+  const bool shared2D = descriptor.textureType == MTL::TextureType2D &&
+                        (descriptor.pixelFormat == MTL::PixelFormatRGBA8Unorm ||
+                         descriptor.pixelFormat == MTL::PixelFormatBGRA8Unorm);
+  if((!shared2D && !textureBuffer) || !pixelBytes ||
+     (shared2D && (bufferStorage != MTL::StorageModeShared ||
+                   descriptor.storageMode != MTL::StorageModeShared)) ||
+     (textureBuffer && (bufferStorage != MTL::StorageModePrivate ||
+                        descriptor.storageMode != MTL::StorageModePrivate ||
+                        descriptor.resourceOptions != MTL::ResourceStorageModePrivate ||
+                        descriptor.hazardTrackingMode != MTL::HazardTrackingModeDefault ||
+                        descriptor.allowGPUOptimizedContents ||
+                        (descriptor.usage != MTL::TextureUsageShaderRead &&
+                         descriptor.usage != (MTL::TextureUsageShaderRead |
+                                              MTL::TextureUsageShaderWrite)))) ||
+     descriptor.width == 0 || descriptor.height == 0 || descriptor.depth != 1 ||
+     descriptor.mipmapLevelCount != 1 || descriptor.arrayLength != 1 ||
+     descriptor.sampleCount != 1 || descriptor.width > UINT64_MAX / pixelBytes ||
+     descriptor.width > (textureBuffer ?
+         RDCMIN(uint64_t(128ULL*1024*1024),uint64_t(device->maxBufferLength()))/pixelBytes : 16384) ||
+     (textureBuffer && descriptor.height != 1) ||
+     bytesPerRow < descriptor.width * pixelBytes || offset > bufferLength ||
+     bytesPerRow == 0 || descriptor.height > (bufferLength - offset) / bytesPerRow)
+    return false;
+  const uint64_t linearAlignment = device->minimumLinearTextureAlignmentForPixelFormat(
+      descriptor.pixelFormat);
+  const uint64_t bufferAlignment = device->minimumTextureBufferAlignmentForPixelFormat(
+      descriptor.pixelFormat);
+  if(linearAlignment == 0 || bufferAlignment == 0 || offset % bufferAlignment ||
+     bytesPerRow % linearAlignment)
+    return false;
+  return true;
+}
+
 template <typename SerialiserType>
 bool WrappedMTLBuffer::Serialise_newTextureWithDescriptor(
     SerialiserType &ser, WrappedMTLTexture *texture, RDMTL::TextureDescriptor &descriptor,
@@ -149,74 +215,14 @@ bool WrappedMTLBuffer::Serialise_newTextureWithDescriptor(
         IsActiveReplaying(m_State) && m_Device->IsFrameBufferTextureView(Texture) &&
         GetResourceManager()->HasResource(Texture) &&
         !GetResourceManager()->GetResource(Texture)->m_Real;
-    uint64_t pixelBytes = 0;
-    switch(descriptor.pixelFormat)
-    {
-      case MTL::PixelFormatR16Float: pixelBytes = 2; break;
-      case MTL::PixelFormatR32Uint:
-      case MTL::PixelFormatR32Sint:
-      case MTL::PixelFormatR32Float:
-      case MTL::PixelFormatRG16Float:
-      case MTL::PixelFormatRGBA8Snorm: pixelBytes = 4; break;
-      case MTL::PixelFormatRG32Uint:
-      case MTL::PixelFormatRG32Float:
-      case MTL::PixelFormatRGBA16Snorm:
-      case MTL::PixelFormatRGBA16Float: pixelBytes = 8; break;
-      case MTL::PixelFormatRGBA32Uint:
-      case MTL::PixelFormatRGBA32Float: pixelBytes = 16; break;
-      // The earlier Shared 2D fixture remains supported.
-      case MTL::PixelFormatRGBA8Unorm:
-      case MTL::PixelFormatBGRA8Unorm: pixelBytes = 4; break;
-      default: break;
-    }
-    const bool textureBuffer = descriptor.textureType == MTL::TextureTypeTextureBuffer;
-    const bool shared2D = descriptor.textureType == MTL::TextureType2D &&
-                          (descriptor.pixelFormat == MTL::PixelFormatRGBA8Unorm ||
-                           descriptor.pixelFormat == MTL::PixelFormatBGRA8Unorm);
     const uint64_t bufferLength = Buffer && Buffer->m_Type == eResBuffer && Buffer->m_Real
                                       ? Unwrap(Buffer)->length() : 0;
-    if(!Buffer || Buffer->m_Type != eResBuffer || !Buffer->m_Real ||
-       Texture == ResourceId() ||
+    if(!Buffer || Buffer->m_Type != eResBuffer || !Buffer->m_Real || Texture == ResourceId() ||
        (GetResourceManager()->HasResource(Texture) && !recreateFrameView) ||
-       (!shared2D && !textureBuffer) || !pixelBytes ||
-       (shared2D && (Unwrap(Buffer)->storageMode() != MTL::StorageModeShared ||
-                     descriptor.storageMode != MTL::StorageModeShared)) ||
-       (textureBuffer && (Unwrap(Buffer)->storageMode() != MTL::StorageModePrivate ||
-                          descriptor.storageMode != MTL::StorageModePrivate ||
-                          descriptor.resourceOptions != MTL::ResourceStorageModePrivate ||
-                          descriptor.hazardTrackingMode != MTL::HazardTrackingModeDefault ||
-                          descriptor.allowGPUOptimizedContents ||
-                          (descriptor.usage != MTL::TextureUsageShaderRead &&
-                           descriptor.usage != (MTL::TextureUsageShaderRead |
-                                                MTL::TextureUsageShaderWrite)))) ||
-       descriptor.width == 0 || descriptor.height == 0 || descriptor.depth != 1 ||
-       descriptor.mipmapLevelCount != 1 || descriptor.arrayLength != 1 ||
-       descriptor.sampleCount != 1 || descriptor.width > UINT64_MAX / pixelBytes ||
-       descriptor.width > (textureBuffer ? 1114112 : 16384) ||
-       (textureBuffer && descriptor.height != 1) ||
-       bytesPerRow < descriptor.width * pixelBytes || offset > bufferLength ||
-       bytesPerRow == 0 || descriptor.height > (bufferLength - offset) / bytesPerRow)
+       !ValidateMetalBufferTexture(Unwrap(m_Device), descriptor, bufferLength,
+                                  Unwrap(Buffer)->storageMode(), offset, bytesPerRow))
     {
       RDCERR("Invalid or unsupported Metal buffer-backed texture identity, descriptor or range");
-      fprintf(stderr, "Metal buffer texture rejected: type=%llu format=%llu width=%llu height=%llu options=%llu storage=%llu hazard=%llu usage=%llu optimized=%d offset=%llu row=%llu bufferLength=%llu bufferStorage=%llu\n",
-              (uint64_t)descriptor.textureType, (uint64_t)descriptor.pixelFormat,
-              (uint64_t)descriptor.width, (uint64_t)descriptor.height,
-              (uint64_t)descriptor.resourceOptions, (uint64_t)descriptor.storageMode,
-              (uint64_t)descriptor.hazardTrackingMode, (uint64_t)descriptor.usage,
-              descriptor.allowGPUOptimizedContents ? 1 : 0, (uint64_t)offset,
-              (uint64_t)bytesPerRow, bufferLength,
-              Buffer && Buffer->m_Type == eResBuffer && Buffer->m_Real
-                  ? (uint64_t)Unwrap(Buffer)->storageMode() : 999ULL);
-      return false;
-    }
-    const uint64_t linearAlignment = Unwrap(m_Device)->minimumLinearTextureAlignmentForPixelFormat(
-        descriptor.pixelFormat);
-    const uint64_t bufferAlignment = Unwrap(m_Device)->minimumTextureBufferAlignmentForPixelFormat(
-        descriptor.pixelFormat);
-    if(linearAlignment == 0 || bufferAlignment == 0 || offset % bufferAlignment ||
-       bytesPerRow % linearAlignment)
-    {
-      RDCERR("Invalid Metal buffer-backed texture alignment");
       return false;
     }
     MTL::TextureDescriptor *nativeDescriptor(descriptor);
@@ -239,6 +245,7 @@ bool WrappedMTLBuffer::Serialise_newTextureWithDescriptor(
       if(frameView && IsLoading(m_State))
         m_Device->RegisterFrameBufferTextureView(Texture);
     }
+    m_Device->GetReplay()->RegisterBufferTextureSource(Texture, GetResID(Buffer));
   }
   return true;
 }
@@ -464,7 +471,7 @@ bool WrappedMTLBuffer::Serialise_InternalModifyCPUContents(SerialiserType &ser, 
   SERIALISE_CHECK_READ_ERRORS();
 
   if(IsReplayingAndReading() &&
-     (size != data.size() || !m_Device->ReplayCPUBufferUpdate(Buffer, start, data)))
+     (size != data.size() || !m_Device->ReplayCPUBufferUpdate(Buffer, start, data, true)))
   {
     RDCERR("Invalid Metal CPU buffer update range, payload or resource");
     return false;

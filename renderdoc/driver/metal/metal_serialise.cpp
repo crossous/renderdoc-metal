@@ -383,17 +383,33 @@ void DoSerialise(SerialiserType &ser, RDMTL::RenderPipelineDescriptor &el)
 template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, RDMTL::RenderPassAttachmentDescriptor &el)
 {
-  SERIALISE_MEMBER(texture);
+  if(ser.IsWriting() || ser.IsStructurising())
+  {
+    el.textureId = GetResID(el.texture);
+    el.resolveTextureId = GetResID(el.resolveTexture);
+  }
+  ser.Serialise("texture"_lit, el.textureId).TypedAs("MTLTexture"_lit);
   SERIALISE_MEMBER(level);
   SERIALISE_MEMBER(slice);
   SERIALISE_MEMBER(depthPlane);
-  SERIALISE_MEMBER(resolveTexture);
+  ser.Serialise("resolveTexture"_lit, el.resolveTextureId).TypedAs("MTLTexture"_lit);
   SERIALISE_MEMBER(resolveLevel);
   SERIALISE_MEMBER(resolveSlice);
   SERIALISE_MEMBER(resolveDepthPlane);
   SERIALISE_MEMBER(loadAction);
   SERIALISE_MEMBER(storeAction);
   SERIALISE_MEMBER(storeActionOptions);
+  if(ser.IsReading())
+  {
+    MetalResourceManager *rm = (MetalResourceManager *)ser.GetUserData();
+    el.texture = NULL;
+    el.resolveTexture = NULL;
+    if(rm && !IsStructuredExporting(rm->GetState()))
+    {
+      el.texture = (WrappedMTLTexture *)rm->GetResource(el.textureId, true);
+      el.resolveTexture = (WrappedMTLTexture *)rm->GetResource(el.resolveTextureId, true);
+    }
+  }
 };
 
 template <typename SerialiserType>

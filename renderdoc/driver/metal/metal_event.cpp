@@ -264,6 +264,7 @@ bool WrappedMTLCommandBuffer::Serialise_encodeEvent(SerialiserType &ser, Wrapped
       RDCERR("Invalid Metal shared-event timeline value");
       return false;
     }
+    m_Device->MarkReplayCommandBufferEncoded();
     if(signal)
     {
       Unwrap(CommandBuffer)->encodeSignalEvent(Unwrap(event), value);

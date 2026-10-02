@@ -31,7 +31,7 @@
 template <>
 rdcstr DoStringise(const MetalChunk &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1397, "Chunks changed without updating names");
+  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1412, "Chunks changed without updating names");
 
   BEGIN_ENUM_STRINGISE(MetalChunk)
   {
@@ -251,6 +251,26 @@ rdcstr DoStringise(const MetalChunk &el)
                                "MTLParallelRenderCommandEncoder::popDebugGroup");
     STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_insertDebugSignpost,
                                "MTLParallelRenderCommandEncoder::insertDebugSignpost");
+    STRINGISE_ENUM_CLASS_NAMED(MTLResource_CaptureGPUIdentity,
+                               "MTLResource::CaptureGPUIdentity");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_DeclareDescriptorTable,
+                               "MTLBuffer::DeclareDescriptorTable");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_DeclareDescriptorCoverage,
+                               "MTLDevice::DeclareDescriptorCoverage");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_DeclareDescriptorGPUWrites,
+                               "MTLBuffer::DeclareDescriptorGPUWrites");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_DescriptorCPUWrite, "MTLBuffer::DescriptorCPUWrite");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_DeclareDescriptorBytes,
+                               "MTLComputeCommandEncoder::DeclareDescriptorBytes");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_DescriptorSlotEvent, "MTLBuffer::DescriptorSlotEvent");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_DescriptorSlotBinding, "MTLBuffer::DescriptorSlotBinding");
+    STRINGISE_ENUM_CLASS_NAMED(MTLCommandEncoder_DescriptorInlineLayout, "MTLCommandEncoder::DescriptorInlineLayout");
+    STRINGISE_ENUM_CLASS_NAMED(MTLCommandEncoder_DescriptorInlineBinding, "MTLCommandEncoder::DescriptorInlineBinding");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_DescriptorSlotProducer, "MTLBuffer::DescriptorSlotProducer");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_CaptureComputeIndirectArgumentsCount, "MTLDevice::CaptureComputeIndirectArgumentsCount");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_CaptureIndirectArguments, "MTLComputeCommandEncoder::CaptureIndirectArguments");
+    STRINGISE_ENUM_CLASS_NAMED(MTLDevice_CaptureRenderIndirectArgumentsCount, "MTLDevice::CaptureRenderIndirectArgumentsCount");
+    STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_CaptureIndirectArguments, "MTLRenderCommandEncoder::CaptureIndirectArguments");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_resourceStateCommandEncoder,
                                "MTLCommandBuffer::resourceStateCommandEncoder");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_resourceStateCommandEncoderWithDescriptor,

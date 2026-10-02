@@ -72,6 +72,7 @@ def main():
             dependency[0].text = value
             cases.append((tag, variant))
         for tag, variant in cases:
+            for chunk in variant.findall('./chunks/chunk'): chunk.set('length', '0')
             xml = directory / f'{tag}.zip.xml'
             variant.write(xml, encoding='unicode', xml_declaration=True)
             shutil.copyfile(str(original)[:-4], str(xml)[:-4])
@@ -82,6 +83,7 @@ def main():
         # Replay must ignore the captured absolute install path and materialize a private one.
         variant = copy.deepcopy(tree)
         child(variant.findall('./chunks/chunk')[source_index], 'installName').text = '/no/such/T104/path.metallib'
+        for chunk in variant.findall('./chunks/chunk'): chunk.set('length', '0')
         xml = directory / 'remapped.zip.xml'
         variant.write(xml, encoding='unicode', xml_declaration=True)
         shutil.copyfile(str(original)[:-4], str(xml)[:-4])

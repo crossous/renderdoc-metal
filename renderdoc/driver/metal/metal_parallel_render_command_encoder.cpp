@@ -136,6 +136,9 @@ bool WrappedMTLParallelRenderCommandEncoder::Serialise_endEncoding(SerialiserTyp
     }
     ParallelRenderCommandEncoder->ResolveDeferredStoreActions();
     Unwrap(ParallelRenderCommandEncoder)->endEncoding();
+    if(IsLoading(m_State) && !m_Device->GetReplay()->FlushRenderIndirectActions(
+        GetResID(ParallelRenderCommandEncoder),Unwrap(ParallelRenderCommandEncoder->GetCommandBuffer())))
+      return false;
     m_Device->SetReplayParallelRenderCommandEncoder(NULL);
     ActionDescription action;
     if(IsLoading(m_State))
@@ -161,6 +164,7 @@ bool WrappedMTLParallelRenderCommandEncoder::Serialise_endEncoding(SerialiserTyp
 void WrappedMTLParallelRenderCommandEncoder::endEncoding()
 {
   SERIALISE_TIME_CALL(Unwrap(this)->endEncoding());
+  m_Device->FlushRenderIndirectCaptures(m_CommandBuffer,m_ID);
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();

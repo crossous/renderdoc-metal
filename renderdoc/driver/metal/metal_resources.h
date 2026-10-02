@@ -26,6 +26,8 @@
 
 #include "core/resource_manager.h"
 #include "metal_common.h"
+#include "metal_indirect_readback.h"
+#include "metal_render_indirect_readback.h"
 #include "metal_types.h"
 
 struct MetalResourceRecord;
@@ -94,6 +96,10 @@ struct WrappedMTLObject
   ResourceId m_ID;
   MetalResourceType m_Type = eResUnknown;
   bool m_OwnsReal = false;
+  // A native GPU identity is stable for this object's lifetime. Retain its diagnostic
+  // record for future captures, without adding a chunk on every descriptor update.
+  int32_t m_CapturedAliasable = 0;
+  int32_t m_CapturedGPUIdentity = 0;
   MetalResourceRecord *m_Record = NULL;
   WrappedMTLDevice *m_Device;
   CaptureState &m_State;
@@ -154,6 +160,23 @@ enum class MetalCmdBufferStatus : uint8_t
   Submitted,
 };
 
+struct MetalCapturedComputeIndirectArguments
+{
+  ResourceId command, encoder, buffer;
+  uint64_t offset = 0, epoch = 0;
+  uint32_t ordinal = 0;
+  MetalIndirectReadback readback;
+};
+
+struct MetalCapturedRenderIndirectArguments
+{
+  ResourceId command,encoder,pass,buffer;
+  uint64_t epoch=0,offset=0;
+  uint32_t ordinal=0,wordCount=0;
+  bool writesDeclared=false;
+  MetalIndirectReadback readback;
+};
+
 struct MetalCmdBufferRecordingInfo
 {
   MetalCmdBufferRecordingInfo(WrappedMTLCommandQueue *parentQueue) : queue(parentQueue) {}
@@ -169,13 +192,23 @@ struct MetalCmdBufferRecordingInfo
   // record has been serialised or submitted outside a capture.
   NS::Object *retainedProxy = NULL;
   MTL::CommandBuffer *retainedNative = NULL;
+  // A completed present may release the drawable's surface even while the command
+  // buffer remains alive. Thumbnail readback needs this acquisition through capture end.
+  NS::Object *retainedPresentedTextureProxy = NULL;
+  MTL::Texture *retainedPresentedTextureNative = NULL;
+  MTL::Drawable *retainedDrawable = NULL;
 
   // The MetalLayer to present
   CA::MetalLayer *outputLayer = NULL;
   // The texture to present
   WrappedMTLTexture *backBuffer = NULL;
   MetalCmdBufferStatus status = MetalCmdBufferStatus::Unknown;
+  uint64_t captureCommitEpoch = 0;
   bool presented = false;
+  rdcarray<MetalCapturedComputeIndirectArguments> indirectArguments;
+  Threading::CriticalSection renderIndirectLock;
+  std::map<ResourceId,rdcarray<MetalIndirectWriteFootprint>> renderIndirectWrites;
+  rdcarray<MetalCapturedRenderIndirectArguments> renderIndirectArguments;
 };
 
 struct MetalBufferInfo

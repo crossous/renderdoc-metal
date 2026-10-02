@@ -1,0 +1,17 @@
+# B408：GPU写表的完整CPU初始槽位值
+
+真实UE首frame event2 buffer24/offset11448/gen6469/type4/data24被整表GPUWritten禁CPU写拦截，consumed0。UE官方CPUWrite在GetDescriptorMemory写入完整IRDescriptorTableEntry后记录event2与精确Bindings；该事件是CPU写的直接来源，不是猜测Shared diff。
+
+候选61仅对首次draw/dispatch前的完整对齐24B CPU value开放，保留generation/live/type/source binding/identity/alias/range检查。CPU preflight保存streamOffset证明，loading/active只能按同一offset接受；仍复用ReplayCPUBufferUpdate等待已提交CB并恢复捕获CPU bytes，GPU producer元数据event3仍不能变成CPU写。
+
+88d5e2d0/TH4UNO定向6captures/24reset cycles/108indirect negative groups通过：CPU把原目标改为另一张texture，firstGPU实际值186/122，原NativeGPUproducer及MRT每像素/ordinary bytes/Shared-Private indirect/parallel正常。额外7API+CLI旧coverage/late write/short data/unaligned/generation/missing/unknown source组通过，late write在首dispatch后必须拒绝。
+
+真实UE pre-submit61越过slotvalue，下一拒绝在firstcommit17421：它只提交5次普通buffer blit，CPU同时已分配尚未写value的槽位6473。旧commit逐全live-slot Patch错误地把unused allocation当shader消费。61 candidate将descriptor closure继续保留每draw/dispatch，commit不重复全heap消费检查；dispatchCount/drawCount保证CPU proof严格在firstshaderwork前而非每次commit重置的consumed标志。此最终candidate对象/库编译中，需再次定向/CPU预检。
+
+最新旧夹具全量为B4052bcf9403：308/7786/3080，growth9306112B；更新候选最终全量待组合，不每小改动重跑。实际UE frame GPU与UI仍未验收，持续目标active，无提交推送。
+
+最终51c5a0a7/rbXYnR定向6captures/24reset cycles/108indirect+21initialCPUslot API+CLI拒绝组通过，hash起止不变。实际UE pre-submit61再次运行中，没有GPU上传/整帧提交。
+
+真实UE下次预检首commit17421通过，下一点：buffer24/off24384/gen6489/event0在普通blit待提交时因consumed1被拦（streamOffset111168）。逻辑allocation不写Native descriptor内存，保留不得覆盖live旧generation，61允许该逻辑事件。initial CPU value证明改为firstshaderwork前、该table没有任何resourceCommands借用且未被modified；普通无关blit pending不等于该descriptor table已消费，不凭consumed全局状态拒绝。此修正尚需复验。
+
+5a0c8492/JZuR47补充逻辑allocation和table未被借用/modified条件后，再次6/24/108+21通过，起止hash一致；真实UE pre-submit61-logical继续运行，尚无整帧GPU。

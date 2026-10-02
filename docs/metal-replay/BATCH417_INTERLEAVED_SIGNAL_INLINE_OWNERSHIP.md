@@ -1,0 +1,7 @@
+# B417：交错command录制的inline参数所有权
+
+真实UE signal command17686/event12/value2583已出生、未提交、无所属live encoder；其他encoder17684正在layout/index2的第一个binding阶段。全局inlineShadow非空错误阻止独立command发signal。
+
+候选65将signal/commit/completion的inline完成检查按encoderCommands owner限定到所属command。仅另一已知live command的pending layout可以共存，未知或已结束encoder owner仍拒绝，own live encoder检查不变。GPU copy expected闭包仍保留全局限制，事件identity/type/device/monotonicity/queue reservation与提交顺序均不改。复用Native SelectReplayCommandBuffer/ActivateEncoderContext及WrappedMTLEvent::PrepareReplay每epoch新event，没有造新同步模型。
+
+ee461b0c/metal-interleaved-signal.lRlQPD：6captures/24reset seek，普通V/F实际buffer读/MRT数据正确。在main render typed inline layout第一个binding之后，另一个先enqueue的空command signal+commit，继续完成main inline参数并draw。Shared/Private/parallel三路径通过。额外30 API+CLI interleaved ownership/timeline/queue反例组全部GPU前拒绝，既有108indirect+24fresh+24mixed+51graphics反例组也通过。尚需真实UE下一预检及最终全量；未提交或推送。

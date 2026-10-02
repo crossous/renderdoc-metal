@@ -27,37 +27,82 @@
 #include "metal_device.h"
 #include "metal_texture.h"
 
-// Only the three block formats observed in the UE frame are admitted. Each mip is tightly
-// serialized as rows of 4x4 blocks; the staging row stride may be larger for Metal alignment.
-static uint32_t BCBlockBytes(MTL::PixelFormat format)
+// Initial texture data uses tightly packed logical mip rows, as in D3D12/Vulkan.
+// Native texture heap footprints are opaque and must not be copied as linear pixels.
+struct InitialTextureMip
 {
-  if(format == MTL::PixelFormatBC1_RGBA || format == MTL::PixelFormatBC1_RGBA_sRGB)
-    return 8;
-  if(format == MTL::PixelFormatBC5_RGUnorm)
-    return 16;
-  return 0;
-}
+  uint64_t width, height, depth, slice, mip, rows, rowBytes, pitch, offset, stagingOffset;
+  MTL::BlitOption options;
+};
 
-static bool BCTextureLayout(MTL::Texture *texture, uint64_t &total)
+static bool InitialTextureLayout(MTL::Texture *texture, rdcarray<InitialTextureMip> &mips,
+                                  uint64_t &total, uint64_t &stagingSize)
 {
-  total = 0;
-  if(!texture || texture->textureType() != MTL::TextureType2D ||
-     texture->storageMode() != MTL::StorageModePrivate || texture->sampleCount() != 1 ||
-     texture->arrayLength() != 1 || !BCBlockBytes(texture->pixelFormat()) ||
-     !texture->width() || !texture->height() || texture->width() > 4096 ||
-     texture->height() > 4096 || !texture->mipmapLevelCount() ||
-     texture->mipmapLevelCount() > 13)
+  total = stagingSize = 0;
+  mips.clear();
+  uint32_t blockWidth = 0, blockHeight = 0, blockBytes = 0;
+  const bool depthStencil = texture && texture->pixelFormat() == MTL::PixelFormatDepth32Float_Stencil8;
+  if(!texture || texture->parentTexture() || texture->buffer() || texture->framebufferOnly() ||
+     (texture->storageMode() != MTL::StorageModePrivate &&
+      texture->storageMode() != MTL::StorageModeShared &&
+      texture->storageMode() != MTL::StorageModeManaged) || texture->sampleCount() != 1 ||
+     !texture->arrayLength() || texture->arrayLength() > 128 ||
+     (!depthStencil && !GetTextureDataBlockShape(texture->pixelFormat(), blockWidth, blockHeight, blockBytes)) ||
+     !texture->width() || !texture->height() || !texture->depth() || texture->width() > 8192 ||
+     texture->height() > 8192 || texture->depth() > 256 ||
+     !ValidTextureMipCount(texture->width(), texture->height(), texture->depth(), texture->mipmapLevelCount()) ||
+     texture->mipmapLevelCount() > 14)
     return false;
-  for(uint64_t mip = 0; mip < texture->mipmapLevelCount(); mip++)
+  uint64_t slices = 1;
+  const MTL::TextureType type = texture->textureType();
+  if(type == MTL::TextureType2DArray) slices = texture->arrayLength();
+  else if(type == MTL::TextureTypeCube || type == MTL::TextureTypeCubeArray)
   {
-    const uint64_t width = RDCMAX(1ULL, uint64_t(texture->width()) >> mip);
-    const uint64_t height = RDCMAX(1ULL, uint64_t(texture->height()) >> mip);
-    total += ((width + 3) / 4) * ((height + 3) / 4) * BCBlockBytes(texture->pixelFormat());
-    if(total > 32ULL * 1024 * 1024)
-      return false;
+    if(texture->width() != texture->height()) return false;
+    slices = 6 * texture->arrayLength();
   }
+  else if(type != MTL::TextureType2D && type != MTL::TextureType3D) return false;
+  if((type != MTL::TextureType3D && texture->depth() != 1) ||
+     ((type == MTL::TextureType2D || type == MTL::TextureType3D || type == MTL::TextureTypeCube) &&
+      texture->arrayLength() != 1)) return false;
+  const bool depth = depthStencil || texture->pixelFormat() == MTL::PixelFormatDepth16Unorm ||
+                     texture->pixelFormat() == MTL::PixelFormatDepth32Float;
+  if(depth && type == MTL::TextureType3D) return false;
+  // Both compressed and depth formats are excluded from the linear color alignment query.
+  const uint64_t alignment = depth ? 256 : blockWidth > 1 || blockHeight > 1 ? 1 :
+      RDCMAX(1ULL, uint64_t(texture->device()->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat())));
+  for(uint64_t slice = 0; slice < slices; slice++)
+    for(uint64_t mip = 0; mip < texture->mipmapLevelCount(); mip++)
+      for(uint32_t plane = 0; plane < (depthStencil ? 2U : 1U); plane++)
+      {
+        const uint32_t bw = depthStencil ? 1 : blockWidth;
+        const uint32_t bh = depthStencil ? 1 : blockHeight;
+        const uint32_t bytes = depthStencil ? (plane ? 1 : 4) : blockBytes;
+        InitialTextureMip layout = {};
+        layout.slice = slice; layout.mip = mip;
+        layout.options = depthStencil ? (plane ? MTL::BlitOptionStencilFromDepthStencil :
+                                                MTL::BlitOptionDepthFromDepthStencil) : MTL::BlitOptionNone;
+        layout.width = RDCMAX(1ULL, uint64_t(texture->width()) >> mip);
+        layout.height = RDCMAX(1ULL, uint64_t(texture->height()) >> mip);
+        layout.depth = type == MTL::TextureType3D ? RDCMAX(1ULL, uint64_t(texture->depth()) >> mip) : 1;
+        layout.rows = (layout.height + bh - 1) / bh;
+        layout.rowBytes = ((layout.width + bw - 1) / bw) * bytes;
+        layout.pitch = AlignUp(layout.rowBytes, alignment);
+        layout.offset = total; layout.stagingOffset = stagingSize;
+        total += layout.rowBytes * layout.rows * layout.depth;
+        stagingSize += layout.pitch * layout.rows * layout.depth;
+        if(total > 128ULL * 1024 * 1024 || stagingSize > 128ULL * 1024 * 1024)
+          return false;
+        mips.push_back(layout);
+      }
   return true;
 }
+
+struct InitialTextureAutoreleasePool
+{
+  NS::AutoreleasePool *pool = NS::AutoreleasePool::alloc()->init();
+  ~InitialTextureAutoreleasePool() { pool->drain(); }
+};
 
 static rdcliteral NameOfType(MetalResourceType type)
 {
@@ -73,6 +118,9 @@ static rdcliteral NameOfType(MetalResourceType type)
 bool WrappedMTLDevice::Prepare_InitialState(WrappedMTLObject *res)
 {
   ResourceId id = GetResourceManager()->GetID(res);
+  // Dirty tracking can outlive an explicitly retired placement resource retained by
+  // completed command buffers. It has no valid initial allocation to read back.
+  if(Atomic::CmpExch32(&res->m_CapturedAliasable, 0, 0)) return false;
 
   MetalResourceType type = res->m_Record->m_Type;
 
@@ -86,7 +134,8 @@ bool WrappedMTLDevice::Prepare_InitialState(WrappedMTLObject *res)
     byte *data = NULL;
     if(storageMode == MTL::StorageModeShared)
     {
-      // MTLStorageModeShared buffers are automatically synchronized
+      // StartFrameCapture waits for all committed application queues before this
+      // CPU read. Shared visibility alone does not imply GPU completion.
       data = (byte *)mtlBuffer->contents();
     }
     else if(storageMode == MTL::StorageModeManaged)
@@ -139,46 +188,31 @@ bool WrappedMTLDevice::Prepare_InitialState(WrappedMTLObject *res)
   }
   else if(type == eResTexture)
   {
+    InitialTextureAutoreleasePool pool;
     MTL::Texture *texture = Unwrap((WrappedMTLTexture *)res);
-    uint64_t total = 0;
-    if(!BCTextureLayout(texture, total)) return false;
+    uint64_t total = 0, stagingSize = 0;
+    rdcarray<InitialTextureMip> mips;
+    if(!InitialTextureLayout(texture, mips, total, stagingSize)) return false;
     bytebuf bytes;
     bytes.resize((size_t)total);
     MTL::Device *device = Unwrap(this);
-    // Metal's linear-texture alignment query asserts for compressed formats. Native
-    // BC blits accept a tightly packed row of complete 4x4 blocks.
-    const uint64_t alignment = 1;
-    uint64_t stagingSize = 0;
-    for(uint64_t mip = 0; mip < texture->mipmapLevelCount(); mip++)
-    {
-      const uint64_t width = RDCMAX(1ULL, uint64_t(texture->width()) >> mip);
-      const uint64_t height = RDCMAX(1ULL, uint64_t(texture->height()) >> mip);
-      const uint64_t row = ((width + 3) / 4) * BCBlockBytes(texture->pixelFormat());
-      stagingSize = RDCMAX(stagingSize, AlignUp(row, alignment) * ((height + 3) / 4));
-    }
     MTL::Buffer *staging = device->newBuffer(stagingSize, MTL::ResourceStorageModeShared);
     if(!staging || !staging->contents()) { if(staging) staging->release(); return false; }
-    uint64_t cursor = 0;
-    for(uint64_t mip = 0; mip < texture->mipmapLevelCount(); mip++)
-    {
-      const uint64_t width = RDCMAX(1ULL, uint64_t(texture->width()) >> mip);
-      const uint64_t height = RDCMAX(1ULL, uint64_t(texture->height()) >> mip);
-      const uint64_t rows = (height + 3) / 4;
-      const uint64_t row = ((width + 3) / 4) * BCBlockBytes(texture->pixelFormat());
-      const uint64_t pitch = AlignUp(row, alignment);
-      MTL::CommandBuffer *command = m_mtlCommandQueue->commandBuffer();
-      MTL::BlitCommandEncoder *blit = command ? command->blitCommandEncoder() : NULL;
-      if(!blit) { staging->release(); return false; }
-      blit->copyFromTexture(texture, 0, mip, MTL::Origin::Make(0,0,0),
-                            MTL::Size::Make(width,height,1), staging, 0, pitch, pitch * rows);
-      blit->endEncoding();
-      command->commit();
-      command->waitUntilCompleted();
-      if(command->status() != MTL::CommandBufferStatusCompleted) { staging->release(); return false; }
-      for(uint64_t y = 0; y < rows; y++)
-        memcpy(bytes.data() + cursor + y * row, (byte *)staging->contents() + y * pitch, row);
-      cursor += row * rows;
-    }
+    MTL::CommandBuffer *command = m_mtlCommandQueue->commandBuffer();
+    MTL::BlitCommandEncoder *blit = command ? command->blitCommandEncoder() : NULL;
+    if(!blit) { staging->release(); return false; }
+    for(const InitialTextureMip &layout : mips)
+      blit->copyFromTexture(texture, layout.slice, layout.mip, MTL::Origin::Make(0,0,0),
+          MTL::Size::Make(layout.width,layout.height,layout.depth), staging, layout.stagingOffset,
+          layout.pitch, layout.pitch * layout.rows, layout.options);
+    blit->endEncoding(); command->commit(); command->waitUntilCompleted();
+    if(command->status() != MTL::CommandBufferStatusCompleted) { staging->release(); return false; }
+    for(const InitialTextureMip &layout : mips)
+      for(uint64_t z = 0; z < layout.depth; z++)
+        for(uint64_t y = 0; y < layout.rows; y++)
+          memcpy(bytes.data() + layout.offset + (z * layout.rows + y) * layout.rowBytes,
+                 (byte *)staging->contents() + layout.stagingOffset + (z * layout.rows + y) * layout.pitch,
+                 layout.rowBytes);
     staging->release();
     GetResourceManager()->SetInitialContents(id, MetalInitialContents(type, bytes));
     return true;
@@ -233,7 +267,7 @@ bool WrappedMTLDevice::Serialise_InitialState(SerialiserType &ser, ResourceId id
     if(IsReplayingAndReading())
     {
       return type == eResBuffer ? RecordReplayBufferInitialContents(id, contents)
-                                : RecordReplayBCTextureInitialContents(id, contents);
+                                : RecordReplayTextureInitialContents(id, contents);
     }
     return true;
   }
@@ -241,64 +275,57 @@ bool WrappedMTLDevice::Serialise_InitialState(SerialiserType &ser, ResourceId id
   return false;
 }
 
-bool WrappedMTLDevice::RecordReplayBCTextureInitialContents(ResourceId id, const bytebuf &contents)
+bool WrappedMTLDevice::RecordReplayTextureInitialContents(ResourceId id, const bytebuf &contents)
 {
   WrappedMTLObject *object = GetResourceManager()->GetResource(id, true);
-  uint64_t expected = 0;
+  uint64_t expected = 0, stagingSize = 0;
+  rdcarray<InitialTextureMip> mips;
   if(!object || object->m_Type != eResTexture || !object->m_Real ||
-     !BCTextureLayout(Unwrap((WrappedMTLTexture *)object), expected) ||
-     contents.size() != expected || m_ReplayBCTextureInitialContents.count(id))
+     !InitialTextureLayout(Unwrap((WrappedMTLTexture *)object), mips, expected, stagingSize) ||
+     contents.size() != expected || m_ReplayTextureInitialContents.count(id))
   {
-    RDCERR("Invalid Metal BC texture initial contents");
+    RDCERR("Invalid Metal texture initial contents");
     return false;
   }
-  m_ReplayBCTextureInitialContents[id] = contents;
+  m_ReplayTextureInitialContents[id] = contents;
   return true;
 }
 
-bool WrappedMTLDevice::RestoreReplayBCTextureInitialContents()
+bool WrappedMTLDevice::RestoreReplayTextureInitialContents()
 {
   MTL::Device *device = Unwrap(this);
-  for(const auto &entry : m_ReplayBCTextureInitialContents)
+  for(const auto &entry : m_ReplayTextureInitialContents)
   {
+    InitialTextureAutoreleasePool pool;
     WrappedMTLObject *object = GetResourceManager()->GetResource(entry.first, true);
-    uint64_t expected = 0;
+    uint64_t expected = 0, stagingSize = 0;
+    rdcarray<InitialTextureMip> mips;
     MTL::Texture *texture = object && object->m_Type == eResTexture ?
                             Unwrap((WrappedMTLTexture *)object) : NULL;
-    if(!BCTextureLayout(texture, expected) || expected != entry.second.size()) return false;
-    const uint64_t alignment = 1;
-    uint64_t stagingSize = 0;
-    for(uint64_t mip = 0; mip < texture->mipmapLevelCount(); mip++)
-    {
-      const uint64_t width = RDCMAX(1ULL, uint64_t(texture->width()) >> mip);
-      const uint64_t height = RDCMAX(1ULL, uint64_t(texture->height()) >> mip);
-      const uint64_t row = ((width + 3) / 4) * BCBlockBytes(texture->pixelFormat());
-      stagingSize = RDCMAX(stagingSize, AlignUp(row, alignment) * ((height + 3) / 4));
-    }
+    if(!InitialTextureLayout(texture, mips, expected, stagingSize) ||
+       expected != entry.second.size()) return false;
+    if(getenv("RENDERDOC_METAL_TRACE_INITIAL_PRIVATE"))
+      fprintf(stderr, "Metal texture initial contents upload id=%s bytes=%llu mips=%zu storage=%s\n",
+              ToStr(entry.first).c_str(), (unsigned long long)entry.second.size(), mips.size(),
+              texture->storageMode() == MTL::StorageModePrivate ? "Private" :
+              texture->storageMode() == MTL::StorageModeManaged ? "Managed" : "Shared");
     MTL::Buffer *staging = device->newBuffer(stagingSize, MTL::ResourceStorageModeShared);
     if(!staging || !staging->contents()) { if(staging) staging->release(); return false; }
-    uint64_t cursor = 0;
-    for(uint64_t mip = 0; mip < texture->mipmapLevelCount(); mip++)
-    {
-      const uint64_t width = RDCMAX(1ULL, uint64_t(texture->width()) >> mip);
-      const uint64_t height = RDCMAX(1ULL, uint64_t(texture->height()) >> mip);
-      const uint64_t rows = (height + 3) / 4;
-      const uint64_t row = ((width + 3) / 4) * BCBlockBytes(texture->pixelFormat());
-      const uint64_t pitch = AlignUp(row, alignment);
-      for(uint64_t y = 0; y < rows; y++)
-        memcpy((byte *)staging->contents() + y * pitch, entry.second.data() + cursor + y * row, row);
-      MTL::CommandBuffer *command = m_mtlCommandQueue->commandBuffer();
-      MTL::BlitCommandEncoder *blit = command ? command->blitCommandEncoder() : NULL;
-      if(!blit) { staging->release(); return false; }
-      blit->copyFromBuffer(staging, 0, pitch, pitch * rows,
-                           MTL::Size::Make(width,height,1), texture, 0, mip,
-                           MTL::Origin::Make(0,0,0), MTL::BlitOptionNone);
-      blit->endEncoding();
-      command->commit();
-      command->waitUntilCompleted();
-      if(command->status() != MTL::CommandBufferStatusCompleted) { staging->release(); return false; }
-      cursor += row * rows;
-    }
+    for(const InitialTextureMip &layout : mips)
+      for(uint64_t z = 0; z < layout.depth; z++)
+        for(uint64_t y = 0; y < layout.rows; y++)
+          memcpy((byte *)staging->contents() + layout.stagingOffset + (z * layout.rows + y) * layout.pitch,
+                 entry.second.data() + layout.offset + (z * layout.rows + y) * layout.rowBytes,
+                 layout.rowBytes);
+    MTL::CommandBuffer *command = m_mtlCommandQueue->commandBuffer();
+    MTL::BlitCommandEncoder *blit = command ? command->blitCommandEncoder() : NULL;
+    if(!blit) { staging->release(); return false; }
+    for(const InitialTextureMip &layout : mips)
+      blit->copyFromBuffer(staging, layout.stagingOffset, layout.pitch, layout.pitch * layout.rows,
+          MTL::Size::Make(layout.width,layout.height,layout.depth), texture, layout.slice, layout.mip,
+          MTL::Origin::Make(0,0,0), layout.options);
+    blit->endEncoding(); command->commit(); command->waitUntilCompleted();
+    if(command->status() != MTL::CommandBufferStatusCompleted) { staging->release(); return false; }
     staging->release();
   }
   return true;

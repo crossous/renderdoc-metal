@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 #include "metal_texture.h"
+#include "metal_device.h"
 #include "metal_types_bridge.h"
 #include <objc/runtime.h>
 
@@ -291,7 +292,9 @@ id<MTLTexture> MetalSharedTextureHandleSource(MTLSharedTextureHandle *handle)
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_13_0
 - (MTLResourceID)gpuResourceID API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  return self.real.gpuResourceID;
+  MTLResourceID identity = self.real.gpuResourceID;
+  GetWrapped(self)->m_Device->CaptureGPUIdentity(GetWrapped(self), 1, identity._impl);
+  return identity;
 }
 #endif
 

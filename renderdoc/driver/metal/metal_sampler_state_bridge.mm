@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 #include "metal_sampler_state.h"
+#include "metal_device.h"
 #include "metal_types_bridge.h"
 
 @implementation ObjCBridgeMTLSamplerState
@@ -68,7 +69,9 @@
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_13_0
 - (MTLResourceID)gpuResourceID API_AVAILABLE(macos(13.0), ios(16.0))
 {
-  return self.real.gpuResourceID;
+  MTLResourceID identity = self.real.gpuResourceID;
+  GetWrapped(self)->m_Device->CaptureGPUIdentity(GetWrapped(self), 2, identity._impl);
+  return identity;
 }
 #endif
 

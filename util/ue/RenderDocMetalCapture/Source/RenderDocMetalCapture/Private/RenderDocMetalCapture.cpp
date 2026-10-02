@@ -6,12 +6,15 @@
 #include "Engine/GameViewportClient.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "HAL/FileManager.h"
+#include "HAL/ThreadSafeCounter.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "RenderingThread.h"
 #include "RHICommandList.h"
 #include "Styling/AppStyle.h"
+#include "Slate/SceneViewport.h"
+#include "Widgets/SWindow.h"
 #include "ToolMenus.h"
 #include "UnrealClient.h"
 #include "Widgets/Notifications/SNotificationList.h"
@@ -22,6 +25,15 @@
 DEFINE_LOG_CATEGORY_STATIC(LogRenderDocMetalCapture, Log, All);
 
 #define LOCTEXT_NAMESPACE "RenderDocMetalCapture"
+
+void AnnotateUE58MetalDescriptorLayouts(RENDERDOC_API_1_7_0 *API, FRHICommandListImmediate &RHICmdList);
+
+struct FRenderDocMetalCaptureEndState
+{
+  FThreadSafeCounter Phase; // 0=waiting, 1=render command pending, 2=finished
+  void *Device = nullptr;  // Accessed only by ordered render-thread commands.
+  double PresentDeadline = 0.0; // Start only after capture metadata preparation completes.
+};
 
 class FRenderDocMetalCaptureModule final : public IModuleInterface
 {
@@ -54,6 +66,9 @@ public:
       FTSTicker::RemoveTicker(AutoCaptureHandle);
     if(EndCaptureHandle.IsValid())
       FTSTicker::RemoveTicker(EndCaptureHandle);
+    if(CaptureWarmupHandle.IsValid())
+      FTSTicker::RemoveTicker(CaptureWarmupHandle);
+    RestoreCaptureSize();
     UToolMenus::UnRegisterStartupCallback(this);
     UToolMenus::UnregisterOwner(this);
   }
@@ -63,9 +78,89 @@ private:
   FTSTicker::FDelegateHandle PollHandle;
   FTSTicker::FDelegateHandle AutoCaptureHandle;
   FTSTicker::FDelegateHandle EndCaptureHandle;
+  FTSTicker::FDelegateHandle CaptureWarmupHandle;
   bool bOldEmitDrawEvents = false;
   uint32 CapturesBefore = 0;
   double CaptureDeadline = 0.0;
+  TSharedPtr<FRenderDocMetalCaptureEndState, ESPMode::ThreadSafe> CaptureEndState;
+  FSceneViewport *SizedViewport = nullptr;
+  FIntPoint PreviousViewportSize = FIntPoint::ZeroValue;
+  bool bPreviousFixedViewportSize = false;
+  bool bCaptureSizeWarm = false;
+  TWeakPtr<SWindow> SizedWindow;
+  FVector2D PreviousWindowSize = FVector2D::ZeroVector;
+  EWindowMode::Type PreviousWindowMode = EWindowMode::Windowed;
+  bool bPreviousWindowMaximized = false;
+
+  void RestoreCaptureSize()
+  {
+    FViewport *Current = GEditor ? GEditor->GetActiveViewport() : nullptr;
+    if(GEngine && GEngine->GameViewport && GEngine->GameViewport->Viewport == SizedViewport)
+      Current = GEngine->GameViewport->Viewport;
+    if(SizedViewport && Current == SizedViewport)
+      SizedViewport->SetFixedViewportSize(bPreviousFixedViewportSize ? PreviousViewportSize.X : 0,
+                                         bPreviousFixedViewportSize ? PreviousViewportSize.Y : 0);
+    SizedViewport = nullptr;
+    bCaptureSizeWarm = false;
+    if(TSharedPtr<SWindow> Window = SizedWindow.Pin())
+    {
+      Window->Resize(PreviousWindowSize);
+      if(PreviousWindowMode != EWindowMode::Windowed)
+        Window->SetWindowMode(PreviousWindowMode);
+      else if(bPreviousWindowMaximized)
+        Window->Maximize();
+    }
+    SizedWindow.Reset();
+  }
+
+  bool ConfigureCaptureSize(FViewport *Viewport)
+  {
+    const FString WidthText = FPlatformMisc::GetEnvironmentVariable(TEXT("UE_METAL_CAPTURE_VIEWPORT_WIDTH"));
+    const FString HeightText = FPlatformMisc::GetEnvironmentVariable(TEXT("UE_METAL_CAPTURE_VIEWPORT_HEIGHT"));
+    const FString WindowWidthText = FPlatformMisc::GetEnvironmentVariable(TEXT("UE_METAL_CAPTURE_WINDOW_WIDTH"));
+    const FString WindowHeightText = FPlatformMisc::GetEnvironmentVariable(TEXT("UE_METAL_CAPTURE_WINDOW_HEIGHT"));
+    if(WidthText.IsEmpty() && HeightText.IsEmpty() && WindowWidthText.IsEmpty() && WindowHeightText.IsEmpty())
+      return true;
+    FSceneViewport *Scene = Viewport->AsSceneViewport();
+    const int32 Width = FCString::Atoi(*WidthText), Height = FCString::Atoi(*HeightText);
+    const int32 WindowWidth = FCString::Atoi(*WindowWidthText), WindowHeight = FCString::Atoi(*WindowHeightText);
+    if(!Scene || Width < 32 || Height < 32 || Width > 2048 || Height > 2048 ||
+       ((!WindowWidthText.IsEmpty() || !WindowHeightText.IsEmpty()) &&
+        (WindowWidth < 320 || WindowHeight < 240 || WindowWidth > 2048 || WindowHeight > 2048)))
+    {
+      Notify(LOCTEXT("InvalidCaptureSize", "Invalid controlled capture size; viewport must be 32..2048 and window 320x240..2048x2048."), true);
+      return false;
+    }
+    SizedViewport = Scene;
+    PreviousViewportSize = Scene->GetSizeXY();
+    bPreviousFixedViewportSize = Scene->HasFixedSize();
+    if(WindowWidth > 0)
+      if(TSharedPtr<SWindow> Window = Scene->FindWindow())
+      {
+        SizedWindow = Window;
+        PreviousWindowSize = Window->GetClientSizeInScreen();
+        PreviousWindowMode = Window->GetWindowMode();
+        bPreviousWindowMaximized = Window->IsWindowMaximized();
+        if(PreviousWindowMode != EWindowMode::Windowed)
+          Window->SetWindowMode(EWindowMode::Windowed);
+        if(bPreviousWindowMaximized)
+          Window->Restore();
+        Window->Resize(FVector2D(WindowWidth, WindowHeight));
+        const FVector2D AppliedSize = Window->GetClientSizeInScreen();
+        UE_LOG(LogRenderDocMetalCapture, Display,
+               TEXT("Controlled window requested %dx%d, applied %.0fx%.0f; previous %.0fx%.0f mode=%d maximized=%d"),
+               WindowWidth, WindowHeight, AppliedSize.X, AppliedSize.Y,
+               PreviousWindowSize.X, PreviousWindowSize.Y, int32(PreviousWindowMode), int32(bPreviousWindowMaximized));
+      }
+    Scene->SetFixedViewportSize(Width, Height);
+    // Complete the resize before StartFrameCapture so frame resource births remain
+    // ordinary background resources, and report the resulting size rather than flags.
+    FlushRenderingCommands();
+    UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Controlled viewport size applied: %dx%d (previous %dx%d)"),
+           Scene->GetSizeXY().X, Scene->GetSizeXY().Y, PreviousViewportSize.X, PreviousViewportSize.Y);
+    return true;
+  }
+
 
   void Notify(const FText &Message, bool bError) const
   {
@@ -102,7 +197,7 @@ private:
 
     void *RawAPI = nullptr;
     const auto GetAPI = reinterpret_cast<pRENDERDOC_GetAPI>(Symbol);
-    if(GetAPI(eRENDERDOC_API_Version_1_0_0, &RawAPI) != 1 || RawAPI == nullptr)
+    if(GetAPI(eRENDERDOC_API_Version_1_7_0, &RawAPI) != 1 || RawAPI == nullptr)
       return false;
     API = static_cast<RENDERDOC_API_1_0_0 *>(RawAPI);
     if(!API->StartFrameCapture || !API->EndFrameCapture || !API->GetNumCaptures || !API->GetCapture ||
@@ -122,7 +217,7 @@ private:
       Notify(LOCTEXT("NoAPI", "RenderDoc Metal is not loaded; use the launch script."), true);
       return;
     }
-    if(PollHandle.IsValid() || EndCaptureHandle.IsValid())
+    if(PollHandle.IsValid() || EndCaptureHandle.IsValid() || CaptureWarmupHandle.IsValid())
     {
       Notify(LOCTEXT("Pending", "A RenderDoc Metal capture is already pending."), true);
       return;
@@ -140,9 +235,29 @@ private:
       return;
     }
 
+    if(!SizedViewport && !ConfigureCaptureSize(Viewport))
+      return;
+    if(SizedViewport && !bCaptureSizeWarm)
+    {
+      // UE retires descriptors through DeferredDelete. A resize immediately followed
+      // by capture can freeze obsolete slots just before their next-frame frees.
+      // Draw normally first and allow editor ticks to retire the old allocations.
+      Viewport->Draw(true);
+      CaptureWarmupHandle = FTSTicker::GetCoreTicker().AddTicker(
+          FTickerDelegate::CreateLambda([this](float) {
+            CaptureWarmupHandle.Reset();
+            bCaptureSizeWarm = true;
+            CaptureFrame();
+            return false;
+          }), 2.0f);
+      UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Controlled size warmup requested; capture starts after ordinary editor ticks"));
+      return;
+    }
+
     const FString CaptureDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("RenderDocMetalCaptures"));
     if(!IFileManager::Get().MakeDirectory(*CaptureDir, true))
     {
+      RestoreCaptureSize();
       Notify(FText::Format(LOCTEXT("CreateDirFailed", "Cannot create capture directory: {0}"),
                            FText::FromString(CaptureDir)), true);
       return;
@@ -154,11 +269,15 @@ private:
     CaptureDeadline = FPlatformTime::Seconds() + 60.0;
     bOldEmitDrawEvents = GetEmitDrawEvents();
     SetEmitDrawEvents(true);
+    CaptureEndState = MakeShared<FRenderDocMetalCaptureEndState, ESPMode::ThreadSafe>();
     // Follow UE's official RenderDoc plugin: start on the render thread, render the selected
     // viewport once, then wait for its commands before closing this one controlled capture.
     ENQUEUE_RENDER_COMMAND(StartRenderDocMetalCapture)(
-        [CaptureAPI = API](FRHICommandListImmediate &RHICmdList) {
+        [CaptureAPI = API, State = CaptureEndState](FRHICommandListImmediate &RHICmdList) {
+          AnnotateUE58MetalDescriptorLayouts(CaptureAPI, RHICmdList);
+          State->Device = GDynamicRHI ? GDynamicRHI->RHIGetNativeDevice() : nullptr;
           CaptureAPI->StartFrameCapture(nullptr, nullptr);
+          State->PresentDeadline = FPlatformTime::Seconds() + 5.0;
           UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Controlled Metal capture started on render thread"));
         });
     UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Drawing target viewport %p (%dx%d)"),
@@ -176,15 +295,40 @@ private:
 
   bool EndCapture(float)
   {
+    if(CaptureEndState->Phase.GetValue() == 2)
+    {
+      EndCaptureHandle.Reset();
+      return false;
+    }
+    if(CaptureEndState->Phase.GetValue() == 1)
+      return true;
+    CaptureEndState->Phase.Set(1);
     ENQUEUE_RENDER_COMMAND(EndRenderDocMetalCapture)(
-        [CaptureAPI = API, PreviousEmitDrawEvents = bOldEmitDrawEvents](FRHICommandListImmediate &RHICmdList) {
+        [CaptureAPI = API, PreviousEmitDrawEvents = bOldEmitDrawEvents, State = CaptureEndState](FRHICommandListImmediate &RHICmdList) {
+          const bool Presented = State->Device && CaptureAPI->SetObjectAnnotation &&
+              CaptureAPI->SetObjectAnnotation(State->Device, State->Device,
+                  "metal.capturePresented", eRENDERDOC_Empty, 0, nullptr) == 0;
+          if(!Presented && FPlatformTime::Seconds() < State->PresentDeadline)
+          {
+            State->Phase.Set(0);
+            return;
+          }
           RHICmdList.SubmitAndBlockUntilGPUIdle();
-          const uint32 Result = CaptureAPI->EndFrameCapture(nullptr, nullptr);
+          const uint32 Result = Presented ? CaptureAPI->EndFrameCapture(nullptr, nullptr) :
+                                            CaptureAPI->DiscardFrameCapture(nullptr, nullptr);
           SetEmitDrawEvents(PreviousEmitDrawEvents);
-          UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Controlled Metal capture end result: %u"), Result);
+          State->Phase.Set(2);
+          if(Presented)
+          {
+            UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Controlled Metal capture end result: %u"), Result);
+          }
+          else
+          {
+            UE_LOG(LogRenderDocMetalCapture, Warning,
+                TEXT("No Metal presentation within 5 seconds after capture start; controlled capture discarded"));
+          }
         });
-    EndCaptureHandle.Reset();
-    return false;
+    return true;
   }
 
   bool PollCapture(float)
@@ -192,6 +336,7 @@ private:
     const uint32 Count = API->GetNumCaptures();
     if(Count > CapturesBefore)
     {
+      RestoreCaptureSize();
       uint32 PathLength = 0;
       API->GetCapture(Count - 1, nullptr, &PathLength, nullptr);
       if(PathLength > 0 && PathLength < 32768)
@@ -211,6 +356,7 @@ private:
     }
     if(FPlatformTime::Seconds() >= CaptureDeadline)
     {
+      RestoreCaptureSize();
       Notify(LOCTEXT("TimedOut", "No capture after 60 seconds; inspect RenderDoc and UE logs."), true);
       PollHandle.Reset();
       return false;

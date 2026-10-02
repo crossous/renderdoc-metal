@@ -29,6 +29,12 @@
 #include "metal_device.h"
 #include "metal_resources.h"
 
+bool ValidateMetalRenderPassCounters(WrappedMTLDevice *device,
+    const rdcarray<RDMTL::RenderPassSampleBufferAttachmentDescriptor> &attachments);
+
+bool ValidateMetalComputePassCounters(WrappedMTLDevice *device,
+    const rdcarray<RDMTL::ComputePassSampleBufferAttachmentDescriptor> &attachments);
+
 class WrappedMTLCommandBuffer : public WrappedMTLObject
 {
 public:
@@ -36,8 +42,9 @@ public:
   void CaptureEvent(WrappedMTLEvent *event, uint64_t value, bool signal);
   WrappedMTLCommandBuffer(MTL::CommandBuffer *realMTLCommandBuffer, ResourceId objId,
                           WrappedMTLDevice *wrappedMTLDevice);
+  ~WrappedMTLCommandBuffer();
 
-  void SetCommandQueue(WrappedMTLCommandQueue *commandQueue) { m_CommandQueue = commandQueue; }
+  void SetCommandQueue(WrappedMTLCommandQueue *commandQueue);
   WrappedMTLCommandQueue *GetCommandQueue() { return m_CommandQueue; }
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLBlitCommandEncoder *, blitCommandEncoder);
   DECLARE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder *,
@@ -101,5 +108,6 @@ public:
 private:
   bool ReplayBlitCommandEncoder(ResourceId id, MTL::BlitCommandEncoder *realEncoder);
   bool ReplayComputeCommandEncoder(ResourceId id, MTL::ComputeCommandEncoder *realEncoder);
-  WrappedMTLCommandQueue *m_CommandQueue;
+  WrappedMTLCommandQueue *m_CommandQueue = NULL;
+  NS::Object *m_CaptureQueueProxy = NULL;
 };

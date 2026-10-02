@@ -39,7 +39,7 @@ def main():
             ('second-format', 'colorFormats.1', '80'),
             ('sample-count', 'sampleCount', '2'),
             ('max-threads', 'maxThreads', '2048'),
-            ('options', 'options', '4'),
+            ('options', 'options', '8'),
             ('unsupported', 'supported', 'false'),
         ]
         for tag, path, value in cases:

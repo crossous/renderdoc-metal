@@ -1,0 +1,29 @@
+# B403：render indirect沿用Vulkan pass-end readback
+
+当前真实UE帧已有compute逐使用证据，render indirect需要独立处理。旧12230757 CPU审计17次、4参数buffer，全部explicit Read且所有显式Write Native footprint（含TextureBuffer parent）无重叠。
+
+已核对官方UE5.8.3源码：MetalStateCache.cpp CacheOrSkipResourceResidencyUpdate只有bReadOnly heap资源走useHeaps；所有UAV bReadOnly=false走RWResourcesByStage。IRMakeUAVResident还同时登记TextureBuffer底层Buffer和view，FlushUsedResources发出Read|Write。MetalCommandEncoder SetShaderBufferInternal逐项发出ReferencedResources usage。此依据可用于完整写声明证明，不能只把shader reflection的top-level readonly当作所有嵌套指针只读。
+
+对照RenderDoc Vulkan vk_cmd_funcs.cpp约2635：Native CmdEndRenderPass后循环ExecuteIndirectReadback，再清空indirectCopies。Metal组件同样在原pass结束后追加原CB Native blit；parallel child必须等parent结束。不拆encoder、不在render内发compute、不替换原draw参数。
+
+新增独立metal_render_indirect_readback组件尚未接入CMake/实际capture：
+Native当前对象footprint解析Texture parent/TextureBuffer buffer；same-object或same-heap allocation范围重叠、unknown footprint拒绝，显式alias/retirement须由调用方的生命周期记录判断。Source full allocation做保守检查。Caller还需证明完整写声明、包含render attachments，组件本身不建立该证明。
+Native复制4/5 uint保持原Nonindexed/Indexed参数格式，completion handler持有RAII source/snapshot保护unretained CB。
+
+Native极小组件用例：retained/unretained × serial/parallel × nonindexed/indexed；Private placement arguments两个offset的3/6 draw；pass-end snapshots后源清零；所有像素/参数/heap aliases/TextureBuffer parent/texture view/bounds检查。当前build-only，待v57全量结束后串行GPU运行。运行脚本test_metal_render_indirect_component_macos.sh，构建不替换主库。
+
+后续capture将声明完成tag与写footprints、原encoder归属和原draw ordinal一起保存。只有声明与physical alias闭合的pass-end证据可用于sourced preflight。仍需loading事件元数据、indexed参数索引字节、部分回放、零附件UAV、真实heap预算。实际UE/UI未验收，持续目标active，无提交推送。
+
+2026-10-02 Native组件BsY5bv八组合全部通过，MTL_DEBUG_LAYER=1；原draw 3/6、尾清零、全16像素、heap overlap、TextureBuffer底层Buffer、Texture view parent、offset/length/count负例正确。主库保持26a25b7f，不在组件构建中替换。
+placement heap资源刚创建即isAliasable=true（buffer/texture均1），因此不能把该属性当作已退休；现复用捕获makeAliasable/retirement历史校验，组件仅负责Native physical footprint。初版此误判在任何GPU提交前拒绝code6，修复后Native全部通过。Native当前GPU VA额外检查Buffer重叠，避免不同wrapper/不同heap属性漏掉同一地址范围。
+最新1deff873零附件12个render indirect PSO5068/5041/5044原始rasterizationEnabled=true、fragment存在、depth/stencil/color均无附件；三个PSO/7functions/7metallibs的独立Native compiler验证通过（无command queue/buffer/GPU提交）。不等同于实际UAV输出正确；需要明确renderTargetWidth/Height和写资源闭包。
+
+2026-10-02 capture已正式接入（Count1410/Record1411，Max1412，section version与coverage57不变）。串行/parallel parent end后在原CB copy，完整UAV写声明与全部pass写资源/attachments物理范围闭合；显式makeAliasable history拒绝。CPU逐original command/encoder/pass/ordinal/source/offset/kind一对一校验，header/records必须在CaptureScope前。
+3955d987 capture八组合jvb5x9全部Native pixels/OpenCapture/208API+CLI negative groups通过。原生独立pipeline首次未设置framebufferOnly=false导致读像素validation拒绝，已修复fixture；capture无副作用遗漏。annotation首次被background-only guard拦住，已移到capture模式分支。
+隔离UE provider新模块9d6349a6编译通过，安装UE源/模块保持原样。CommitRenderResources在所有vertex/pixel IR资源提交后（排除geometry/mesh）发metal.renderWritesDeclared，基于本机5.8.3精确源码的writable useResource路径；无整体coverage声明。
+自动capture session20261002-104149/PID97737正常保存并关闭：eb9386b740d86b9035561a8f69d4ba69cd8935f677faa20fa92ab8b8d03ebef0，142429997B，UE58_render_indirect_eb9386b7.rdc保留。CPU17render evidence全部matched，11zero calls、29280总vertices/indices、max13056；31compute matched、22zero、39616totalthreads、max22400。实际UE未整帧GPU replay。
+loading现在沿Vulkan pass-end readback在原Native CB另存每次参数、与capture proof比较并更新action数量/baseInstance/baseVertex；Private原source帧末0后仍正确。b6356359/do7oYI八captures/56reset seeks/248API+CLI负例（31×8）通过，每个pixel正确。补回原有indexOffset相对选定byte binding=0，随后重新定向，再做该最终库的组合全量。最新实际UE/UI尚未验收，持续目标active，无提交推送。
+
+最终a0f8b74a/U5MmHR八captures/56reset seeks/248异常组通过；正在运行该库组合全量。实际eb9386b7 OpenCapture仍在CPU metadata阶段code19拒绝（provider尚无整体coverage，frame-born identity gate），日志无Metal replay wait begin，未整帧GPU提交。下一步有证据的sourced render indirect coverage58微型扩展。
+
+2026-10-02 a0f8b74a 精确组合全量通过：308 captures/7786 malformed/3080 lifecycle，resident growth6750208B，端点hash一致。新B404 source/object/fixture准备在全量期间进行，未替换主库；全量结束后开始链接coverage58和串行微型GPU验证。

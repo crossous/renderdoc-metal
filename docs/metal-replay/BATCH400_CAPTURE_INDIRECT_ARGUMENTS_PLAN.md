@@ -1,0 +1,31 @@
+# B400：捕获阶段逐使用点compute indirect证据（组件准备）
+
+实际UE12230757：31compute indirect，12次在同encoder显式声明参数可写；17render indirect的IR slot4全部与indirect buffer/offset相同。帧末源buffer不能代表逐次调度。
+B396已解决loading阶段事件元数据，现在复用相同Native三uint复制思路到capture。
+新增metal_indirect_readback组件暂未接入CMake或capture路径；对象单独编译，不影响v55候选库。
+保存Native PSO和slot0/1 buffer/offset或inline bytes；强引用避免app释放绑定wrapper后悬空。
+Snapshot在原compute encoder内用buffers barrier排序，恢复所有修改的状态，原间接调度照常执行。
+Shared16B包含3uint参数和GPU写入的完成marker，Native command完成后才能CPU读取。
+MetalIndirectReadback持有source/readback/debugPSO；command completion handler复制RAII所有者，保护unretained CB，并避免未提交CB的裸retain泄漏。
+不拆分encoder、不开新CB、不在encoder中CPU等待、不用CPU参数替代间接调用。
+
+待接入：opt-in捕获参数开关；encoder binding shadow；cmdInfo按epoch/encoder/ordinal/source/offset保存证据；已有EndFrameCapture GPU完成后，在CaptureScope之前序列化证据chunk。无Coverage授权。未提交CB不读snapshot。
+preflight把证据与原Native调用一对一匹配、检查参数工作量/资源生命周期；缺失/重号/范围错误均提交前拒绝。不得把一次frame-end值复制给所有事件。
+render indirect仍需单独证明pass内参数写入与真实Native draw元数据，不由compute组件覆盖。
+
+Native组件夹具metal_indirect_capture_component.cpp覆盖同encoder GPU写1/3/2→三次Native indirect→尾写0，serial/concurrent、inline/buffer+offset恢复；unretained CB提交前Clear组件，完成handler独立保留debug资源。
+当前仅编译，等待前一GPU全量结束后串行运行。实际UE/UI未验收，持续目标active，无提交推送。
+
+2026-10-02 组件Native GPU检查9pCs4z全部四组合通过：serial/concurrent×inline/buffer-offset，1/3/2逐调用、尾写0、130/42 sum与count6以及哨兵正确；MTL_DEBUG_LAYER=1，提交前Clear，unretained CB的debug资源由完成handler持有。此组件尚未接入capture，没有真实UE证据或全帧验收。编译命令脚本test_metal_indirect_capture_component_macos.sh独立编译，不构建/替换库。
+
+正式capture接入候选已对象编译：RENDERDOC_METAL_CAPTURE_INDIRECT_ARGUMENTS非空开启，所有encoder起始保存Native PSO/slot0/1，不支持的AS/function-table参数使该snapshot失败而不改Native调度。
+cmdInfo保存active epoch的独立readback；EndFrameCapture既有完成等待后才读取GPU完成marker和3uint。CaptureScope之前写一个count header以及每调用一条ResourceId/ordinal/source/offset/groups记录。
+CPU ScanDescriptorMetadata检查header/cardinality/唯一性/原encoder→command归属/原调用ordinal/source/offset，记录必须在scope之前；Native资源创建前可拒绝结构错配。
+这轮尚未增加sourced indirect支持或coverage版本；证据不为完整UE提供coverage。新chunk追加，不重新编号旧chunk，不改section version；旧库遇新chunk会显式拒绝。
+下一定向脚本test_metal_capture_indirect_arguments_macos.sh覆盖8captured/56seeks，retained/unretained×serial/concurrent×inline/buffer，并核对XML证据1/3/2及22组API+CLI异常形态。等待v55 full结束后链接，期间禁止替换库。
+
+实际render indirect独立CPU声明审计：17calls、4sources，全部source在所在pass显式Read，source显式Write=0；所在pass仍有其他UAV writes。ue-heap64.render-indirect-write-audit.json仅证明声明，不覆盖shader alias。参考Vulkan vkCmdEndRenderPass在end后ExecuteIndirectReadback，后续先闭合别名/写声明，再复用pass后Native blit，无需先引入Metal专用vertex复制方案。
+
+2026-10-02 正式捕获定向通过 Vku9Kn，精确库7930a5b34f77aafa159fbabe5a698e24c525fd4a3e42bea77bbb7573feec2a31。
+8 captures / 56 reset-seeks / 176 API+CLI负例组，所有Native输出、逐次1/3/2和尾写0证据正确。修复两处接入错误：流式chunk写入需预估长度；pipeline绑定shadow应更新捕获setter而非读取Serialise分支。
+当前coverage仍55，未授权sourced indirect或UE全帧replay。v55精确全量f12b4ea6已通过308/7786/3080，B400候选全量尚未执行。正在自动重截真实UE参数证据；人工UI未验收。

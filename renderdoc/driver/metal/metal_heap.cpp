@@ -24,8 +24,8 @@ bool WrappedMTLDevice::Serialise_newHeap(SerialiserType &ser, WrappedMTLHeap *he
   if(IsReplayingAndReading())
   {
     type = (MTL::HeapType)heapType;
-    // Placement heaps are admitted only with disjoint, explicitly aligned child buffers.
-    // Aliasing, sparse mappings and placement textures still require separate lifetime models.
+    // Placement heaps preserve captured offsets. Overlaps are validated at each child birth.
+    // Sparse mappings and implicit texture aliases still require separate lifetime models.
     if(Heap == ResourceId() || GetResourceManager()->HasResource(Heap) ||
        size < 4096 || size > 576ULL * 1024 * 1024 ||
        (storageMode != MTL::StorageModePrivate &&
@@ -91,6 +91,30 @@ WrappedMTLHeap::WrappedMTLHeap(MTL::Heap *real, ResourceId id, WrappedMTLDevice 
     AllocateObjCBridge(this);
     MetalAssociateHeapProxy(real, this);
   }
+}
+
+bool WrappedMTLHeap::CanImplicitlyAliasBuffers(uint64_t begin, uint64_t end, ResourceId after)
+{
+  if(!m_Real || (Unwrap(this)->storageMode() != MTL::StorageModeShared &&
+      !(m_Device->SupportsPrivateDescriptorSources() && Unwrap(this)->storageMode() == MTL::StorageModePrivate)) ||
+     Unwrap(this)->hazardTrackingMode() != MTL::HazardTrackingModeTracked) return false;
+  for(const PlacementRange &range : m_PlacementRanges)
+    if(begin < range.end && range.begin < end)
+    {
+      WrappedMTLObject *old = GetResourceManager()->GetResource(range.resource, true);
+      if(!old || !old->m_Real) return false;
+      const bool buffer = old->m_Type == eResBuffer &&
+          Unwrap((WrappedMTLBuffer *)old)->length() <= m_Device->DescriptorPlacementAliasLimit() &&
+          Unwrap((WrappedMTLBuffer *)old)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
+          m_Device->CanReplayImplicitBufferAlias(range.resource, after);
+      const bool texture = old->m_Type == eResTexture &&
+          Unwrap((WrappedMTLTexture *)old)->storageMode() == MTL::StorageModePrivate &&
+          Unwrap((WrappedMTLTexture *)old)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
+          range.end - range.begin <= m_Device->DescriptorPlacementAliasLimit() &&
+          m_Device->CanReplayRetiredTextureAlias(range.resource, after);
+      if(!buffer && !texture) return false;
+    }
+  return true;
 }
 
 void WrappedMTLHeap::ResetFramePlacementRanges()
@@ -189,6 +213,8 @@ bool WrappedMTLHeap::Serialise_newBufferWithOffset(SerialiserType &ser,
         !(IsActiveReplaying(m_State) && m_Device->IsFramePlacementResource(Buffer) &&
           !GetResourceManager()->GetResource(Buffer)->m_Real)) ||
        length == 0 || length > 128ULL * 1024 * 1024 ||
+       (Unwrap(Heap)->storageMode() != ((options & MTL::ResourceStorageModePrivate) ?
+          MTL::StorageModePrivate : MTL::StorageModeShared)) ||
        (options != MTL::ResourceStorageModePrivate &&
         options != (MTL::ResourceStorageModePrivate | MTL::ResourceHazardTrackingModeTracked) &&
         !(Unwrap(Heap)->storageMode() == MTL::StorageModeShared &&
@@ -226,18 +252,28 @@ bool WrappedMTLHeap::Serialise_newBufferWithOffset(SerialiserType &ser,
           RDCERR("Overlapping placement resource in a capture without frame creation order");
           return false;
         }
-        WrappedMTLObject *existing = GetResourceManager()->GetResource(range.resource, true);
-        bool aliasable = false;
-        if(existing && existing->m_Real)
+        // isAliasable does not prove logical retirement. Explicit retirement invalidates
+        // old descriptor sources; bounded implicit placement sharing keeps both objects live.
+        const bool aliasable = m_Device->IsReplayResourceAliasable(range.resource);
+        WrappedMTLObject *previous = GetResourceManager()->GetResource(range.resource, true);
+        const bool implicit = previous && previous->m_Type == eResBuffer &&
+            previous->m_Real && Unwrap((WrappedMTLBuffer *)previous)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
+            (Unwrap(Heap)->storageMode() == MTL::StorageModeShared ||
+             (m_Device->SupportsPrivateDescriptorSources() && Unwrap(Heap)->storageMode() == MTL::StorageModePrivate)) &&
+            Unwrap(Heap)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
+            length <= m_Device->DescriptorPlacementAliasLimit() &&
+            Unwrap((WrappedMTLBuffer *)previous)->length() <= m_Device->DescriptorPlacementAliasLimit() &&
+            m_Device->CanReplayImplicitBufferAlias(range.resource, Buffer);
+        const bool retiredTexture = previous && previous->m_Type == eResTexture && previous->m_Real &&
+            Unwrap(Heap)->storageMode() == MTL::StorageModePrivate &&
+            Unwrap(Heap)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
+            Unwrap((WrappedMTLTexture *)previous)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
+            length <= m_Device->DescriptorPlacementAliasLimit() &&
+            range.end - range.begin <= m_Device->DescriptorPlacementAliasLimit() &&
+            m_Device->CanReplayRetiredTextureAlias(range.resource, Buffer);
+        if(!aliasable && !implicit && !retiredTexture)
         {
-          if(existing->m_Type == eResBuffer)
-            aliasable = Unwrap((WrappedMTLBuffer *)existing)->isAliasable();
-          else if(existing->m_Type == eResTexture)
-            aliasable = Unwrap((WrappedMTLTexture *)existing)->isAliasable();
-        }
-        if(!aliasable)
-        {
-          RDCERR("Overlapping Metal placement heap resource is not aliasable");
+          RDCERR("Overlapping Metal placement heap resource lacks supported aliasing/completion");
           fprintf(stderr, "Metal placement buffer overlap: offset=%llu end=%llu existing=%llu..%llu resource=%s\n",
                   (uint64_t)offset, end, range.begin, range.end,
                   ToStr(range.resource).c_str());
@@ -293,6 +329,7 @@ WrappedMTLBuffer *WrappedMTLHeap::newBufferWithOffset(NS::UInteger length,
     {
       m_Device->AddFrameCaptureRecordChunk(creation->Duplicate());
       m_Device->RegisterCapturedFrameResource(id);
+      GetResourceManager()->MarkResourceFrameReferenced(GetResID(this), eFrameRef_Read);
     }
     MTL::StorageMode mode = real->storageMode();
     record->bufInfo = new MetalBufferInfo(mode);
@@ -380,6 +417,9 @@ WrappedMTLTexture *WrappedMTLHeap::newTexture(RDMTL::TextureDescriptor &descript
     MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
     record->AddParent(GetRecord(this));
     record->AddChunk(scope.Get());
+    if(descriptor.storageMode == MTL::StorageModePrivate ||
+       descriptor.storageMode == MTL::StorageModeShared)
+      GetResourceManager()->MarkDirtyResource(GetResID(wrapped));
   }
   return wrapped;
 }
@@ -393,6 +433,8 @@ template bool WrappedMTLHeap::Serialise_newTexture(WriteSerialiser &, WrappedMTL
 // formats observed in the captured frame and checked with native Metal size/alignment probing.
 static bool ValidPlacementTextureFormat(MTL::PixelFormat format)
 {
+  uint32_t blockWidth = 0, blockHeight = 0, blockBytes = 0;
+  if(GetTextureDataBlockShape(format, blockWidth, blockHeight, blockBytes)) return true;
   switch(format)
   {
     case MTL::PixelFormatR8Unorm:
@@ -431,6 +473,7 @@ static bool ValidPlacementTextureShape(const RDMTL::TextureDescriptor &descripto
   if(descriptor.textureType != MTL::TextureType2D &&
      descriptor.textureType != MTL::TextureType2DArray &&
      descriptor.textureType != MTL::TextureTypeCube &&
+     descriptor.textureType != MTL::TextureTypeCubeArray &&
      descriptor.textureType != MTL::TextureType3D)
     return false;
   if(!descriptor.width || !descriptor.height || !descriptor.depth ||
@@ -444,20 +487,20 @@ static bool ValidPlacementTextureShape(const RDMTL::TextureDescriptor &descripto
   }
   else if(descriptor.depth != 1)
     return false;
-  if(descriptor.textureType != MTL::TextureType2DArray && descriptor.arrayLength != 1)
+  if(descriptor.textureType != MTL::TextureType2DArray &&
+     descriptor.textureType != MTL::TextureTypeCubeArray && descriptor.arrayLength != 1)
     return false;
-  if(descriptor.textureType == MTL::TextureTypeCube && descriptor.width != descriptor.height)
+  if((descriptor.textureType == MTL::TextureTypeCube || descriptor.textureType == MTL::TextureTypeCubeArray) &&
+     descriptor.width != descriptor.height)
     return false;
-  uint64_t largest = RDCMAX(uint64_t(descriptor.width), uint64_t(descriptor.height));
-  if(descriptor.textureType == MTL::TextureType3D)
-    largest = RDCMAX(largest, uint64_t(descriptor.depth));
-  uint32_t maxMips = 0;
-  do
-  {
-    maxMips++;
-    largest >>= 1;
-  } while(largest);
-  return descriptor.mipmapLevelCount <= maxMips;
+  return ValidTextureMipCount(descriptor.width, descriptor.height, descriptor.depth,
+                               descriptor.mipmapLevelCount);
+}
+
+static bool PlacementTextureBlockFormat(MTL::PixelFormat format)
+{
+  uint32_t width = 0, height = 0, bytes = 0;
+  return GetTextureDataBlockShape(format, width, height, bytes) && (width > 1 || height > 1);
 }
 
 template <typename SerialiserType>
@@ -475,16 +518,18 @@ bool WrappedMTLHeap::Serialise_newTextureWithOffset(SerialiserType &ser,
   {
     if(!Heap || Heap->m_Type != eResHeap || !Heap->m_Real ||
        Unwrap(Heap)->type() != MTL::HeapTypePlacement ||
-       Texture == ResourceId() || GetResourceManager()->HasResource(Texture) ||
-       descriptor.storageMode != MTL::StorageModePrivate ||
+       Texture == ResourceId() ||
+       (GetResourceManager()->HasResource(Texture) &&
+        !(IsActiveReplaying(m_State) && m_Device->IsFramePlacementResource(Texture) &&
+          !GetResourceManager()->GetResource(Texture)->m_Real)) ||
+       (descriptor.storageMode != MTL::StorageModePrivate && descriptor.storageMode != MTL::StorageModeShared) ||
+       descriptor.storageMode != Unwrap(Heap)->storageMode() ||
        !ValidPlacementTextureShape(descriptor) ||
        !ValidPlacementTextureFormat(descriptor.pixelFormat) ||
-       ((descriptor.pixelFormat == MTL::PixelFormatBC1_RGBA ||
-         descriptor.pixelFormat == MTL::PixelFormatBC1_RGBA_sRGB ||
-         descriptor.pixelFormat == MTL::PixelFormatBC5_RGUnorm) &&
+       (PlacementTextureBlockFormat(descriptor.pixelFormat) &&
         !ser.VersionAtLeast(0x10)) ||
-       (descriptor.resourceOptions != MTL::ResourceStorageModePrivate &&
-        descriptor.resourceOptions != (MTL::ResourceStorageModePrivate |
+       (descriptor.resourceOptions != (MTL::ResourceOptions)(uint64_t(descriptor.storageMode) << 4) &&
+        descriptor.resourceOptions != ((MTL::ResourceOptions)(uint64_t(descriptor.storageMode) << 4) |
                                        MTL::ResourceHazardTrackingModeTracked)) ||
        descriptor.cpuCacheMode != MTL::CPUCacheModeDefaultCache ||
        (uint64_t(descriptor.usage) & ~uint64_t(55)) != 0 ||
@@ -533,6 +578,9 @@ bool WrappedMTLHeap::Serialise_newTextureWithOffset(SerialiserType &ser,
     for(const PlacementRange &range : Heap->m_PlacementRanges)
       if(uint64_t(offset) < range.end && range.begin < end)
       {
+        if(ser.VersionAtLeast(0xF) && m_Device->GetReplayEpoch() != 0 &&
+           m_Device->SupportsTrackedAliasCreationWhileEncoding() &&
+           Heap->CanImplicitlyAliasBuffers(offset, end, Texture)) continue;
         native->release();
         RDCERR("Overlapping Metal placement heap texture requires separate lifetime validation");
         fprintf(stderr, "Metal placement texture overlap: offset=%llu end=%llu existing=%llu..%llu\n",
@@ -549,12 +597,23 @@ bool WrappedMTLHeap::Serialise_newTextureWithOffset(SerialiserType &ser,
               (uint64_t)offset, (uint64_t)descriptor.pixelFormat);
       return false;
     }
-    Heap->m_PlacementRanges.push_back({uint64_t(offset), end, Texture, false});
-    WrappedMTLTexture *wrapped = NULL;
-    GetResourceManager()->WrapResource(Texture, real, wrapped, true);
-    m_Device->AddResource(Texture, ResourceType::Texture, "Placement Heap Texture");
-    m_Device->GetReplay()->AddTexture(Texture, real, false);
-    m_Device->DerivedResource(Heap, Texture);
+    const bool frameResource = m_Device->GetReplayEpoch() != 0;
+    if(getenv("RENDERDOC_METAL_TRACE_REPLAY_WAITS"))
+      fprintf(stderr, "Metal frame texture birth: id=%s epoch=%llu loading=%d active=%d\n",
+              ToStr(Texture).c_str(), m_Device->GetReplayEpoch(), IsLoading(m_State), IsActiveReplaying(m_State));
+    Heap->m_PlacementRanges.push_back({uint64_t(offset), end, Texture, frameResource});
+    if(frameResource && IsLoading(m_State))
+      m_Device->RegisterFramePlacementResource(Texture, Heap);
+    if(IsActiveReplaying(m_State) && frameResource)
+      GetResourceManager()->ReplaceRealResource(GetResourceManager()->GetResource(Texture), real, true);
+    else
+    {
+      WrappedMTLTexture *wrapped = NULL;
+      GetResourceManager()->WrapResource(Texture, real, wrapped, true);
+      m_Device->AddResource(Texture, ResourceType::Texture, "Placement Heap Texture");
+      m_Device->GetReplay()->AddTexture(Texture, real, false);
+      m_Device->DerivedResource(Heap, Texture);
+    }
   }
   return true;
 }
@@ -562,6 +621,7 @@ bool WrappedMTLHeap::Serialise_newTextureWithOffset(SerialiserType &ser,
 WrappedMTLTexture *WrappedMTLHeap::newTextureWithOffset(RDMTL::TextureDescriptor &descriptor,
                                                         NS::UInteger offset)
 {
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
   MTL::TextureDescriptor *native(descriptor);
   MTL::Texture *real = NULL;
   SERIALISE_TIME_CALL(real = Unwrap(this)->newTexture(native, offset));
@@ -576,10 +636,16 @@ WrappedMTLTexture *WrappedMTLHeap::newTextureWithOffset(RDMTL::TextureDescriptor
     Serialise_newTextureWithOffset(ser, wrapped, descriptor, offset);
     MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
     record->AddParent(GetRecord(this));
-    record->AddChunk(scope.Get());
-    if(descriptor.pixelFormat == MTL::PixelFormatBC1_RGBA ||
-       descriptor.pixelFormat == MTL::PixelFormatBC1_RGBA_sRGB ||
-       descriptor.pixelFormat == MTL::PixelFormatBC5_RGUnorm)
+    Chunk *creation = scope.Get();
+    record->AddChunk(creation);
+    if(IsActiveCapturing(m_State))
+    {
+      m_Device->AddFrameCaptureRecordChunk(creation->Duplicate());
+      m_Device->RegisterCapturedFrameResource(GetResID(wrapped));
+      GetResourceManager()->MarkResourceFrameReferenced(GetResID(this), eFrameRef_Read);
+    }
+    if(descriptor.storageMode == MTL::StorageModePrivate ||
+       descriptor.storageMode == MTL::StorageModeShared)
       GetResourceManager()->MarkDirtyResource(GetResID(wrapped));
   }
   return wrapped;

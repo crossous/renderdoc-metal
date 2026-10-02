@@ -830,7 +830,7 @@ void DecodePixelData(const ResourceFormat &fmt, const byte *data, PixelValue &ou
         {
           out.floatValue[c] = ConvertFromSRGB8(*u8);
         }
-        else if(compType == CompType::UNorm)
+        else if(compType == CompType::UNorm || compType == CompType::Depth)
         {
           out.floatValue[c] = float(*u8) / 255.0f;
         }
@@ -887,6 +887,31 @@ template <>
 rdcstr DoStringise(const FloatVector &el)
 {
   return StringFormat::Fmt("{%f, %f, %f, %f}", el.x, el.y, el.z, el.w);
+}
+
+TEST_CASE("Decode stencil-only depth and integer values", "[format]")
+{
+  ResourceFormat fmt;
+  fmt.type = ResourceFormatType::S8;
+  fmt.compCount = 1;
+  fmt.compByteWidth = 1;
+  const byte data[] = {17};
+  PixelValue value = {};
+  bool decoded = false;
+
+  fmt.compType = CompType::Depth;
+  DecodePixelData(fmt, data, value, &decoded);
+  REQUIRE(decoded);
+  CHECK(value.floatValue[0] == 0.0f);
+  CHECK(value.floatValue[1] == Approx(17.0f / 255.0f));
+  CHECK(value.floatValue[3] == 1.0f);
+
+  fmt.compType = CompType::UInt;
+  DecodePixelData(fmt, data, value, &decoded);
+  REQUIRE(decoded);
+  CHECK(value.uintValue[0] == 0);
+  CHECK(value.uintValue[1] == 17);
+  CHECK(value.uintValue[3] == 0);
 }
 
 TEST_CASE("Check ConvertComponents", "[format]")

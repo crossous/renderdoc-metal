@@ -112,4 +112,8 @@ public:
 private:
   WrappedMTLCommandBuffer *m_CommandBuffer = NULL;
   WrappedMTLComputePipelineState *m_Pipeline = NULL;
+  bool m_CaptureIndirectArguments = false;
+  uint32_t m_CaptureIndirectOrdinal = 0;
+  MetalComputeIndirectCapture m_IndirectCapture;
+
 };

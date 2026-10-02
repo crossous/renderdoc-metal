@@ -46,7 +46,7 @@ def main():
             ('tile-format-second', 1027, 0, 'colorFormats.1', '80'),
             ('tile-samples', 1027, 0, 'sampleCount', '2'),
             ('tile-max-threads', 1027, 0, 'maxThreads', '2048'),
-            ('tile-options', 1027, 0, 'options', '4'),
+            ('tile-options', 1027, 0, 'options', '8'),
             ('tile-unsupported', 1027, 0, 'supported', 'false'),
             ('tile-binding-encoder', 1160, 0, 'RenderCommandEncoder', '0'),
             ('tile-binding-buffer', 1160, 0, 'buffer', tile_pipeline),

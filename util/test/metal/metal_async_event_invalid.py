@@ -43,7 +43,7 @@ def make_cases(tree, fixture):
             resource = 'RenderPipelineState' if render else 'ComputePipelineState'
             for value in (0, library):
                 edit(i, resource, value)
-            for value in (4, 7, 2**64 - 1):
+            for value in (8, 16, 2**64 - 1):
                 edit(i, 'optionsValue', value)
             field = 'descriptor.vertexFunction' if render else (
                 'descriptor.computeFunction' if descriptor else 'computeFunction')
@@ -144,7 +144,8 @@ def main():
                 message = run(command, 'replay', '--loops', '1', write_variant(name, variant), success=False)
                 if not re.search(r'failed|invalid|unsupported|missing|Couldn.t load', message, re.I):
                     raise RuntimeError(f'missing diagnostic: {fixture}-{name}: {message}')
-            for option in (1, 2) if fixture == 51 else (0, 1):
+            legal_options = (1, 2, 4, 7) if fixture == 51 else (0, 1)
+            for option in legal_options:
                 variant = copy.deepcopy(tree)
                 for node in variant.findall('./chunks/chunk'):
                     chunk_id = int(node.get('id'))
@@ -153,7 +154,7 @@ def main():
                     elif fixture == 52 and chunk_id == 1062:
                         child(node, 'value').text = str(option)
                 run(command, 'replay', '--loops', '3', write_variant(f'legal-{option}', variant))
-            print(f'T{fixture} malformed captures rejected without crash/hang: {len(cases)} cases; 2 legal variants passed')
+            print(f'T{fixture} malformed captures rejected without crash/hang: {len(cases)} cases; {len(legal_options)} legal variants passed')
             total += len(cases)
     print(f'T51/T52 malformed total: {total}')
 

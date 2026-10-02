@@ -43,7 +43,7 @@ def main():
             ('sample-count', 1287, 'sampleCount', '2'),
             ('mesh-thread-count-zero', 1287, 'maxMeshThreads', '0'),
             ('mesh-thread-count-large', 1287, 'maxMeshThreads', '2048'),
-            ('pipeline-options', 1287, 'options', '4'),
+            ('pipeline-options', 1287, 'options', '8'),
             ('unsupported-descriptor', 1287, 'supported', 'false'),
             ('draw-encoder-zero', 1288, 'RenderCommandEncoder', '0'),
             ('draw-grid-zero', 1288, 'threadgroupsPerGrid.width', '0'),

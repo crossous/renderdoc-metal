@@ -432,6 +432,21 @@ enum class MetalChunk : uint32_t
   MTLParallelRenderCommandEncoder_pushDebugGroup,
   MTLParallelRenderCommandEncoder_popDebugGroup,
   MTLParallelRenderCommandEncoder_insertDebugSignpost,
+  MTLResource_CaptureGPUIdentity,
+  MTLBuffer_DeclareDescriptorTable,
+  MTLDevice_DeclareDescriptorCoverage,
+  MTLBuffer_DeclareDescriptorGPUWrites,
+  MTLBuffer_DescriptorCPUWrite,
+  MTLComputeCommandEncoder_DeclareDescriptorBytes,
+  MTLBuffer_DescriptorSlotEvent,
+  MTLBuffer_DescriptorSlotBinding,
+  MTLCommandEncoder_DescriptorInlineLayout,
+  MTLCommandEncoder_DescriptorInlineBinding,
+  MTLBuffer_DescriptorSlotProducer,
+  MTLDevice_CaptureComputeIndirectArgumentsCount,
+  MTLComputeCommandEncoder_CaptureIndirectArguments,
+  MTLDevice_CaptureRenderIndirectArgumentsCount,
+  MTLRenderCommandEncoder_CaptureIndirectArguments,
   Max
 };
 
@@ -511,3 +526,15 @@ byte MakeWriteMask(MTL::ColorWriteMask mask);
 ResourceFormat MakeResourceFormat(MTL::PixelFormat mtlFormat);
 uint32_t GetByteSize(uint32_t width, uint32_t height, uint32_t depth, MTL::PixelFormat mtlFormat,
                      uint32_t mip);
+// Use the same block footprint for linear CPU uploads and initial-state staging.
+bool GetTextureDataBlockShape(MTL::PixelFormat format, uint32_t &width,
+                               uint32_t &height, uint32_t &bytes);
+bool ValidTextureMipCount(uint64_t width, uint64_t height, uint64_t depth, uint64_t levels);
+bool GetTextureBlockShape(MTL::PixelFormat format, uint32_t &width, uint32_t &height,
+                          uint32_t &bytes);
+
+// Shared Native and pre-submit linear transfer validation, including frame buffer lengths.
+bool ValidateMetalLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slice,
+    NS::UInteger level, const MTL::Origin &origin, const MTL::Size &size,
+    uint64_t bufferLength, NS::UInteger offset, NS::UInteger rowPitch,
+    NS::UInteger imagePitch, MTL::BlitOption options);

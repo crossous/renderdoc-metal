@@ -1,0 +1,9 @@
+# B430：先完整写入的背景 Shared 分配
+
+实际ef026832背景buffer14880(256KiB)、15605(768KiB)、15773(256KiB)无InitialContents。前两者帧内只有完整CPU快照，后者另作为后续拷贝目标。原预算扫描把所有>64KiB背景buffer都要求InitialContents，误拒绝不用帧初始字节的资源。
+
+对照通用 ResourceManager 的 eFrameRef_CompleteWrite：完整覆盖前的字节无需恢复。coverage65只收集≤1MiB Shared(Default/Tracked)缺initial的背景分配，保存实际长度。ValidateDescriptorSlotFrame完成提交归属/队列顺序/资源闭包后，遍历原submissionOrder：只有对应提交的完整[start0,length] CPU快照才能建立已初始化状态；每个原Native消费提交都必须已有该状态。unused allocation可无initial。部分快照、Private、缺失/short快照、消费者前没有完整覆盖仍拒绝。原Native CPU snapshot restoration仍等待已提交命令完成，然后在其所属提交编码/执行前恢复；不把未来快照注入EID0初始状态，不编造零字节。
+
+精确046bc2739a4bf4a34eb849dbbcdc27fa58c8b3af9a07c65961bae1ea5ba9031b、metal-submission-initial.dbAHd0：先记录实际768KiB Native Shared CPU改变和完整copy，再移除upload的InitialContents验证原快照足够。2captures/8resetseeks精确GPU54/80及全部Shared字节、尾部覆盖、NativeVA通过；14 API+CLI缺snapshot/partial/range/aftercommit/Private/legacy64/short反例GPU前拒绝。
+
+实际UE预提交继续进行中；尚无完整UE GPU/UI验收。B429/B430及B427/B428后的最新全量与跨功能回归仍待完成。无提交推送。

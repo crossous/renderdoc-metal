@@ -5,6 +5,7 @@ set(sources
     metal_hook.cpp
     metal_hook.h
     metal_device.cpp
+    metal_descriptor_tables.cpp
     metal_device_library.cpp
     metal_device_pipeline.cpp
     metal_device_async.cpp
@@ -90,6 +91,11 @@ set(sources
     metal_compute_pipeline_state.h
     metal_compute_pipeline_state_bridge.mm
     metal_compute_command_encoder.cpp
+    metal_render_indirect_readback.cpp
+    metal_render_indirect_readback.h
+    metal_render_indirect_capture.cpp
+    metal_indirect_readback.cpp
+    metal_indirect_readback.h
     metal_compute_command_encoder.h
     metal_compute_command_encoder_bridge.mm
     metal_render_command_encoder.cpp
