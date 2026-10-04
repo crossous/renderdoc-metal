@@ -1447,6 +1447,10 @@ void DoSerialise(SerialiserType &ser, MetalPipe::Shader &el)
   SERIALISE_SHADER_REFLECTION(reflection);
   SERIALISE_MEMBER(entryPoint);
   SERIALISE_MEMBER(stage);
+  SERIALISE_MEMBER(metadataSource);
+  SERIALISE_MEMBER(framebufferFetch);
+  SERIALISE_MEMBER(rasterOrderGroups);
+  SERIALISE_MEMBER(usesImageblock);
 }
 
 template <typename SerialiserType>
@@ -1458,6 +1462,7 @@ void DoSerialise(SerialiserType &ser, MetalPipe::VertexBuffer &el)
   SERIALISE_MEMBER(byteStride);
   SERIALISE_MEMBER(perInstance);
   SERIALISE_MEMBER(stepRate);
+  SERIALISE_MEMBER(stepFunction);
 }
 
 template <typename SerialiserType>
@@ -1484,6 +1489,19 @@ void DoSerialise(SerialiserType &ser, MetalPipe::Rasterizer &el)
   SERIALISE_MEMBER(scissor);
   SERIALISE_MEMBER(cullMode);
   SERIALISE_MEMBER(frontCCW);
+  SERIALISE_MEMBER(fillMode);
+  SERIALISE_MEMBER(depthClip);
+  SERIALISE_MEMBER(depthBias);
+  SERIALISE_MEMBER(slopeScaledDepthBias);
+  SERIALISE_MEMBER(depthBiasClamp);
+  SERIALISE_MEMBER(rasterizationEnabled);
+  SERIALISE_MEMBER(rasterizationRateMap);
+  SERIALISE_MEMBER(rateMapScreenSize);
+  SERIALISE_MEMBER(rateMapPhysicalSizes);
+  SERIALISE_MEMBER(rateMapHorizontal);
+  SERIALISE_MEMBER(rateMapVertical);
+  SERIALISE_MEMBER(viewports);
+  SERIALISE_MEMBER(scissors);
 }
 
 template <typename SerialiserType>
@@ -1508,6 +1526,45 @@ void DoSerialise(SerialiserType &ser, MetalPipe::DepthStencil &el)
 template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, MetalPipe::State &el)
 {
+  SERIALISE_MEMBER(metalFXSpatial);
+  SERIALISE_MEMBER(metalFXInput);
+  SERIALISE_MEMBER(metalFXOutput);
+  SERIALISE_MEMBER(metalFXTemporal);
+  SERIALISE_MEMBER(metalFXTemporalFloats);
+  SERIALISE_MEMBER(metalFXTemporalInputs);
+  SERIALISE_MEMBER(metalFXScaler);
+  SERIALISE_MEMBER(metalFXHistoryUnavailable);
+  SERIALISE_MEMBER(tileDispatch);
+  SERIALISE_MEMBER(tileWidth);
+  SERIALISE_MEMBER(tileHeight);
+  SERIALISE_MEMBER(tileThreads);
+  SERIALISE_MEMBER(tileMaxThreads);
+  SERIALISE_MEMBER(tileSizeMatches);
+  SERIALISE_MEMBER(imageblockSampleLength);
+  SERIALISE_MEMBER(threadgroupMemoryLength);
+  SERIALISE_MEMBER(tileMemoryLengths);
+  SERIALISE_MEMBER(tileMemoryOffsets);
+  SERIALISE_MEMBER(attachmentStorage);
+  SERIALISE_MEMBER(attachmentLoad);
+  SERIALISE_MEMBER(attachmentStore);
+  SERIALISE_MEMBER(attachmentStoreOptions);
+  SERIALISE_MEMBER(depthStorage);
+  SERIALISE_MEMBER(depthLoad);
+  SERIALISE_MEMBER(depthStore);
+  SERIALISE_MEMBER(stencilStorage);
+  SERIALISE_MEMBER(stencilLoad);
+  SERIALISE_MEMBER(stencilStore);
+  SERIALISE_MEMBER(taskShader);
+  SERIALISE_MEMBER(meshShader);
+  SERIALISE_MEMBER(taskBuffers);
+  SERIALISE_MEMBER(meshBuffers);
+  SERIALISE_MEMBER(taskTextures);
+  SERIALISE_MEMBER(meshTextures);
+  SERIALISE_MEMBER(taskSamplers);
+  SERIALISE_MEMBER(meshSamplers);
+  SERIALISE_MEMBER(computeAccelerationStructures);
+  SERIALISE_MEMBER(vertexAccelerationStructures);
+  SERIALISE_MEMBER(fragmentAccelerationStructures);
   SERIALISE_MEMBER(pipelineResourceId);
   SERIALISE_MEMBER(computePipelineResourceId);
   SERIALISE_MEMBER(computeShader);
@@ -1537,6 +1594,16 @@ void DoSerialise(SerialiserType &ser, MetalPipe::State &el)
   SERIALISE_MEMBER(resolveTargets);
   SERIALISE_MEMBER(colorBlends);
   SERIALISE_MEMBER(depthTarget);
+  SERIALISE_MEMBER(blendFactor);
+  SERIALISE_MEMBER(patchControlPoints);
+  SERIALISE_MEMBER(tessellationFactors);
+  SERIALISE_MEMBER(tessellationInstanceStride);
+  SERIALISE_MEMBER(tessellationPartitionMode);
+  SERIALISE_MEMBER(tessellationStepFunction);
+  SERIALISE_MEMBER(tessellationOutputWinding);
+  SERIALISE_MEMBER(maxTessellationFactor);
+  SERIALISE_MEMBER(tessellationFactorScaleEnabled);
+  SERIALISE_MEMBER(tessellationFactorScale);
 }
 
 #pragma endregion Metal pipeline state

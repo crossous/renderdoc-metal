@@ -1535,6 +1535,12 @@ rdcarray<PixelModification> ReplayController::PixelHistory(ResourceId target, ui
       case ResourceUsage::MS_Resource:
       case ResourceUsage::All_Resource:
       case ResourceUsage::InputTarget:
+      case ResourceUsage::MetalFXDepthInput:
+      case ResourceUsage::MetalFXMotionInput:
+      case ResourceUsage::MetalFXExposureInput:
+      case ResourceUsage::MetalFXReactiveInput:
+      case ResourceUsage::RasterizationRateMap:
+      case ResourceUsage::MetalFXInput:
       case ResourceUsage::CopySrc:
       case ResourceUsage::ResolveSrc:
       case ResourceUsage::Barrier:
@@ -1569,6 +1575,7 @@ rdcarray<PixelModification> ReplayController::PixelHistory(ResourceId target, ui
       case ResourceUsage::Resolve:
       case ResourceUsage::ResolveDst:
       case ResourceUsage::GenMips:
+      case ResourceUsage::MetalFXOutput:
         // writing - include in pixel history events
         break;
     }

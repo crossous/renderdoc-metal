@@ -93,7 +93,11 @@ static bool ValidDescriptorFrameTexture(const RDMTL::TextureDescriptor &d, uint3
         d.pixelFormat == MTL::PixelFormatRGBA32Float))))
   {
     uint64_t logicalSize = 0;
-    return tracked && d.width <= 64 && d.height <= 64 && d.depth <= (coverage >= 43 ? 64U : 16U) && d.arrayLength <= 8 &&
+    // v65 uses the existing native heap extent/budget and lifetime checks for
+    // 2D float images up to the same limit as other frame colour targets. Keep
+    // array/volume and older coverage bounds unchanged.
+    const uint64_t extent = coverage >= 65 && d.textureType == MTL::TextureType2D ? 512 : 64;
+    return tracked && d.width <= extent && d.height <= extent && d.depth <= (coverage >= 43 ? 64U : 16U) && d.arrayLength <= 8 &&
         d.mipmapLevelCount == 1 &&
         (d.usage == (MTL::TextureUsageShaderRead | MTL::TextureUsageShaderWrite) ||
          d.usage == (MTL::TextureUsageShaderRead | MTL::TextureUsageShaderWrite | MTL::TextureUsageRenderTarget)) &&
@@ -393,7 +397,7 @@ uint32_t WrappedMTLDevice::AnnotateDescriptorTable(void *object, const char *key
   if(!strcmp(key, "metal.descriptorCoverage"))
   {
     if(object != this || type != eRENDERDOC_UInt32 || width != 0 ||
-       (value->uint32 < 1 || value->uint32 > 65))
+       (value->uint32 < 1 || value->uint32 > 66))
       return 2;
     if(m_DescriptorCoverage)
       return m_DescriptorCoverage == value->uint32 ? 0 : 2;
@@ -539,7 +543,7 @@ bool WrappedMTLDevice::Serialise_DeclareDescriptorCoverage(SerialiserType &ser, 
 {
   SERIALISE_ELEMENT(version).Important();
   SERIALISE_CHECK_READ_ERRORS();
-  return IsStructuredExporting(m_State) || (version >= 1 && version <= 65);
+  return IsStructuredExporting(m_State) || (version >= 1 && version <= 66);
 }
 
 template <typename SerialiserType>
@@ -653,7 +657,7 @@ bool WrappedMTLDevice::Serialise_DescriptorInlineLayout(SerialiserType &ser, Res
   if(IsReplayingAndReading() && m_DescriptorCoverage >= 4)
   {
     const auto key = make_rdcpair(encoder, uint64_t(stage) << 32 | index);
-    if(!m_DescriptorShadowFrame || (stage != 0 && (m_DescriptorCoverage < 9 || stage > 2)) || index >= 31 ||
+    if(!m_DescriptorShadowFrame || (stage != 0 && (m_DescriptorCoverage < 9 || stage > (m_DescriptorCoverage >= 66 ? 4U : 2U))) || index >= 31 ||
        (count ? (!ValidDescriptorLayout(0, count, stride, 0) || count * stride > 4096) :
         (m_DescriptorCoverage < 14 || !ValidInlineDrawConstants(stage, index, stride))) ||
        m_DescriptorInlineShadow.count(key))
@@ -684,7 +688,7 @@ bool WrappedMTLDevice::Serialise_DescriptorInlineBinding(SerialiserType &ser, Re
   {
     const auto key = make_rdcpair(encoder, uint64_t(stage) << 32 | index);
     auto layout = m_DescriptorInlineShadow.find(key);
-    if((stage != 0 && (m_DescriptorCoverage < 9 || stage > 2)) || layout == m_DescriptorInlineShadow.end() || entry >= layout->second.count ||
+    if((stage != 0 && (m_DescriptorCoverage < 9 || stage > (m_DescriptorCoverage >= 66 ? 4U : 2U))) || layout == m_DescriptorInlineShadow.end() || entry >= layout->second.count ||
        resource == ResourceId() || layout->second.sources.count(entry))
       return false;
     layout->second.sources[entry] = {resource, memberOffset};
@@ -930,6 +934,7 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
       scan.GetReader()->SetOffset(evidencePosition);
     }
     if(frame && m_DescriptorCoverage >= 16 && retirementPrefix &&
+       chunk != MetalChunk::MTLResource_setLabel && // Metadata does not consume descriptor generations.
        (SystemChunk)chunk != SystemChunk::CaptureScope && (SystemChunk)chunk != SystemChunk::CaptureBegin)
     {
       if(chunk == MetalChunk::MTLBuffer_DescriptorSlotEvent)
@@ -1086,7 +1091,13 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
       scan.Serialise("descriptor"_lit, descriptor); scan.Serialise("offset"_lit, offset);
       if(heap == ResourceId() || texture == ResourceId() || !ValidDescriptorFrameTexture(descriptor, m_DescriptorCoverage) ||
          !m_DescriptorFrameTextures.insert({texture, {heap, descriptor, offset}}).second)
-        RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid frame sourced Metal texture creation");
+        RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+            "Invalid frame sourced Metal texture creation: texture %s heap %s, %s %s %llux%llux%llu, mips %llu samples %llu array %llu usage %llu",
+            ToStr(texture).c_str(), ToStr(heap).c_str(), ToStr(descriptor.textureType).c_str(),
+            ToStr(descriptor.pixelFormat).c_str(), (unsigned long long)descriptor.width,
+            (unsigned long long)descriptor.height, (unsigned long long)descriptor.depth,
+            (unsigned long long)descriptor.mipmapLevelCount, (unsigned long long)descriptor.sampleCount,
+            (unsigned long long)descriptor.arrayLength, (unsigned long long)descriptor.usage);
     }
     if(frame && m_DescriptorCoverage >= 26 &&
        chunk == MetalChunk::MTLTexture_newTextureViewWithPixelFormat_subset)
@@ -1151,7 +1162,7 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
     {
       uint32_t version = 0;
       scan.Serialise("version"_lit, version);
-      if(frame || (version < 1 || version > 65) || declaredCoverage ||
+      if(frame || (version < 1 || version > 66) || declaredCoverage ||
          (m_DescriptorCoverage && !diagnosticCoverage))
         RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal descriptor coverage declaration");
       declaredCoverage=true;
@@ -2133,12 +2144,16 @@ bool WrappedMTLDevice::IsRetiredDescriptorBacking(ResourceId buffer) const
   return false;
 }
 
-bool WrappedMTLDevice::OverlayAliasedDescriptorTables(ResourceId buffer)
+bool WrappedMTLDevice::OverlayAliasedDescriptorTables(ResourceId buffer, uint64_t start, uint64_t size)
 {
   if(m_DescriptorCoverage < 25 || m_ValidatedDescriptorBackingAliases.empty()) return true;
   auto object = GetResourceManager()->GetResource(buffer, true);
   MTL::Buffer *source = object && object->m_Type == eResBuffer ? Unwrap((WrappedMTLBuffer *)object) : NULL;
   if(!source || !source->heap()) return true;
+  if(start > source->length()) return false;
+  if(size == ~0ULL) size = source->length() - start;
+  if(size > source->length() - start) return false;
+  const uint64_t begin = source->heapOffset() + start, end = begin + size;
   std::set<ResourceId> restored;
   for(const auto &layout : m_DescriptorTables)
   {
@@ -2147,21 +2162,24 @@ bool WrappedMTLDevice::OverlayAliasedDescriptorTables(ResourceId buffer)
     MTL::Buffer *target = targetObject && targetObject->m_Type == eResBuffer ?
         Unwrap((WrappedMTLBuffer *)targetObject) : NULL;
     if(!target || target->heap() != source->heap() || IsRetiredDescriptorBacking(layout.buffer)) continue;
-    if(source->heapOffset() < target->heapOffset() + target->length() &&
-       target->heapOffset() < source->heapOffset() + source->length())
+    if(begin < target->heapOffset() + target->length() && target->heapOffset() < end)
     {
       // Conservative useHeaps snapshots can include both the retired backing
       // and its replacement. Restore physical bytes, then re-encode live logical
       // slots; never interpret a duplicate raw captured VA as a new identity.
+      const uint64_t targetBegin = RDCMAX(begin, target->heapOffset());
+      const uint64_t targetEnd = RDCMIN(end, target->heapOffset() + target->length());
       if(m_DescriptorGPUWrittenBuffers.count(layout.buffer) ||
-         !OverlayDescriptorSlotBuffer(layout.buffer)) return false;
+         !OverlayDescriptorSlotBuffer(layout.buffer, false, targetBegin - target->heapOffset(),
+                                      targetEnd - targetBegin)) return false;
       restored.insert(layout.buffer);
     }
   }
   return true;
 }
 
-bool WrappedMTLDevice::OverlayDescriptorSlotBuffer(ResourceId buffer, bool initialRestore)
+bool WrappedMTLDevice::OverlayDescriptorSlotBuffer(ResourceId buffer, bool initialRestore,
+                                                   uint64_t start, uint64_t size)
 {
   if(IsRetiredDescriptorBacking(buffer)) return true;
   bool needed = false;
@@ -2173,18 +2191,38 @@ bool WrappedMTLDevice::OverlayDescriptorSlotBuffer(ResourceId buffer, bool initi
     return false;
   MTL::Buffer *native = Unwrap((WrappedMTLBuffer *)object);
   if(native->storageMode() != MTL::StorageModeShared || !native->contents()) return false;
+  if(start > native->length()) return false;
+  if(size == ~0ULL) size = native->length() - start;
+  if(size > native->length() - start) return false;
   for(const auto &entry : m_DescriptorSlotShadow)
   {
     if(entry.first.first != buffer) continue;
     const uint64_t offset = entry.first.second;
     if(offset > native->length() || 24 > native->length() - offset) return false;
+    if(offset >= start + size || start >= offset + 24) continue;
     if(entry.second.live && !IsDescriptorPreludeRetirement(entry.first, entry.second))
     {
       if(entry.second.gpuExpected && !initialRestore) continue;
       if(m_DescriptorCoverage>=63 && !initialRestore && entry.second.data.empty() &&
          m_DescriptorGPUWrittenBuffers.count(buffer)) continue;
       bytebuf patched;
-      if(!PatchDescriptorSlot(entry.second, patched)) return false;
+      if(!PatchDescriptorSlot(entry.second, patched))
+      {
+        if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
+        {
+          fprintf(stderr,"Metal descriptor overlay slot failed: buffer=%s offset=%llu generation=%llu type=%u bytes=%zu initial=%d sources=%zu\n",
+              ToStr(buffer).c_str(),(unsigned long long)offset,
+              (unsigned long long)entry.second.generation,entry.second.type,entry.second.data.size(),initialRestore,entry.second.sources.size());
+          for(const auto &source:entry.second.sources)
+          {
+            auto sourceObject=GetResourceManager()->GetResource(source.second.resource,true);
+            fprintf(stderr,"Metal descriptor overlay source: kind=%u resource=%s offset=%llu real=%d\n",
+                source.first,ToStr(source.second.resource).c_str(),(unsigned long long)source.second.offset,
+                sourceObject && sourceObject->m_Real);
+          }
+        }
+        return false;
+      }
       memcpy((byte *)native->contents() + offset, patched.data(), 24);
     }
     else
@@ -2286,7 +2324,7 @@ bool WrappedMTLDevice::RelocateDescriptorInlineShadow(ResourceId encoder, uint32
 {
   const auto key = make_rdcpair(encoder, uint64_t(stage) << 32 | index);
   auto layout = m_DescriptorInlineShadow.find(key);
-  if((stage != 0 && (m_DescriptorCoverage < 9 || stage > 2)) || layout == m_DescriptorInlineShadow.end() ||
+  if((stage != 0 && (m_DescriptorCoverage < 9 || stage > (m_DescriptorCoverage >= 66 ? 4U : 2U))) || layout == m_DescriptorInlineShadow.end() ||
      (layout->second.count ? layout->second.count * layout->second.stride : layout->second.stride) != data.size())
     return false;
   if(!layout->second.count)
@@ -2318,20 +2356,11 @@ bool WrappedMTLDevice::RelocateDescriptorInlineShadow(ResourceId encoder, uint32
   return true;
 }
 
-void WrappedMTLDevice::AddValidatedSourcedComputeUsage(ResourceId encoder)
-{
-  auto resources = m_DescriptorValidatedComputeResources.find(encoder);
-  if(resources == m_DescriptorValidatedComputeResources.end()) return;
-  // The validated source closure includes typed argument-table resources and view
-  // parents. Without shader access reflection, retain a conservative RW usage.
-  for(ResourceId resource : resources->second)
-    GetReplay()->AddUsage(resource, ResourceUsage::CS_RWResource);
-}
-
 bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
 {
   m_DescriptorPreflight = true;
   m_DescriptorValidatedComputeResources.clear();
+  m_DescriptorSubmissionSlots.clear();
   m_DescriptorSubmissionSnapshotOwners.clear();
   m_DescriptorInitialCPUValueOffsets.clear();
   m_DescriptorPartialCopySubmissions.clear(); m_DescriptorFrameBufferBirthOffsets.clear();
@@ -2351,7 +2380,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
   std::set<ResourceId> liveBlits;
   std::map<ResourceId,uint32_t> blitDebugDepth;
   uint32_t commandCount = 0, dispatchCount = 0, copyCount = 0, drawCount = 0;
-  uint32_t producerCount = 0;
+  uint32_t producerCount = 0, meshDrawCount = 0;
   uint64_t dispatchWork = 0, drawWork = 0;
   uint32_t plainCopyCount = 0; uint64_t plainCopyBytes = 0;
   ResourceId submissionQueue, currentCommand;
@@ -2415,6 +2444,15 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     for(const auto &table : m_DescriptorTables)
       if(table.buffer == resource) return true;
     return false;
+  };
+  auto noteSubmissionSlots = [&](ResourceId encoder) {
+    // An encoded draw/dispatch owns its resource closure, as in D3D12/Vulkan.
+    // Unrelated values may still be waiting for their source annotation when
+    // this command buffer is submitted.
+    for(const auto &slot : m_DescriptorSlotShadow)
+      if(slot.second.live && encoderResources[encoder].count(slot.first.first) &&
+         !(m_DescriptorCoverage >= 64 && slot.second.data.empty()))
+        m_DescriptorSubmissionSlots[encoderCommands[encoder]].insert(slot.first);
   };
   auto validateBackingAlias = [&](ResourceId before, ResourceId after) {
     if(!isTable(before) && !isTable(after)) return true;
@@ -2655,6 +2693,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     return true;
   };
   std::map<ResourceId, rdcarray<CPUUpdate>> submissionUpdates;
+  rdcarray<ResourceId> capturedSubmissionOrder;
   std::map<ResourceId,std::set<ResourceId>> producerDestinations;
   std::map<ResourceId,std::set<DescriptorSlotKey>> producerSlots;
   if(m_DescriptorCoverage >= 50)
@@ -2701,6 +2740,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         success = !submissionUpdates.count(command);
         if(success) {
           submissionUpdates[command] = pending; pending.clear();
+          capturedSubmissionOrder.push_back(command);
           if(m_DescriptorCoverage >= 51)
             for(uint64_t snapshot : pendingOffsets) m_DescriptorSubmissionSnapshotOwners[snapshot] = command;
           pendingOffsets.clear();
@@ -2753,6 +2793,26 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     if(!overlay(command)) return false;
     for(byte value : known) if(!value) return false;
     return true;
+  };
+  auto readVisibilityInitial = [&](ResourceId buffer, ResourceId command, uint64_t length, bytebuf &data) {
+    if(modifiedBuffers.count(buffer) || m_DescriptorGPUWrittenBuffers.count(buffer) || isTable(buffer))
+      return false;
+    // Encoder creation can precede the submission carrying this new buffer's
+    // initial CPU snapshot. Use captured commit order (as replay restoration
+    // does), not the position of this pass in the encoded chunk stream. Accept
+    // only a complete snapshot no later than the query submission.
+    bool foundCommand = false;
+    for(ResourceId owner : capturedSubmissionOrder)
+    {
+      for(const CPUUpdate &update : submissionUpdates[owner])
+        if(update.buffer == buffer)
+        {
+          if(update.start || update.data.size() != length) return false;
+          data = update.data;
+        }
+      if(owner == command) { foundCommand = true; break; }
+    }
+    return foundCommand && data.size() == length;
   };
   ReadSerialiser scan(m_FrameReader, Ownership::Nothing);
   scan.SetVersion(m_SectionVersion);
@@ -2836,6 +2896,35 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         }
         else if(m_DescriptorCoverage >= 12) completed.insert(committed.begin(), committed.end());
       }
+    }
+    else if(chunk == MetalChunk::MTLCommandBuffer_encodeMetalFXSpatial)
+    {
+      ResourceId command, colour, output, fence;
+      rdcarray<uint64_t> p;
+      scan.Serialise("CommandBuffer"_lit, command); scan.Serialise("colour"_lit, colour);
+      scan.Serialise("output"_lit, output); scan.Serialise("fence"_lit, fence);
+      scan.Serialise("parameters"_lit, p);
+      success = commands.count(command) && !committed.count(command) && !hasLiveEncoder(command) &&
+          colour != ResourceId() && output != ResourceId() && colour != output && p.size() == 9;
+      if(success)
+        success = p[0] && p[1] && p[2] && p[3] && p[0] <= 16384 && p[1] <= 16384 &&
+            p[2] <= 16384 && p[3] <= 16384 && p[2] >= p[0] && p[3] >= p[1] && p[6] <= 2 &&
+            p[7] && p[8] && p[7] <= p[0] && p[8] <= p[1];
+      for(ResourceId texture : {colour, output})
+      {
+        auto future = m_DescriptorFrameTextures.find(texture);
+        WrappedMTLObject *object = GetResourceManager()->GetResource(texture, true);
+        success &= future != m_DescriptorFrameTextures.end() ? m_DescriptorPreflightLiveTextures.count(texture) != 0 :
+            object && object->m_Type == eResTexture && object->m_Real && object->m_Device == this;
+        resourceCommands[texture].insert(command);
+      }
+      if(fence != ResourceId())
+      {
+        auto object = GetResourceManager()->GetResource(fence, true);
+        success &= object && object->m_Type == eResFence && object->m_Real && object->m_Device == this;
+      }
+      // The copy-only dependency shortcut cannot replay opaque MetalFX work.
+      if(m_DescriptorCoverage >= 52) m_DescriptorPartialCopySubmissions[command].valid = false;
     }
     else if(m_DescriptorCoverage >= 19 && chunk == MetalChunk::MTLCommandBuffer_encodeSignalEvent)
     {
@@ -3284,7 +3373,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           (parallel ? liveParallelRenders.insert(encoder).second : liveRenders.insert(encoder).second) &&
           (m_DescriptorCoverage < 20 || knownEncoders.insert(encoder).second) && validEncoderCommand(command) &&
           (m_DescriptorCoverage >= 53 || (pass.depthAttachment.textureId == ResourceId() && pass.stencilAttachment.textureId == ResourceId())) &&
-          (m_DescriptorCoverage >= 65 || !pass.visibilityResultBuffer) &&
+          (m_DescriptorCoverage >= 65 || pass.visibilityResultBufferId == ResourceId()) &&
           !pass.rasterizationRateMap && pass.rasterizationRateMapId == ResourceId() &&
           pass.renderTargetArrayLength <= (m_DescriptorCoverage >= 65 ? 64U : 1U) &&
           pass.renderTargetWidth <= (m_DescriptorCoverage >= 35 ? 8192U : 2U) &&
@@ -3295,17 +3384,32 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           !pass.imageblockSampleLength && !pass.threadgroupMemoryLength && !pass.tileWidth && !pass.tileHeight;
       uint32_t targets = 0;
       std::set<ResourceId> targetResources;
-      if(pass.visibilityResultBuffer)
+      if(pass.visibilityResultBufferId != ResourceId())
       {
-        const ResourceId buffer=GetResID(pass.visibilityResultBuffer);
+        const ResourceId buffer=pass.visibilityResultBufferId;
         auto object=GetResourceManager()->GetResource(buffer,true);
         MTL::Buffer *native=object && object->m_Type==eResBuffer ? Unwrap((WrappedMTLBuffer *)object):NULL;
         auto initial=m_ReplayBufferInitialContents.find(buffer);
-        success &= native && object->m_Device==this && native->length()>=8 &&
+        auto future=m_DescriptorFrameBuffers.find(buffer);
+        bytebuf captured;
+        const bool frameBuffer=future!=m_DescriptorFrameBuffers.end() &&
+            m_DescriptorPreflightLiveBuffers.count(buffer) && future->second.length>=8 &&
+            future->second.length<=1024*1024 &&
+            future->second.options==(MTL::ResourceStorageModeShared | MTL::ResourceHazardTrackingModeTracked) &&
+            readVisibilityInitial(buffer,command,future->second.length,captured);
+        const bool backgroundBuffer=native && object->m_Device==this && native->length()>=8 &&
             native->length()<=1024*1024 && native->hazardTrackingMode()==MTL::HazardTrackingModeTracked &&
             native->storageMode()==MTL::StorageModeShared &&
-            initial!=m_ReplayBufferInitialContents.end() && initial->second.size()==native->length() &&
-            !m_DescriptorPreflightAliasedBuffers.count(buffer);
+            initial!=m_ReplayBufferInitialContents.end() && initial->second.size()==native->length();
+        success &= (frameBuffer || backgroundBuffer) && !m_DescriptorPreflightAliasedBuffers.count(buffer);
+        if(!success && getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
+          fprintf(stderr,"Metal visibility buffer proof: buffer=%s command=%s future=%d live=%d length=%llu options=%llu snapshot=%zu modified=%d table=%d aliased=%d background=%d\n",
+              ToStr(buffer).c_str(),ToStr(command).c_str(),future!=m_DescriptorFrameBuffers.end(),
+              int(m_DescriptorPreflightLiveBuffers.count(buffer)),
+              (unsigned long long)(future!=m_DescriptorFrameBuffers.end()?future->second.length:0),
+              (unsigned long long)(future!=m_DescriptorFrameBuffers.end()?future->second.options:0),
+              captured.size(),int(modifiedBuffers.count(buffer)),int(isTable(buffer)),
+              int(m_DescriptorPreflightAliasedBuffers.count(buffer)),backgroundBuffer);
         if(success) {renderVisibilityBuffers[encoder]=buffer;targetResources.insert(buffer);}
       }
       for(uint32_t index = 0; index < pass.colorAttachments.size(); index++)
@@ -3543,9 +3647,12 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       const ResourceId buffer=renderVisibilityBuffers.count(encoder)?renderVisibilityBuffers[encoder]:ResourceId();
       auto object=GetResourceManager()->GetResource(buffer,true);
       MTL::Buffer *native=object && object->m_Type==eResBuffer?Unwrap((WrappedMTLBuffer *)object):NULL;
+      auto future=m_DescriptorFrameBuffers.find(buffer);
+      const uint64_t length=future!=m_DescriptorFrameBuffers.end() &&
+          m_DescriptorPreflightLiveBuffers.count(buffer)?future->second.length:native?native->length():0;
       success=liveRenders.count(encoder) && mode<=MTL::VisibilityResultModeCounting && !(offset&7) &&
-          (mode==MTL::VisibilityResultModeDisabled || (native && offset<=native->length() &&
-           8<=native->length()-offset && !m_DescriptorPreflightAliasedBuffers.count(buffer)));
+          (mode==MTL::VisibilityResultModeDisabled || (length && offset<=length &&
+           8<=length-offset && !m_DescriptorPreflightAliasedBuffers.count(buffer)));
       if(success && mode!=MTL::VisibilityResultModeDisabled)
       {
         noteResource(buffer,encoder);modifiedBuffers.insert(buffer);opaqueWrites.insert(buffer);
@@ -3609,8 +3716,129 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       ResourceId encoder, pipeline;
       scan.Serialise("RenderCommandEncoder"_lit, encoder); scan.Serialise("pipelineState"_lit, pipeline);
       success = liveRenders.count(encoder) && pipeline != ResourceId();
-      graphics[{encoder, 1}].pipeline = pipeline; graphics[{encoder, 2}].pipeline = pipeline;
+      for(uint32_t stage = 1; stage <= (m_DescriptorCoverage >= 66 ? 4U : 2U); stage++)
+        graphics[{encoder, stage}].pipeline = pipeline;
       if(m_DescriptorCoverage >= 52) m_DescriptorPartialCopySubmissions[encoderCommands[encoder]].valid = false;
+    }
+    else if(m_DescriptorCoverage >= 66 &&
+        (chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBuffer ||
+         chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBytes ||
+         chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBufferOffset ||
+         chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBuffers ||
+         chunk == MetalChunk::MTLRenderCommandEncoder_setMeshBuffer ||
+         chunk == MetalChunk::MTLRenderCommandEncoder_setMeshBytes ||
+         chunk == MetalChunk::MTLRenderCommandEncoder_setMeshBufferOffset ||
+         chunk == MetalChunk::MTLRenderCommandEncoder_setMeshBuffers))
+    {
+      const bool object = chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBuffer ||
+          chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBytes ||
+          chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBufferOffset ||
+          chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBuffers;
+      const uint32_t stage = object ? 3U : 4U;
+      const bool single = chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBuffer;
+      const bool bytes = chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBytes ||
+          chunk == MetalChunk::MTLRenderCommandEncoder_setMeshBytes;
+      const bool offsetOnly = chunk == MetalChunk::MTLRenderCommandEncoder_setObjectBufferOffset ||
+          chunk == MetalChunk::MTLRenderCommandEncoder_setMeshBufferOffset;
+      ResourceId encoder; rdcarray<ResourceId> buffers; rdcarray<NS::UInteger> offsets;
+      rdcarray<byte> data; NS::Range range = NS::Range::Make(0, 0);
+      scan.Serialise("RenderCommandEncoder"_lit, encoder);
+      if(single)
+      {
+        ResourceId buffer; uint64_t offset = 0, index = 0;
+        scan.Serialise("buffer"_lit, buffer); scan.Serialise("offset"_lit, offset);
+        scan.Serialise("index"_lit, index);
+        buffers = {buffer}; offsets = {NS::UInteger(offset)};
+        range = NS::Range::Make(index, 1);
+      }
+      else
+      {
+        scan.Serialise("buffers"_lit, buffers); scan.Serialise("offsets"_lit, offsets);
+        scan.Serialise("data"_lit, data); scan.Serialise("range"_lit, range);
+      }
+      auto &snapshot = graphics[{encoder, stage}];
+      success = liveRenders.count(encoder) && range.location < 31 && range.length &&
+          range.length <= 31 - range.location;
+      if(bytes)
+      {
+        success &= range.length == 1 && buffers.empty() && offsets.empty();
+        const auto key = make_rdcpair(encoder, uint64_t(stage) << 32 | range.location);
+        const auto layout = m_DescriptorInlineShadow.find(key);
+        if(layout != m_DescriptorInlineShadow.end())
+          for(const auto &source : layout->second.sources) noteResource(source.second.resource, encoder);
+        if(success) success = RelocateDescriptorInlineShadow(encoder, stage, range.location, data);
+        if(success) { snapshot.bytes[uint32_t(range.location)] = data.size(); snapshot.buffers.erase(uint32_t(range.location)); }
+      }
+      else
+      {
+        success &= data.empty() && offsets.size() == range.length &&
+            (offsetOnly ? buffers.empty() && range.length == 1 : buffers.size() == range.length);
+        for(size_t i = 0; success && i < range.length; i++)
+        {
+          const uint32_t slot = uint32_t(range.location + i);
+          ResourceId buffer = offsetOnly ? snapshot.buffers[slot].resourceId : buffers[i];
+          auto native = GetResourceManager()->GetResource(buffer, true);
+          auto future = m_DescriptorFrameBuffers.find(buffer);
+          const uint64_t length = future != m_DescriptorFrameBuffers.end() && m_DescriptorPreflightLiveBuffers.count(buffer)
+              ? future->second.length : native && native->m_Type == eResBuffer && native->m_Real
+              ? Unwrap((WrappedMTLBuffer *)native)->length() : 0;
+          success &= !(offsets[i] % 4) && !m_DescriptorPreflightAliasedBuffers.count(buffer) &&
+              (buffer == ResourceId() ? !offsetOnly && offsets[i] == 0 : offsets[i] < length);
+          if(success)
+          {
+            snapshot.bytes.erase(slot);
+            if(buffer == ResourceId()) snapshot.buffers.erase(slot);
+            else { auto &binding = snapshot.buffers[slot]; binding.resourceId = buffer;
+              binding.byteOffset = offsets[i]; binding.byteSize = length - offsets[i]; noteResource(buffer, encoder); }
+          }
+        }
+      }
+    }
+    else if(m_DescriptorCoverage >= 66 && chunk == MetalChunk::MTLRenderCommandEncoder_drawMeshThreadgroups)
+    {
+      ResourceId encoder; MTL::Size grid = {}, objectThreads = {}, meshThreads = {};
+      scan.Serialise("RenderCommandEncoder"_lit, encoder);
+      scan.Serialise("threadgroupsPerGrid"_lit, grid);
+      scan.Serialise("threadsPerObjectThreadgroup"_lit, objectThreads);
+      scan.Serialise("threadsPerMeshThreadgroup"_lit, meshThreads);
+      const ResourceId pipeline = graphics[{encoder, 4}].pipeline;
+      auto wrapped = GetResourceManager()->GetResource(pipeline, true);
+      auto native = wrapped && wrapped->m_Type == eResRenderPipelineState && wrapped->m_Real
+          ? Unwrap((WrappedMTLRenderPipelineState *)wrapped) : NULL;
+      auto bounded = [](const MTL::Size &size, uint64_t limit) {
+        return size.width && size.height && size.depth && size.height <= limit &&
+            size.width <= limit / size.height && size.width * size.height <= limit / size.depth;
+      };
+      success = liveRenders.count(encoder) && native && GetReplay()->IsMeshPipeline(pipeline) &&
+          ++meshDrawCount <= 512 && bounded(grid, 1024) &&
+          bounded(meshThreads, native->maxTotalThreadsPerMeshThreadgroup()) &&
+          bounded(objectThreads, RDCMAX(1ULL, uint64_t(native->maxTotalThreadsPerObjectThreadgroup()))) &&
+          native->maxTotalThreadgroupsPerMeshGrid() &&
+          (native->maxTotalThreadsPerObjectThreadgroup() || bounded(grid, native->maxTotalThreadgroupsPerMeshGrid()));
+      if(success)
+      {
+        const uint64_t groups = grid.width * grid.height * grid.depth;
+        const uint64_t meshInvocations = meshThreads.width * meshThreads.height * meshThreads.depth;
+        const uint64_t work = groups * meshInvocations;
+        success &= work <= 1024 * 1024 - drawWork;
+        if(success) drawWork += work;
+      }
+      success &= validateDrawableReads(encoder);
+      success &= GetReplay()->ValidateGraphicsTargets(pipeline, renderTargets[encoder], 5U,
+          renderDepthTargets[encoder], renderStencilTargets[encoder]);
+      for(uint32_t stage : {2U, 3U, 4U})
+      {
+        const auto &snapshot = graphics[{encoder, stage}];
+        success &= GetReplay()->ValidateGraphicsBufferSnapshot(pipeline, stage, snapshot.buffers, snapshot.bytes);
+      }
+      for(const auto &entry : m_DescriptorSlotShadow)
+      {
+        bytebuf patched;
+        if(entry.second.live && !PatchDescriptorSlot(entry.second, patched)) success = false;
+      }
+      for(ResourceId resource : encoderResources[encoder]) noteResource(resource, encoder);
+      if(success) noteSubmissionSlots(encoder);
+      pendingWork.insert(encoderCommands[encoder]); consumed = true;
     }
     else if(m_DescriptorCoverage >= 65 &&
         (chunk == MetalChunk::MTLRenderCommandEncoder_setVertexBuffer ||
@@ -3866,6 +4094,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
             }
       }
       for(ResourceId resource : encoderResources[encoder]) noteResource(resource, encoder);
+      if(success) noteSubmissionSlots(encoder);
       if(m_DescriptorCoverage >= 15) pendingWork.insert(encoderCommands[encoder]);
       consumed = true;
     }
@@ -4126,7 +4355,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       const uint64_t position = m_FrameReader->GetOffset();
       ResourceId encoder; uint32_t stage = 0; scan.Serialise("encoder"_lit, encoder); scan.Serialise("stage"_lit, stage);
       m_FrameReader->SetOffset(position);
-      success = (stage == 0 ? liveEncoders.count(encoder) : (m_DescriptorCoverage >= 9 && stage <= 2 && liveRenders.count(encoder))) && Serialise_DescriptorInlineLayout(scan, ResourceId(), 0, 0, 0, 0);
+      success = (stage == 0 ? liveEncoders.count(encoder) : (m_DescriptorCoverage >= 9 && stage <= (m_DescriptorCoverage >= 66 ? 4U : 2U) && liveRenders.count(encoder))) && Serialise_DescriptorInlineLayout(scan, ResourceId(), 0, 0, 0, 0);
     }
     else if(chunk == MetalChunk::MTLCommandEncoder_DescriptorInlineBinding)
       success = Serialise_DescriptorInlineBinding(scan, ResourceId(), 0, 0, 0, ResourceId(), 0);
@@ -4282,6 +4511,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           if(success && m_DescriptorCoverage>=64)
             writtenSlots.insert(producerSlots[encoder].begin(),producerSlots[encoder].end());
           for(ResourceId resource : encoderResources[encoder]) noteResource(resource, encoder);
+          if(success && dispatchRuns) noteSubmissionSlots(encoder);
           if(success && m_DescriptorCoverage >= 39)
             m_DescriptorValidatedComputeResources[encoder] = encoderResources[encoder];
           if(success && m_DescriptorCoverage>=65 && dispatchRuns && producerDestinations[encoder].empty())
@@ -4364,7 +4594,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       fprintf(stderr, "Sourced Metal descriptor preflight rejected: %s streamOffset=%llu\n", GetChunkName((uint32_t)chunk).c_str(),(unsigned long long)chunkOffset);
     scan.EndChunk();
   }
-  success &= !scan.IsErrored() && m_DescriptorInlineShadow.empty() &&
+  success &= (m_DescriptorCoverage != 66 || meshDrawCount != 0) &&
+             !scan.IsErrored() && m_DescriptorInlineShadow.empty() &&
              m_DescriptorGPUCopyExpected.empty() && liveBlits.empty() && liveRenders.empty() && liveEncoders.empty() &&
              liveParallelRenders.empty() && activeChildren.empty() && childParents.empty() &&
              (m_DescriptorCoverage < 10 || (committed.size() == commands.size() &&
@@ -4405,6 +4636,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
   m_DescriptorPreflightAliasedBuffers.clear();
   m_DescriptorInlineShadow.clear();
   m_DescriptorPreflight = false;
+  if(!success) m_DescriptorSubmissionSlots.clear();
   if(!success) { m_ValidatedDescriptorBackingAliases.clear(); m_DescriptorBackingAliasConsumers.clear(); m_RetiredTextureAliasConsumers.clear(); m_DescriptorValidatedComputeResources.clear(); m_DescriptorSubmissionSnapshotOwners.clear(); m_DescriptorPartialCopySubmissions.clear(); m_DescriptorFrameBufferBirthOffsets.clear(); m_DescriptorSubmissionOrder.clear(); }
   m_FrameReader->SetOffset(0);
   return success;
@@ -4414,7 +4646,10 @@ bool WrappedMTLDevice::ApplyDescriptorCPUUpdate(ResourceId buffer, uint64_t star
 {
   if(m_DescriptorCoverage >= 4)
     return m_DescriptorPreflight ||
-        (OverlayDescriptorSlotBuffer(buffer) && OverlayAliasedDescriptorTables(buffer));
+        (m_DescriptorCoverage >= 65 ?
+         (OverlayDescriptorSlotBuffer(buffer, false, start, data.size()) &&
+          OverlayAliasedDescriptorTables(buffer, start, data.size())) :
+         (OverlayDescriptorSlotBuffer(buffer) && OverlayAliasedDescriptorTables(buffer)));
   auto shadow = m_DescriptorRawContents.find(buffer);
   if(shadow == m_DescriptorRawContents.end())
     return true;

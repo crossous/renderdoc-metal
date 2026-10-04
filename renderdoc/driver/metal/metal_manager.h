@@ -136,6 +136,8 @@ public:
     }
   }
   ~MetalResourceManager() {}
+  // Replay-only editor objects need the same typed wrapper/native release as shutdown.
+  bool ReleaseReplayResource(WrappedMTLObject *resource) { return ResourceTypeRelease(resource); }
   void ClearWithoutReleasing()
   {
     // if any objects leaked past, it's no longer safe to delete them as we would

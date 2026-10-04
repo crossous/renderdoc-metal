@@ -1620,6 +1620,14 @@ QString ToQStr(const ResourceUsage usage, const GraphicsAPI apitype)
       case ResourceUsage::Barrier: return lit("Barrier");
 
       case ResourceUsage::CPUWrite: return lit("CPU Write");
+      case ResourceUsage::MetalFXInput: return lit("MetalFX - Input");
+      case ResourceUsage::MetalFXOutput: return lit("MetalFX - Output");
+      case ResourceUsage::RasterizationRateMap: return lit("Rasterization Rate Map");
+      case ResourceUsage::MetalFXDepthInput: return lit("MetalFX - Depth Input");
+      case ResourceUsage::MetalFXMotionInput: return lit("MetalFX - Motion Vectors Input");
+      case ResourceUsage::MetalFXExposureInput: return lit("MetalFX - Exposure Input");
+      case ResourceUsage::MetalFXReactiveInput: return lit("MetalFX - Reactive Mask Input");
+
     }
   }
   else if(apitype == GraphicsAPI::OpenGL || apitype == GraphicsAPI::Vulkan ||
@@ -1690,6 +1698,14 @@ QString ToQStr(const ResourceUsage usage, const GraphicsAPI apitype)
       case ResourceUsage::Barrier: return lit("Barrier");
 
       case ResourceUsage::CPUWrite: return lit("CPU Write");
+      case ResourceUsage::MetalFXInput: return lit("MetalFX - Input");
+      case ResourceUsage::MetalFXOutput: return lit("MetalFX - Output");
+      case ResourceUsage::RasterizationRateMap: return lit("Rasterization Rate Map");
+      case ResourceUsage::MetalFXDepthInput: return lit("MetalFX - Depth Input");
+      case ResourceUsage::MetalFXMotionInput: return lit("MetalFX - Motion Vectors Input");
+      case ResourceUsage::MetalFXExposureInput: return lit("MetalFX - Exposure Input");
+      case ResourceUsage::MetalFXReactiveInput: return lit("MetalFX - Reactive Mask Input");
+
     }
   }
 
@@ -1698,7 +1714,19 @@ QString ToQStr(const ResourceUsage usage, const GraphicsAPI apitype)
 
 QString ToQStr(const ShaderStage stage, const GraphicsAPI apitype)
 {
-  if(IsD3D(apitype))
+  if(apitype == GraphicsAPI::Metal)
+  {
+    switch(stage)
+    {
+      case ShaderStage::Vertex: return lit("Vertex");
+      case ShaderStage::Fragment: return lit("Fragment");
+      case ShaderStage::Compute: return lit("Compute");
+      case ShaderStage::Task: return lit("Object/Task");
+      case ShaderStage::Mesh: return lit("Mesh");
+      default: break;
+    }
+  }
+  else if(IsD3D(apitype))
   {
     switch(stage)
     {
@@ -2464,7 +2492,13 @@ void RDDialog::show(QMenu *menu, QPoint pos)
   auto connection =
       QObject::connect(menu, &QMenu::aboutToHide, [&menuHiding]() { menuHiding = true; });
 
+  // A native macOS popup must receive outside clicks so it can dismiss itself. Making it
+  // application-modal blocks those clicks on the rest of the capture window.
+#if defined(Q_OS_MAC)
+  menu->setWindowModality(Qt::NonModal);
+#else
   menu->setWindowModality(Qt::ApplicationModal);
+#endif
   menu->popup(pos);
 
   QElapsedTimer elapsed;

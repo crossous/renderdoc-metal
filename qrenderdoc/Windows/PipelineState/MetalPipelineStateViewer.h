@@ -28,6 +28,7 @@
 #include "Code/Interface/QRDInterface.h"
 
 class QLabel;
+class RDLabel;
 class QTabWidget;
 class QToolButton;
 class QVBoxLayout;
@@ -50,55 +51,50 @@ public:
   ResourceId GetResource(RDTreeWidgetItem *item);
 
 private:
+  struct ShaderWidgets
+  {
+    RDLabel *pipeline = NULL;
+    RDLabel *resource = NULL;
+    QLabel *entryPoint = NULL;
+    QList<QLabel *> features;
+    QToolButton *view = NULL;
+    QToolButton *edit = NULL;
+    QToolButton *save = NULL;
+    RDTreeWidget *resources = NULL;
+    RDTreeWidget *uavs = NULL;
+    RDTreeWidget *samplers = NULL;
+    RDTreeWidget *constants = NULL;
+  };
+  ShaderWidgets MakeShader(QVBoxLayout *layout, ShaderStage stage);
+  void SetShader(ShaderWidgets &widgets, ShaderStage stage, bool bound);
+  void ViewShader(ShaderStage stage);
   QVBoxLayout *MakeStagePage(const QString &title);
-  RDTreeWidget *MakeTree(QVBoxLayout *parentLayout, const QString &title,
-                         const QStringList &headers);
-  RDTreeWidgetItem *AddResourceRow(RDTreeWidget *tree, const QStringList &values,
-                                   ResourceId resource);
+  RDTreeWidget *MakeTree(QVBoxLayout *layout, const QString &title, const QStringList &headers);
+  QList<QLabel *> MakeSummary(QVBoxLayout *layout, const QString &title, const QStringList &labels,
+                              int columns);
+  RDTreeWidgetItem *AddDescriptor(RDTreeWidget *tree, const QString &binding,
+                                  const Descriptor &descriptor);
+  RDTreeWidgetItem *AddResourceRow(RDTreeWidget *tree, const QStringList &values, ResourceId id);
   RDTreeWidgetItem *AddEmptyRow(RDTreeWidget *tree, const QStringList &values);
   void ExportHTMLTree(QXmlStreamWriter &xml, const QString &title, RDTreeWidget *tree);
   void ExportHTML();
   void SetState();
   void ClearState();
+  void SetFlow(bool mesh, bool tessellation, bool tile = false, bool metalFX = false);
 
   ICaptureContext &m_Ctx;
-  QLabel *m_Pipeline = NULL;
-  QLabel *m_PipelineLabel = NULL;
-  QLabel *m_Topology = NULL;
-  QLabel *m_Viewport = NULL;
-  QLabel *m_Scissor = NULL;
-  QLabel *m_CullMode = NULL;
-  QLabel *m_FrontFace = NULL;
   PipelineFlowChart *m_PipeFlow = NULL;
   QTabWidget *m_Stages = NULL;
-  QToolButton *m_ShowUnused = NULL;
-  QToolButton *m_ShowEmpty = NULL;
-  QToolButton *m_Export = NULL;
-  RDTreeWidget *m_VertexShader = NULL;
-  RDTreeWidget *m_VertexStorageBuffers = NULL;
-  RDTreeWidget *m_VertexTextures = NULL;
-  RDTreeWidget *m_VertexSamplers = NULL;
-  RDTreeWidget *m_FragmentShader = NULL;
-  RDTreeWidget *m_FragmentBuffers = NULL;
-  RDTreeWidget *m_FragmentStorageBuffers = NULL;
-  RDTreeWidget *m_FragmentTextures = NULL;
-  RDTreeWidget *m_FragmentSamplers = NULL;
-  RDTreeWidget *m_ComputeShader = NULL;
-  RDTreeWidget *m_ComputeSamplers = NULL;
-  RDTreeWidget *m_ComputeReadTextures = NULL;
-  RDTreeWidget *m_ComputeWriteTextures = NULL;
-  RDTreeWidget *m_ComputeReadBuffers = NULL;
-  RDTreeWidget *m_ComputeWriteBuffers = NULL;
-  RDTreeWidget *m_ComputeIndirectBuffer = NULL;
-  RDTreeWidget *m_VertexAttributes = NULL;
-  RDTreeWidget *m_VertexBuffers = NULL;
-  RDTreeWidget *m_IndexBuffer = NULL;
-  RDTreeWidget *m_IndirectBuffer = NULL;
-  RDTreeWidget *m_DepthState = NULL;
-  RDTreeWidget *m_StencilState = NULL;
-  RDTreeWidget *m_MultisampleState = NULL;
-  RDTreeWidget *m_ColorTargets = NULL;
-  RDTreeWidget *m_ResolveTargets = NULL;
-  RDTreeWidget *m_ColorBlends = NULL;
-  RDTreeWidget *m_DepthTarget = NULL;
+  QToolButton *m_ShowUnused = NULL, *m_ShowEmpty = NULL, *m_Export = NULL;
+  QList<int> m_FlowPages;
+  ShaderWidgets m_Shaders[6];
+  QLabel *m_Topology = NULL, *m_TopologyDiagram = NULL;
+  RDLabel *m_MeshView = NULL;
+  QList<QLabel *> m_FXTemporal, m_VRR, m_FX, m_Tile, m_Pass, m_Raster, m_Blend, m_Depth, m_Tessellation;
+  RDTreeWidget *m_VertexAttributes = NULL, *m_VertexBuffers = NULL, *m_IndirectBuffer = NULL;
+  RDTreeWidget *m_FXResources = NULL, *m_VRRLayers = NULL, *m_VRRMap = NULL;
+  RDTreeWidget *m_TileMemory = NULL, *m_TileTargets = NULL, *m_AttachmentActions = NULL;
+  RDTreeWidget *m_Viewports = NULL, *m_Scissors = NULL;
+  RDTreeWidget *m_Targets = NULL, *m_ResolveTargets = NULL, *m_ColorBlends = NULL;
+  RDTreeWidget *m_Stencil = NULL, *m_TessellationBuffer = NULL, *m_ComputeIndirect = NULL;
 };

@@ -52,14 +52,25 @@ static uint64_t ResidentBytes()
   return info.resident_size;
 }
 
-static bool ValidateUnsupportedInterfaces(IReplayController *renderer, ResourceId texture,
+static bool ValidateInspectionAndUnsupportedInterfaces(IReplayController *renderer, ResourceId texture,
                                           uint32_t drawEvent)
 {
   renderer->SetFrameEvent(drawEvent, true);
 
   const Subresource sub = {0, 0, 0};
   const rdcfixedarray<bool, 4> channels = {true, true, true, true};
-  if(!renderer->GetHistogram(texture, sub, CompType::Typeless, 0.0f, 1.0f, channels).empty())
+  // Histogram is implemented now. Check its real coverage and that inspection
+  // doesn't change the captured image, instead of expecting the old stub.
+  uint64_t expected = 0;
+  for(const TextureDescription &description : renderer->GetTextures())
+    if(description.resourceId == texture)
+      expected = uint64_t(description.width) * description.height * 4;
+  const bytebuf before = renderer->GetTextureData(texture, sub);
+  const auto histogram = renderer->GetHistogram(texture, sub, CompType::Typeless, 0.0f, 1.0f, channels);
+  uint64_t count = 0;
+  for(uint32_t bucket : histogram) count += bucket;
+  if(!expected || histogram.size() != 256 || count != expected ||
+     before != renderer->GetTextureData(texture, sub))
     return false;
 
   if(!renderer->PixelHistory(texture, 0, 0, sub, CompType::Typeless).empty())
@@ -175,7 +186,7 @@ static bool OpenValidateClose(const char *path, bool expectDraw, bool validateUn
       }
     }
     if(success && validateUnsupported)
-      success = ValidateUnsupportedInterfaces(renderer, swapBuffer, draw->eventId);
+      success = ValidateInspectionAndUnsupportedInterfaces(renderer, swapBuffer, draw->eventId);
   }
 
   renderer->Shutdown();

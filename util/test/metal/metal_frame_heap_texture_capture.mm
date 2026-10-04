@@ -24,6 +24,11 @@ int main()
     id<MTLHeap> heap=[device newHeapWithDescriptor:heapDescriptor];
     id<MTLCommandQueue> queue=[device newCommandQueue];
     id<MTLBuffer> output=[device newBufferWithLength:512 options:MTLResourceStorageModeShared];
+    if(getenv("RENDERDOC_METAL_TEST_RESOURCE_LABELS"))
+    {
+      output.label=@"Old readback name";
+      output.label=@"Readback 名称";
+    }
     CAMetalLayer *layer=[CAMetalLayer layer];layer.device=device;layer.pixelFormat=MTLPixelFormatBGRA8Unorm;
     layer.framebufferOnly=NO;layer.drawableSize=CGSizeMake(2,2);
     RENDERDOC_API_1_7_0 *api=nullptr;
@@ -40,6 +45,11 @@ int main()
       if(api)api->StartFrameCapture(nullptr,nullptr);
       id<MTLTexture> texture=[heap newTextureWithDescriptor:descriptor offset:layout.align];
       if(!texture)return 5;
+      if(getenv("RENDERDOC_METAL_TEST_RESOURCE_LABELS"))
+      {
+        texture.label=@"Old texture name";
+        texture.label=@"GBufferA";
+      }
       id<MTLTexture> target=texture;
       if(getenv("RENDERDOC_METAL_FRAME_TEXTURE_VIEW"))
         target=[texture newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm textureType:MTLTextureType2D

@@ -65,6 +65,12 @@ struct Shader
 :type: ShaderStage
 )");
   ShaderStage stage = ShaderStage::Vertex;
+
+  // Metal-specific entry metadata. Empty metadataSource means unavailable, not disabled.
+  rdcstr metadataSource;
+  rdcarray<uint32_t> framebufferFetch;
+  rdcarray<uint32_t> rasterOrderGroups;
+  bool usesImageblock = false;
 };
 
 DOCUMENT(R"(
@@ -115,6 +121,7 @@ struct VertexBuffer
 :type: int
 )");
   uint32_t stepRate = 1;
+  rdcstr stepFunction = "PerVertex";
 };
 
 DOCUMENT(R"(
@@ -238,8 +245,20 @@ struct Rasterizer
 
   Viewport viewport;
   Scissor scissor;
+  rdcarray<Viewport> viewports;
+  rdcarray<Scissor> scissors;
   CullMode cullMode = CullMode::NoCull;
   bool frontCCW = false;
+  FillMode fillMode = FillMode::Solid;
+  bool depthClip = true;
+  float depthBias = 0.0f;
+  float slopeScaledDepthBias = 0.0f;
+  float depthBiasClamp = 0.0f;
+  bool rasterizationEnabled = true;
+  // VRR is a render-pass state object, not a shading-rate texture.
+  ResourceId rasterizationRateMap;
+  rdcarray<uint32_t> rateMapScreenSize, rateMapPhysicalSizes;
+  rdcarray<rdcarray<float>> rateMapHorizontal, rateMapVertical;
 };
 
 DOCUMENT(R"(
@@ -278,6 +297,26 @@ struct State
 :type: ResourceId
 )");
   ResourceId pipelineResourceId;
+
+  // Tile is a render-encoder dispatch path. The common compute shader/bindings below
+  // expose its kernel to shared resource and shader viewers, not a compute queue/PSO.
+  rdcarray<uint64_t> metalFXSpatial;
+  ResourceId metalFXInput, metalFXOutput;
+  rdcarray<uint64_t> metalFXTemporal;
+  rdcarray<float> metalFXTemporalFloats;
+  // Color, depth, motion vectors, exposure, reactive mask. Empty optional slots stay empty.
+  rdcarray<ResourceId> metalFXTemporalInputs;
+  ResourceId metalFXScaler;
+  bool metalFXHistoryUnavailable = false;
+  bool tileDispatch = false;
+  uint32_t tileWidth = 0, tileHeight = 0;
+  uint32_t tileThreads[3] = {};
+  uint64_t tileMaxThreads = 0;
+  bool tileSizeMatches = false;
+  uint64_t imageblockSampleLength = 0, threadgroupMemoryLength = 0;
+  rdcarray<uint64_t> tileMemoryLengths, tileMemoryOffsets;
+  rdcarray<rdcstr> attachmentStorage, attachmentLoad, attachmentStore, attachmentStoreOptions;
+  rdcstr depthStorage, depthLoad, depthStore, stencilStorage, stencilLoad, stencilStore;
 
   DOCUMENT(R"(The bound compute pipeline, if the current action is a dispatch.
 
@@ -320,6 +359,62 @@ struct State
 :type: MetalShader
 )");
   Shader fragmentShader;
+
+  DOCUMENT(R"(The bound object (task/amplification) function.
+
+:type: MetalShader
+)");
+  Shader taskShader;
+  DOCUMENT(R"(The bound mesh function.
+
+:type: MetalShader
+)");
+  Shader meshShader;
+  DOCUMENT(R"(Object-stage buffers, indexed by Metal buffer slot.
+
+:type: List[MetalBufferBinding]
+)");
+  rdcarray<BufferBinding> taskBuffers;
+  DOCUMENT(R"(Mesh-stage buffers, indexed by Metal buffer slot.
+
+:type: List[MetalBufferBinding]
+)");
+  rdcarray<BufferBinding> meshBuffers;
+  DOCUMENT(R"(Object-stage textures, indexed by Metal texture slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> taskTextures;
+  DOCUMENT(R"(Mesh-stage textures, indexed by Metal texture slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> meshTextures;
+  DOCUMENT(R"(Object-stage samplers, indexed by Metal sampler slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> taskSamplers;
+  DOCUMENT(R"(Mesh-stage samplers, indexed by Metal sampler slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> meshSamplers;
+  DOCUMENT(R"(Compute-stage acceleration structures, indexed by Metal binding slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> computeAccelerationStructures;
+  DOCUMENT(R"(Vertex-stage acceleration structures, indexed by Metal binding slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> vertexAccelerationStructures;
+  DOCUMENT(R"(Fragment-stage acceleration structures, indexed by Metal binding slot.
+
+:type: List[ResourceId]
+)");
+  rdcarray<ResourceId> fragmentAccelerationStructures;
 
   DOCUMENT(R"(The current primitive topology.
 
@@ -446,6 +541,18 @@ struct State
 :type: Descriptor
 )");
   Descriptor depthTarget;
+
+  // Inspection metadata only: native Metal state is still replayed by its captured API calls.
+  float blendFactor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  uint32_t patchControlPoints = 0;
+  BufferBinding tessellationFactors;
+  uint64_t tessellationInstanceStride = 0;
+  rdcstr tessellationPartitionMode;
+  rdcstr tessellationStepFunction;
+  rdcstr tessellationOutputWinding;
+  uint32_t maxTessellationFactor = 0;
+  bool tessellationFactorScaleEnabled = false;
+  float tessellationFactorScale = 1.0f;
 };
 };    // namespace MetalPipe
 

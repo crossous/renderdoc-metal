@@ -1,7 +1,52 @@
-# 本地 M2 / Testproj 当前运行入口（2026-10-02）
+2026-10-05 B466：本 fork 的 shader tools 已内置 app 并自动注册，View 提供 AIR/MSL/HLSL/GLSL，Edit/Compiler 接入 Apple AIR/MSL 编译；release 打包检查固定源码、hash、架构与许可证，无用户路径配置/运行时 Homebrew 或 Rust 依赖，仅 Apple 工具依赖 Xcode。高层重建仅预览，Edit 严格限无资源/无特化的简单 FS；当前 UE3928 fptoui、3612 fptosi 尚不能高层反编译，AIR 可用。定向工具/搬迁/超时/打包 PASS；实际 UI AIR Apply/Remove 与三种源码 View PASS（公开 Qt 选择，非鼠标下拉验收）；同一 UE 两 shader 在06ae及随后匹配当前 API 的固定48afd5d3上均两轮写资源字节一致/恢复/fatal0。新头旧库混用追加 probe 失败不计 PASS；另一任务已更新 backend，本轮未重跑全量，06ae全量仅属于B464。详情见 [B466](../../docs/metal-replay/BATCH466_BUNDLED_SHADER_TOOLS.md)，未提交/推送。
 
-当前提交作为后续画面差异调查的基线；已有验证结果与尚未覆盖的范围见
-[2026-10-02 checkpoint](../../docs/metal-replay/CHECKPOINT_2026-10-02_UE_REPLAY.md)。用户最终画面验收仍待反馈。
+2026-10-04 最新 B464：接入公共 Shader Edit/Apply/Remove 与 Shader Processors，补齐 MSL、嵌入 debug MSL、可重编译 AIR/MetalLib，保留 function constants、specializedName/原入口及所有依赖 native PSO 的原 descriptor。AIR 编译保持捕获 Metal/AIR 版本和部署目标，映射发布前等待 GPU，typed release 释放临时 function/PSO。View 可选择内置 AIR、Captured MSL 和匹配的外部 processors。最终06ae2318库与bundle一致：定向 source/AIR/debug/alias/frame-born PASS；首次候选 Tess/Task/Mesh 替换通过；最终固定全量308/7786/3080 PASS、growth1343488B/hash一致/exit0；全量后同一UE3928 FS/3612 CS两轮编辑/恢复、3612/3928/4036 Usage及整帧两轮reset通过，写目标/GBufferA/呈现图保持基线。实际UI通过微型源码Edit/红色Apply/错误展示/Remove恢复、外部View目标切换，同一UE3928 external AIR与3612内置AIR的Edit/Apply/Remove；停在3928 FS原shader。直接键盘源码输入自动化未验收，Save面板未重试；readonly VisBuffer64在无编辑control reset也变化，原因未定位。AIR→MSL候选metal2vulkan→SPIRV-Cross尚未构建或验证；linked function tables编辑明确拒绝。详见 [B464](../../docs/metal-replay/BATCH464_SHADER_EDIT_AND_PROCESSORS.md)，操作见 [Shader Tools](../shader_tools/README.md)。保留旧改动，未提交/推送。
+
+2026-10-04 最新 B463：Metal Pipeline State 使用公共 flow chart/资源树/shader与CB viewer，对齐传统/Tessellator→TES/TS→MS路径、独立CS、灰/黑/红边框；shader头部与Resources→UAVs→Samplers→Constant Buffers顺序，IA布局/真实vertex流分类、Rasterizer矩阵及并列viewport/scissor、OM附件/混合/深度/模板布局补齐。新增inspection动态状态与细分数据，不改GPU setter/提交/等待或capture chunk。当前885fa783库与bundle一致：定向PASS；一次固定全量308/7786/3080 PASS、growth5996544B/hash一致/exit0；全量后同一UE3612/3928/4036及整帧两轮reset通过，GBufferA/呈现图保持基线。助手实际UI确认IA/RS/OM/FS/CS及native Tess/Task/Mesh页面、公共View/CB/资源跳转；Edit因backend尚无replacement明确禁用。Save原生面板自动化timeout（采样AppKit getxattr），未计UI PASS；UE flow坐标点击工具noWindowsAvailable也未计PASS，公开stage导航确认实际页面。重启后同一UE正常打开，留在3928 FS。详见 [B463](../../docs/metal-replay/BATCH463_PIPELINE_UI_PARITY.md)。未提交/推送。
+
+2026-10-04 最新 B462：修复 GBufferA 4036 假 CS_RW 和遗漏读取。移除 residency/lifetime 资源闭包的 Usage 误报；uniform bindless 按各 command buffer 的 submission CPU snapshot 解析，再统一 bake EID，GPU 提交顺序不变。原 UE 打开即有九个 Usage 事件：3415 Clear、3509 FB Color、3596/3612 CS_RW、3739/3824/3928/4096/4482 FS Resource；七个 shader 事件逐项跳转资源一致、4036 排除且访问前后列表稳定。补齐 compute/render 显式 resource Barrier Usage；不为 scope barrier 虚构资源。4036 的64³光照体积全体为常量SH系数，filter输入/输出与两轮reset一致，UI dispatch深度名称已修正。Windows差异有实际session日志证明：本次低负载capture关闭Lumen GI/Reflections、VSM、ShadowQuality等，不能作为全功能帧平齐验收。候选库与bundle a881aab3：late-uniform/CS/Task/Mesh/Barrier定向通过；固定全量308/7786/3080通过、growth0B/hash一致/exit0；全量后同一UE九Usage、整帧三份呈现原基线均通过。实际UI通过4036体积/3928法线、ResourceInspector八分组九事件与3739跳转；缩略图右键及外点击关闭因CUA窗口定位错误未验收。详见 [B462](../../docs/metal-replay/BATCH462_SUBMISSION_BINDLESS_USAGE.md)。未提交/推送。
+
+以下为历史记录，B460–B461 的4036 Usage及3928需选中才补入的解释已由B462纠正。
+
+2026-10-04 最新 [B460–B461](../../docs/metal-replay/BATCH460_461_BINDLESS_SHADER_STAGES.md)：同一 UE 的3596/3612 Nanite compute 写入已出现在 GBufferA Usage 与3612 Outputs 中；扩展 CS/VS/FS/Object/Task/Mesh 的 uniform bindless、Task/Mesh Pipeline State 与 compute ray AS 输入。当前6362ccc0定向、固定库全量和全量后同一 UE通过；人工UI分项与未完成项见报告。阶段定向入口（关闭 UE/qrenderdoc，使用已构建库，GPU 串行）：
+
+```sh
+bash util/buildscripts/scripts/test_metal_bindless_stages_macos.sh
+# 同时检查当前 UE 捕获的固定 EID/GBufferA
+bash util/buildscripts/scripts/test_metal_bindless_stages_macos.sh \
+  build-macos-debug/local-m2-descriptor-replay/testproj-20261003-092235-138208/replay.rdc
+```
+
+下面为此前验收记录；当前仍不代表完整动态 bindless feedback 已与 DX12/Vulkan 平齐。未提交/推送。
+
+2026-10-04 最新 B458–B459：参照 DX12/Vulkan 将 Metal 公共 EID 按提交映射，同一 UE GBufferA 已为3415 Clear→3509 FB Color→3928 FS Resource；修正 ICB API event去重、submit扁平scope、encoder结束后的signal/wait归属和AS Encoder归属。DontCare新增 MSAA逐样本、untracked standalone/heap、memoryless Private backing、3D/cube/rate map；修正部分回放 StoreDontCare丢失所选draw，以及resolve-only源Discard usage。当前库671c90b4/GUIc3a0e3b6（内嵌库同步）：18单样本+15MSAA定向、额外深度/模板独立Store和204周期通过（Store stress growth3325952B）；固定全量308/7786/3080通过（growth0B/hash一致/exit0）。全量后同一UE3928/3509、六light overlays/None恢复、Clear Before、正常打开和两次整帧重置均通过；SceneColor/GBuffer/深度与三份呈现图保持基线，原capture hash不变。实际UI通过3928/3509/54 Begin Blit跳转和场景法线显示，留在3928 GBufferA/None；右键自动操作未唤出菜单，菜单与外点击关闭未验收。本机2x/4x可验证，8x/D24S8不支持，不能记PASS；MSAA直接Texture Viewer读回为既有独立缺口，当前逐样本验证使用真实GPU consumer。参见 [B458](../../docs/metal-replay/BATCH458_SUBMISSION_EVENTS.md)、[B459](../../docs/metal-replay/BATCH459_EXTENDED_DISCARD.md)。未提交/推送。
+
+2026-10-03 最新 B457：新 UE GBufferA 的3300 FS/3808 Clear/4057 FB Color是CPU编码EID：producer14143于6790提交，consumer14146于6791提交（同queue11），实际先写后读；Metal尚未使用DX12/Vulkan的提交时baked EID模型，usage菜单已注明编码顺序。新增公共 LOAD/STORE DONT CARE图案（单样本tracked颜色/深度/模板、并行store、mip/slice；Fastest跳过），上传staging创建引用已平衡，隔离回放增长从58.9MB降至0.74MB。最终库 `1437b5cb`、GUI `459b09eb`：定向及untracked边界通过；固定库全量308/7786/3080通过（growth999424B/hash一致/exit0）；全量后同一UE3300/4057、六light overlays、Clear Before及None恢复通过，正常打开+两次整帧呈现与GBuffer/深度均保持基线。解锁后实际UI正常打开同一UE并选择3300，GBufferA显示场景法线，停在RGB/None；右键自动操作未唤出菜单，标题及外点击关闭仍未验收，不能记为UI通过。EID架构仍未平齐DX12/Vulkan。详见 [B457](../../docs/metal-replay/BATCH457_USAGE_ORDER_AND_DISCARD.md)。未提交/推送。
+
+2026-10-03 最新 B455–B456：参照 Vulkan 补齐 Quad Overdraw 与 Triangle Size Draw/Pass，当前库 `8e332844`、GUI `48b2791c`。两项各十一种 Native 定向、同一 UE3300 两周期及 GBuffer Range/Histogram 复核通过；原资源字节不变。固定库合并验收全量308/7786/3080通过（growth5816320B/hash一致/exit0），全量后真实 UE全部覆盖层/统计复核及正常打开+两次整帧重置通过，GBuffer/深度及三份呈现图保持基线；bb793d8d 全量保留为历史。实际 UI 已正常打开并显示3300原图，但自动下拉框输入在独立标准 Qt 窗口同样无法切换，Quad/Triangle 渲染 UI 待确认，最新窗口停在3300 SceneColor/None。详见 [B455](../../docs/metal-replay/BATCH455_VULKAN_QUAD_OVERDRAW.md)、[B456](../../docs/metal-replay/BATCH456_VULKAN_TRIANGLE_SIZE.md)。持续推进，未提交/推送。
+
+2026-10-03 最新 B454：参照 Vulkan/D3D12 完成原片元深度导出的 stencil-mask Depth Test，并修复 Depth/Clear Before 源 encoder context。库 `bb793d8d`：七种深度导出与八种 Clear Before Native 定向、同一 UE3112/3300两周期、固定库全量308/7786/3080（growth9502720B/hash一致/exit0）及全量后真实 UE复核通过。整帧正常打开和两次EID0恢复图都保持fc5f3afe基线。助手实际UI通过3112 Depth→None、3300 Clear Draw→Pass→None；未代替用户人工验收。参见 [B454](../../docs/metal-replay/BATCH454_ORIGINAL_FRAGMENT_DEPTH_MASK.md)。Quad四桶计数 Native组件通过，正在构建正式回放候选，本库全量不归于下一候选。持续推进，未提交/推送。
+
+2026-10-03 最新 B453：参照 Vulkan 补齐 Clear Before Draw/Pass，当前库 `a086f3e5`。八种 Native 双 MRT/原 shader/混合/discard/深度导出/stencil 定向及已有六覆盖层通过；同一 UE EID3300 清空/恢复两周期与全量后复核通过，完整 UE 三份呈现图保持基线。固定库全量308/7786/3080通过（growth6127616B/hash一致）。当前实际 UI 待手动解锁：CUA 明确报告 Mac 锁定，已请求解锁一次；未把终端结果记作 UI。下一项 original-FS depth stencil-mask 的64x32 Native组件已通过，正式回放集成仍待。详情 [B453](../../docs/metal-replay/BATCH453_VULKAN_CLEAR_BEFORE_OVERLAYS.md)。目标 active，未提交/推送。
+
+2026-10-03 最新纹理查看器对齐见 [B452](../../docs/metal-replay/BATCH452_VULKAN_PASS_AND_VIEWPORT_OVERLAY.md)：库 `0776deb7` 的 pass 归属、Viewport/Scissor 及其余五绘制覆盖层通过定向与同一 UE，两周期后输入/输出字节不变，助手 UI 的 Viewport/Scissor→Depth→None 切换和原图恢复通过，界面停在 EID3300 SceneColor。本库没有重跑全量，上一批 ac2a9748 全量作为历史记录。GPU 串行，不提交/推送，持续目标 active。
+
+2026-10-03 Texture Viewer 当前工作见 [B449](../../docs/metal-replay/BATCH449_TEXTURE_VIEW_INSPECTION.md)、[B450–451](../../docs/metal-replay/BATCH450_451_NATIVE_DRAW_OVERLAYS.md)。库 `ac2a9748` 对同一 UE EID3300 的 Depth/Stencil/Drawcall/BackfaceCull/Wireframe 两周期检查通过，SceneColor 与 GBuffer/深度原始字节不变；固定库全量308/7786/3080通过（growth8716288B/hash一致），全量后同一 UE 五覆盖层及 GBuffer Range/Histogram 两周期通过，实际助手 UI 的五绘制覆盖层、Range/自动范围/Histogram/数值覆盖层/Pixel Context 均通过，完整 UE 两次 reset 保持基线，界面停在3300 SceneColor，未提交/推送。可运行 `bash util/buildscripts/scripts/test_metal_texture_view_macos.sh` 或 `bash util/buildscripts/scripts/test_metal_test_overlay_macos.sh` 做定向；后者可追加当前验收截帧路径与 EID3300。下方 ff444e68 是前批历史验收。 持续对齐目标保持 active；五项通过不代表所有 Overlay 已与 Vulkan 平齐，后续优先 pass 归属和其余 N/A 项。
+
+2026-10-03 最终助手 UI 验收已完成：当前库 `ff444e68` 的定向、全量、全量后真实 UE 和实际 UI 均通过。新副本 `build-macos-debug/local-m2-descriptor-replay/testproj-20261003-092235-138208/replay.rdc` 已正常打开，界面停在光照 EID3300 的 Fragment Shader 输入页；GBuffer 命名/场景、usage 关闭与跳转、AIR/MSL 已核对。用户画面反馈尚待，未提交/推送。详见 [B448](../../docs/metal-replay/BATCH448_SUBMISSION_DESCRIPTOR_SCOPE.md)。下面记录保留为历史。
+
+2026-10-03 最新本地候选 `ff444e68` 已通过定向、固定库全量及全量后的新旧UE验证；新UE整帧与原始缩略图精确一致，光照3300的GBufferA/C与Nanite后4349逐字节一致。新副本路径为 `build-macos-debug/local-m2-descriptor-replay/testproj-20261003-092235-138208/replay.rdc`。最终UI待再次解锁；详情见 [B446–B447](../../docs/metal-replay/BATCH446_447_FRAME_FLOAT_AND_VISIBILITY.md)、[B448](../../docs/metal-replay/BATCH448_SUBMISSION_DESCRIPTOR_SCOPE.md)。下方旧候选记录保留作历史。
+
+资源名称、usage 和 UI 对齐的当前进展见 [B444–B445](../../docs/metal-replay/BATCH444_445_RESOURCE_USAGE_AND_UI.md)。当前dafb37a9定向、全量及全量后同一UE3371/3551/188和整帧复核已通过；最终菜单/UI复核仍待解锁，B443验收保留作历史。
+
+本轮 Inputs/shader 改动见 [B443](../../docs/metal-replay/BATCH443_UE_SHADER_INSPECTION.md)。
+EID3371 支持从 uniform 解析的 bindless 纹理输入；Shader Viewer 可选择 **Metal AIR (Apple toolchain)**，显示捕获的中间代码。编译库没有原始 HLSL/MSL 时不会伪造源码。验收状态以 B443 为准。
+
+# 本地 M2 / Testproj 当前运行入口（2026-10-03）
+
+当前已推送基线为 `95214a2`。后续 DX12/Metal 对比发现的事件归属、blit 边界失败和光照部分回放数据偏差，见
+[B440–B442 修复与分项验证](../../docs/metal-replay/BATCH440_442_UE_EVENT_NAVIGATION.md)。前一轮候选 `c7bb6da1` 的全量及随后的同一 UE 复核通过，助手 UI 已验证188/3182/3371/3551。当前 B444–B445 库为 `dafb37a9`，应用已重建并同步。定向及全量通过，最终真实 UE/UI 结果见上方报告；Mac 锁定，尚未完成最终菜单与界面复核。旧验证记录保留在
+[2026-10-02 checkpoint](../../docs/metal-replay/CHECKPOINT_2026-10-02_UE_REPLAY.md)。
 
 已安装的 UE5.8.3 Testproj 插件、隔离 MetalRHI provider 与 `build-macos-debug` 配合使用。启动前关闭正在进行回放的 qrenderdoc 与 UE Editor；自动截帧需要已解锁的桌面。隔离 provider 仅用于本次进程，不替换安装引擎。本入口保留当前已有 capture，然后等待45秒自动截一帧并退出 UE，严格 pre-submit 检查通过后生成独立 `replay.rdc`，执行正常 OpenCapture、两次 EID0 重置及原生呈现纹理读回，按官方缩放/jpge90与原始捕获缩略图逐字节比较。不会自动跑全量、提交或推送。
 
@@ -17,13 +62,15 @@ python3 util/ue/run_testproj_metal_replay_macos.py --replay '/absolute/path/orig
 python3 util/ue/run_testproj_metal_replay_macos.py --ui '/absolute/path/replay.rdc'
 ```
 
-当前已验收副本（b814fdbb，原始 faa8540e 全部命令及 binary 保留）：
+当前使用同一份副本（原始 faa8540e 全部命令及 binary 保留；本轮修复不需要重新截帧）：
 
 ```bash
 python3 util/ue/run_testproj_metal_replay_macos.py --ui '/Users/crossous/Developer/renderdoc-metal/build-macos-debug/local-m2-descriptor-replay/testproj-20261002-211846-505594/replay.rdc'
 ```
 
-此命令在前台等待 qrenderdoc 退出，终端保持占用是正常的。已验证正常打开、完整900×640图像、BasePass五MRT和体积MRT末层；详细定向、当前库全量、真实UE与UI结果见 [B439](../../docs/metal-replay/BATCH439_RETIRED_PRIVATE_TEXTURE_BACKING.md)。新截帧仍按上方 `--capture` 流程逐份严格审计和验证。
+此命令在前台等待 qrenderdoc 退出，终端保持占用是正常的。当前调查可先看 EID188（blit 边界）、EID3371（实际批量光照 draw）、EID3551 的 Target3/Texture49933（GBufferC；3551本身是 render-pass begin，不是 draw）；EID3251 为 depth/stencil-only draw，Target4 为 CustomData，不能把这些无颜色/零值输出直接判为场景丢失。
+
+此前 b814fdbb 已验证正常打开、完整900×640图像、BasePass五MRT和体积MRT末层；详细定向、当前库全量、真实UE与UI结果见 [B439](../../docs/metal-replay/BATCH439_RETIRED_PRIVATE_TEXTURE_BACKING.md)。新截帧仍按上方 `--capture` 流程逐份严格审计和验证。
 
 历史诊断和可复用构建已按文件SHA256归档到 `/Volumes/CauseUseMac/RenderDocMetalArchives/20261002-2050`，原路径用软链接保留；使用历史产物时需连接此外置磁盘。34份项目原始截帧均留在本机，当前库、隔离provider和已验收副本留在本机。归档清单、每文件校验及恢复说明见外置目录的 `README.md`、`migration.jsonl` 和 `additional-migration.jsonl`。
 

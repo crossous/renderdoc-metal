@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Baldur Karlsson
 #include "metal_device.h"
 #include "metal_library.h"
+#include "metal_replay.h"
 
 namespace
 {
@@ -49,6 +50,7 @@ bool WrappedMTLDevice::Serialise_newLibraryBinary(SerialiserType &ser, WrappedMT
     WrappedMTLLibrary *wrapped = NULL;
     GetResourceManager()->WrapResource(Library, real, wrapped, true);
     AddResource(Library, ResourceType::Pool, "Binary Library");
+    GetReplay()->AddShaderBinary(Library, data);
     DerivedResource(this, Library);
   }
   return true;

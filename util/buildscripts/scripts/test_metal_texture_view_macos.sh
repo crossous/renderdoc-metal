@@ -1,0 +1,35 @@
+#!/bin/bash
+# Small, serial Native texture inspection checks; optional same-capture UE check.
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+BUILD_DIR="${RENDERDOC_METAL_BUILD_DIR:-${REPO_ROOT}/build-macos-debug}"
+if [[ $# -ne 0 && $# -ne 3 ]]; then
+  echo "Usage: $0 [capture.rdc EID TextureResourceId]" >&2
+  exit 2
+fi
+if pgrep -x qrenderdoc >/dev/null || pgrep -x UnrealEditor >/dev/null; then
+  echo 'Close qrenderdoc/UnrealEditor before this serial GPU probe.' >&2
+  exit 2
+fi
+LOG_DIR="$(mktemp -d "${BUILD_DIR}/metal-texture-view.XXXXXX")"
+cd "${REPO_ROOT}"
+echo "Texture Viewer evidence: ${LOG_DIR}"
+shasum -a 256 "${BUILD_DIR}/lib/librenderdoc.dylib" >"${LOG_DIR}/library-before.sha256"
+clang++ -std=c++17 -fobjc-arc -I. util/test/metal/metal_texture_view_capture.mm \
+  -framework Foundation -framework Metal -framework QuartzCore -o "${LOG_DIR}/capture"
+clang++ -std=c++17 -DRENDERDOC_PLATFORM_APPLE -I. util/test/metal/metal_texture_view_replay.cpp \
+  -L"${BUILD_DIR}/lib" -lrenderdoc -Wl,-rpath,"${BUILD_DIR}/lib" -o "${LOG_DIR}/replay"
+MTL_DEBUG_LAYER=1 "${LOG_DIR}/capture" >"${LOG_DIR}/native.log" 2>&1
+MTL_DEBUG_LAYER=1 DYLD_INSERT_LIBRARIES="${BUILD_DIR}/lib/librenderdoc.dylib" \
+  RENDERDOC_METAL_CAPTURE_PATH="${LOG_DIR}/inspection" "${LOG_DIR}/capture" \
+  >"${LOG_DIR}/capture.log" 2>&1
+MTL_DEBUG_LAYER=1 "${LOG_DIR}/replay" "${LOG_DIR}/inspection_capture.rdc" \
+  >"${LOG_DIR}/directed-replay.log" 2>&1
+if [[ $# -eq 3 ]]; then
+  MTL_DEBUG_LAYER=1 "${LOG_DIR}/replay" "$1" "$2" "$3" "${LOG_DIR}/ue-native.bin" \
+    >"${LOG_DIR}/ue-replay.log" 2>&1
+  shasum -a 256 "$1" "${LOG_DIR}/ue-native.bin" >"${LOG_DIR}/ue.sha256"
+fi
+shasum -a 256 "${BUILD_DIR}/lib/librenderdoc.dylib" >"${LOG_DIR}/library-after.sha256"
+cmp "${LOG_DIR}/library-before.sha256" "${LOG_DIR}/library-after.sha256"
+echo 'PASS directed statistics, display overlays, range, gamma, alpha and subresources'

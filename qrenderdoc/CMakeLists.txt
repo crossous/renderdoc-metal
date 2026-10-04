@@ -90,6 +90,11 @@ if(ENABLE_METAL)
 endif()
 
 if(APPLE)
+    set(METAL_SHADER_TOOLS_ROOT "$ENV{HOME}/Library/Caches/renderdoc-metal/shader-tools/${CMAKE_SYSTEM_PROCESSOR}"
+        CACHE PATH "Pinned native Metal shader processor distribution")
+    if(ENABLE_QRENDERDOC AND ENABLE_METAL AND RELEASE_MODE AND NOT EXISTS "${METAL_SHADER_TOOLS_ROOT}/manifest.json")
+        message(FATAL_ERROR "Metal releases require bundled processors. Run util/buildscripts/scripts/build_metal_shader_tools_macos.sh and set METAL_SHADER_TOOLS_ROOT.")
+    endif()
     set(QMAKE_RPATHDIR "@executable_path/../lib")
     add_custom_command(OUTPUT RenderDoc.icns
         COMMAND echo Creating OS X Icon
@@ -457,4 +462,11 @@ endif() # if(ENABLE_QRENDERDOC)
 # Build python modules - primarily used for constructing documentation
 if(ENABLE_PYRENDERDOC AND UNIX)
     add_subdirectory(Code/pyrenderdoc)
+endif()
+
+if(APPLE AND ENABLE_METAL AND ENABLE_QRENDERDOC AND EXISTS "${METAL_SHADER_TOOLS_ROOT}/manifest.json")
+    add_custom_command(TARGET build-qrenderdoc POST_BUILD
+        COMMAND /usr/bin/python3 "${CMAKE_SOURCE_DIR}/util/shader_tools/package_metal_shader_tools.py"
+                "${METAL_SHADER_TOOLS_ROOT}" "${CMAKE_BINARY_DIR}/bin/qrenderdoc.app"
+        VERBATIM)
 endif()

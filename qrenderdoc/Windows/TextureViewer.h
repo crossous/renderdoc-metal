@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include <QPointer>
+
 #include <QDir>
 #include <QFrame>
 #include <QMenu>
@@ -254,6 +256,7 @@ private:
   void UI_SetHistogramRange(const TextureDescription *tex, CompType typeCast);
 
   void UI_UpdateChannels();
+  void UI_UpdateOverlaySupport();
 
   void HighlightUsage();
 
@@ -368,11 +371,12 @@ private:
   struct DescriptorThumbUpdate
   {
     DescriptorAccess access;
-    ResourcePreview *preview;
+    QPointer<ResourcePreview> preview;
     QString slotName;
   };
 
   rdcarray<DescriptorThumbUpdate> m_DescriptorThumbUpdates;
+  uint64_t m_DescriptorThumbGeneration = 0;
 
   QTime m_CustomShaderTimer;
   int m_CustomShaderWriteTime = 0;

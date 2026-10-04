@@ -31,7 +31,7 @@
 template <>
 rdcstr DoStringise(const MetalChunk &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1412, "Chunks changed without updating names");
+  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1415, "Chunks changed without updating names");
 
   BEGIN_ENUM_STRINGISE(MetalChunk)
   {
@@ -196,6 +196,8 @@ rdcstr DoStringise(const MetalChunk &el)
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandQueue_commandBufferWithUnretainedReferences,
                                "MTLCommandQueue::commandBufferWithUnretainedReferences");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_enqueue, "MTLCommandBuffer::enqueue");
+    STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_encodeMetalFXSpatial, "MTLCommandBuffer::encodeMetalFXSpatial");
+    STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_encodeMetalFXTemporal, "MTLCommandBuffer::encodeMetalFXTemporal");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_commit, "MTLCommandBuffer::commit");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_addScheduledHandler,
                                "MTLCommandBuffer::addScheduledHandler");
@@ -271,6 +273,7 @@ rdcstr DoStringise(const MetalChunk &el)
     STRINGISE_ENUM_CLASS_NAMED(MTLComputeCommandEncoder_CaptureIndirectArguments, "MTLComputeCommandEncoder::CaptureIndirectArguments");
     STRINGISE_ENUM_CLASS_NAMED(MTLDevice_CaptureRenderIndirectArgumentsCount, "MTLDevice::CaptureRenderIndirectArgumentsCount");
     STRINGISE_ENUM_CLASS_NAMED(MTLRenderCommandEncoder_CaptureIndirectArguments, "MTLRenderCommandEncoder::CaptureIndirectArguments");
+    STRINGISE_ENUM_CLASS_NAMED(MTLResource_setLabel, "MTLResource::setLabel");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_resourceStateCommandEncoder,
                                "MTLCommandBuffer::resourceStateCommandEncoder");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_resourceStateCommandEncoderWithDescriptor,

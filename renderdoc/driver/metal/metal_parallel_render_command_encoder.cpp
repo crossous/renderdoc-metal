@@ -135,7 +135,10 @@ bool WrappedMTLParallelRenderCommandEncoder::Serialise_endEncoding(SerialiserTyp
       return false;
     }
     ParallelRenderCommandEncoder->ResolveDeferredStoreActions();
+    m_Device->FinaliseReplayStores(Unwrap(ParallelRenderCommandEncoder), false);
     Unwrap(ParallelRenderCommandEncoder)->endEncoding();
+    m_Device->ApplyReplayStoreDiscards(Unwrap(ParallelRenderCommandEncoder->GetCommandBuffer()),
+        m_Device->GetReplay()->GetRenderPassDescriptor());
     if(IsLoading(m_State) && !m_Device->GetReplay()->FlushRenderIndirectActions(
         GetResID(ParallelRenderCommandEncoder),Unwrap(ParallelRenderCommandEncoder->GetCommandBuffer())))
       return false;

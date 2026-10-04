@@ -126,6 +126,58 @@ rdcstrpairs convertFromVariant(const QVariantMap &val)
   return ret;
 }
 
+// Fork-provided tools are resolved from the running bundle, never persisted as install paths.
+static bool IsBundledMetalShaderTool(const ShaderProcessingTool &tool)
+{
+  return tool.args.contains("--renderdoc-bundled");
+}
+
+static void AddBundledMetalShaderTools(rdcarray<ShaderProcessingTool> &tools)
+{
+#if defined(Q_OS_MAC) && defined(RENDERDOC_SUPPORT_METAL)
+  const QDir root(QDir(QApplication::applicationDirPath()).absoluteFilePath(
+      lit("../Resources/shader-tools")));
+  const QString script = root.absoluteFilePath(lit("metal_shader_processor.py"));
+  if(!QFile::exists(script))
+    return;
+
+  // A config saved by an earlier installation must not retain that installation's path.
+  for(int i = tools.count() - 1; i >= 0; --i)
+    if(IsBundledMetalShaderTool(tools[i]))
+      tools.erase(i);
+
+  auto add = [&](const char *name, const char *mode, ShaderEncoding input, ShaderEncoding output,
+                 const char *options = "") {
+    ShaderProcessingTool tool;
+    tool.name = name;
+    tool.executable = "/usr/bin/python3";
+    tool.args = QFormatStr("\"%1\" %2 {input_file} {output_file} {entry_point} %3 --renderdoc-bundled")
+                    .arg(script).arg(QString::fromUtf8(mode)).arg(QString::fromUtf8(options));
+    tool.input = input;
+    tool.output = output;
+    tools.push_back(tool);
+  };
+  add("Apple AIR (bundled)", "air", ShaderEncoding::MetalLib, ShaderEncoding::MetalAIRAsm);
+  add("Apple Metal compiler (MSL)", "compile-msl", ShaderEncoding::MSL, ShaderEncoding::MetalLib);
+  add("Apple Metal compiler (AIR)", "compile-air", ShaderEncoding::MetalAIRAsm, ShaderEncoding::MetalLib);
+
+  if(QFile::exists(root.absoluteFilePath(lit("manifest.json"))) &&
+     QFile::exists(root.absoluteFilePath(lit("bin/metal2vulkan"))) &&
+     QFile::exists(root.absoluteFilePath(lit("bin/spirv-cross"))) &&
+     QFile::exists(root.absoluteFilePath(lit("bin/spirv-val"))))
+  {
+    add("Metal reconstructed MSL (preview)", "msl", ShaderEncoding::MetalLib,
+        ShaderEncoding::MSL, "--view-only");
+    add("Metal reconstructed HLSL (preview)", "hlsl", ShaderEncoding::MetalLib,
+        ShaderEncoding::HLSL, "--view-only");
+    add("Metal reconstructed GLSL (preview)", "glsl", ShaderEncoding::MetalLib,
+        ShaderEncoding::GLSL, "--view-only");
+    add("Metal reconstructed MSL (editable subset)", "msl", ShaderEncoding::MetalLib,
+        ShaderEncoding::MSL, "--editable");
+  }
+#endif
+}
+
 bool PersistentConfig::Deserialize(const rdcstr &filename)
 {
   QFile f(filename);
@@ -206,6 +258,12 @@ QVariantMap PersistentConfig::storeValues() const
   ret[lit(#name)] = convertToVariant<variantType>(name);
 
   CONFIG_SETTINGS()
+
+  QVariantList userTools;
+  for(const ShaderProcessingTool &tool : ShaderProcessors)
+    if(!IsBundledMetalShaderTool(tool))
+      userTools.push_back(QVariant(tool));
+  ret[lit("ShaderProcessors")] = userTools;
 
   // store any legacy values even though we don't need them
 
@@ -593,6 +651,8 @@ bool PersistentConfig::Load(const rdcstr &filename)
       dis.output = ToolOutput(dis.tool);
     }
   }
+
+  AddBundledMetalShaderTools(ShaderProcessors);
 
   return ret;
 }

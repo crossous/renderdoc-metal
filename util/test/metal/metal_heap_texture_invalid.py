@@ -48,7 +48,7 @@ def main():
             ('storage-mode', 'descriptor.storageMode', 0),
             ('resource-options', 'descriptor.resourceOptions', 0),
             ('cache-mode', 'descriptor.cpuCacheMode', 1),
-            ('hazard-mode', 'descriptor.hazardTrackingMode', 1),
+            ('hazard-mode', 'descriptor.hazardTrackingMode', 3),
             ('usage', 'descriptor.usage', 32),
             ('swizzle-red', 'descriptor.swizzle.red', 3),
         ]

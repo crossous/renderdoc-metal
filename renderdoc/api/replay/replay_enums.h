@@ -2056,6 +2056,15 @@ DOCUMENT(R"(Identifies a shader encoding used to pass shader code to an API.
 
   Metal Shading Language in string format, used by Metal source libraries.
 
+.. data:: MetalLib
+
+  Compiled Metal library container, including AIR bitcode and function metadata.
+
+.. data:: MetalAIRAsm
+
+  Textual LLVM AIR intermediate representation accepted by Apple's Metal toolchain.
+  This is not original MSL source or Apple GPU machine code.
+
 )");
 enum class ShaderEncoding : uint32_t
 {
@@ -2071,6 +2080,8 @@ enum class ShaderEncoding : uint32_t
   OpenGLSPIRVAsm,
   Slang,
   MSL,
+  MetalLib,
+  MetalAIRAsm,
   Count,
 };
 
@@ -2266,7 +2277,8 @@ constexpr inline bool IsTextRepresentation(ShaderEncoding encoding)
 {
   return encoding == ShaderEncoding::HLSL || encoding == ShaderEncoding::GLSL ||
          encoding == ShaderEncoding::SPIRVAsm || encoding == ShaderEncoding::OpenGLSPIRVAsm ||
-         encoding == ShaderEncoding::Slang || encoding == ShaderEncoding::MSL;
+         encoding == ShaderEncoding::Slang || encoding == ShaderEncoding::MSL ||
+         encoding == ShaderEncoding::MetalAIRAsm;
 }
 
 DOCUMENT(R"(A primitive topology used for processing vertex data.
@@ -3038,6 +3050,34 @@ Note that a resource may be used for more than one thing in one event, see :clas
 
   The resource is written from the CPU, either directly as mapped memory or indirectly via a
   synchronous update.
+
+.. data:: MetalFXInput
+
+  The resource is read by an opaque MetalFX operation.
+
+.. data:: MetalFXOutput
+
+  The resource is written by an opaque MetalFX operation.
+
+.. data:: RasterizationRateMap
+
+  The state object controls variable rasterization rates for a draw.
+
+.. data:: MetalFXDepthInput
+
+  The texture is read as a temporal MetalFX depth input.
+
+.. data:: MetalFXMotionInput
+
+  The texture is read as a temporal MetalFX motion vectors input.
+
+.. data:: MetalFXExposureInput
+
+  The texture is read as a temporal MetalFX exposure input.
+
+.. data:: MetalFXReactiveInput
+
+  The texture is read as a temporal MetalFX reactive mask input.
 )");
 enum class ResourceUsage : uint32_t
 {
@@ -3101,6 +3141,15 @@ enum class ResourceUsage : uint32_t
   Barrier,
 
   CPUWrite,
+
+  // Append operation usages so existing capture/RPC values remain stable.
+  MetalFXInput,
+  MetalFXOutput,
+  RasterizationRateMap,
+  MetalFXDepthInput,
+  MetalFXMotionInput,
+  MetalFXExposureInput,
+  MetalFXReactiveInput,
 };
 
 DECLARE_REFLECTION_ENUM(ResourceUsage);

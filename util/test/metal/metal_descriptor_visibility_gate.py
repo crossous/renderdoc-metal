@@ -43,9 +43,17 @@ def main():
             encoder=field(mode,'RenderCommandEncoder').text
             end=next(c for c in nodes if c.get('name')=='MTLRenderCommandEncoder::endEncoding' and field(c,'RenderCommandEncoder').text==encoder)
             nodes.remove(mode);nodes.insert(list(nodes).index(end)+1,mode)
-        elif label=='missing-initial':nodes.remove(next(c for c in nodes if c.get('name')=='Internal::Initial Contents' and field(c,'id').text==rid))
+        elif label=='missing-initial':
+            initial=next((c for c in nodes if c.get('name')=='Internal::Initial Contents' and field(c,'id').text==rid),None)
+            if initial is not None:nodes.remove(initial)
+            else:
+                # Frame-born query buffers need a complete captured CPU snapshot
+                # owned by the query submission, rather than background initial data.
+                updates=[c for c in nodes if c.get('name')=='Internal_MTLBufferModifyCPUContents' and field(c,'Buffer').text==rid]
+                assert updates
+                for update in updates:nodes.remove(update)
         elif label=='untracked-buffer':
-            create=next(c for c in nodes if c.get('name')=='MTLDevice::newBufferWithLength' and field(c,'Buffer').text==rid)
+            create=next(c for c in nodes if c.get('name') in ('MTLDevice::newBufferWithLength','MTLHeap::newBuffer(offset)') and field(c,'Buffer').text==rid)
             field(create,'options').text='256'
         for c in nodes:c.set('length','0')
         target=folder/(label+'.zip.xml');tree.write(target,encoding='utf-8',xml_declaration=True)

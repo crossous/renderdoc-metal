@@ -13,5 +13,6 @@ public:
   DECLARE_FUNCTION_SERIALISED(void, copyParameterDataToBuffer, WrappedMTLBuffer *buffer,
                               NS::UInteger offset);
 
+  rdcarray<rdcarray<float>> horizontal, vertical;
   enum { TypeEnum = eResRasterizationRateMap };
 };

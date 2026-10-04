@@ -42,6 +42,14 @@ int main()
     const bool directGraphicsBuffers=getenv("RENDERDOC_METAL_MRT_DIRECT_GRAPHICS_BUFFERS")!=nullptr;
     const bool parallelPass=getenv("RENDERDOC_METAL_PARALLEL_MRT")!=nullptr;
     id<MTLDevice> device=MTLCreateSystemDefaultDevice(); NSError *error=nil;
+    const bool frameVisibility=getenv("RENDERDOC_METAL_MRT_FRAME_VISIBILITY")!=nullptr;
+    id<MTLHeap> visibilityHeap=nil;
+    if(frameVisibility && getenv("RENDERDOC_METAL_MRT_FRAME_VISIBILITY_HEAP"))
+    {
+      auto hd=[MTLHeapDescriptor new];hd.size=65536;hd.type=MTLHeapTypePlacement;
+      hd.storageMode=MTLStorageModeShared;hd.hazardTrackingMode=MTLHazardTrackingModeTracked;
+      visibilityHeap=[device newHeapWithDescriptor:hd];if(!visibilityHeap)return 75;
+    }
     id<MTLBuffer> visibilityOutput=getenv("RENDERDOC_METAL_MRT_VISIBILITY")?[device newBufferWithLength:32 options:MTLResourceStorageModeShared|MTLResourceHazardTrackingModeTracked]:nil;
     if(getenv("RENDERDOC_METAL_MRT_VISIBILITY") && !visibilityOutput)return 75;
     if(visibilityOutput)visibilityOutput.label=@"Resource visibility output";
@@ -398,6 +406,13 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
            annotation(textureTable,"metal.descriptorSlotBinding",0,1,(uint64_t)(__bridge void *)other,0))return 77;
       }
       if(api) api->StartFrameCapture(nullptr,nullptr);
+      if(frameVisibility)
+      {
+        visibilityOutput=visibilityHeap?[visibilityHeap newBufferWithLength:32 options:MTLResourceStorageModeShared|MTLResourceHazardTrackingModeTracked offset:1024+capture*1024]:[device newBufferWithLength:32 options:MTLResourceStorageModeShared|MTLResourceHazardTrackingModeTracked];
+        if(!visibilityOutput)return 75;
+        visibilityOutput.label=@"Resource visibility output";
+        uint64_t words[]={0x1234,0,0x5678,0xdead};memcpy(visibilityOutput.contents,words,sizeof(words));
+      }
       if(getenv("RENDERDOC_METAL_MRT_INITIAL_CPU_SLOT"))
       {
         memcpy(textureTable.contents,payload.contents,24);
@@ -421,6 +436,8 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
       uint64_t root[6]={};for(unsigned i=0;i<3;i++){root[i*2]=tableVAs[i];root[i*2+1]=0xabcdef0123456789ULL;}
       id<MTLCommandBuffer> signalCommand=interleavedSignal?[queue commandBuffer]:nil;
       if(signalCommand)[signalCommand enqueue];
+      id<MTLCommandBuffer> earlier=frameVisibility && getenv("RENDERDOC_METAL_MRT_VISIBILITY_EARLIER_SNAPSHOT")?[queue commandBuffer]:nil;
+      if(earlier)[earlier enqueue];
       id<MTLCommandBuffer> command=[queue commandBuffer];[command enqueue];
       auto indirectDraw=[&](id<MTLRenderCommandEncoder> encoder,NSUInteger offset) {
         [encoder useResource:renderArguments usage:MTLResourceUsageRead stages:MTLRenderStageVertex];
@@ -676,7 +693,14 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
         [zero copyFromBuffer:renderZeroUpload sourceOffset:0 toBuffer:renderArguments destinationOffset:0 size:sizeof(renderArgumentWords)];
         if(getenv("RENDERDOC_METAL_MRT_BLIT_MARKERS") && !getenv("RENDERDOC_METAL_MRT_BLIT_MARKERS_IMPLICIT")) { [zero popDebugGroup];[zero popDebugGroup]; }
         [zero endEncoding]; }
-      [command presentDrawable:drawable];[command commit];
+      [command presentDrawable:drawable];
+      if(frameVisibility && getenv("RENDERDOC_METAL_MRT_VISIBILITY_EARLIER_SNAPSHOT"))
+      {
+        // The query pass is already encoded, but its CPU initialization is
+        // captured with a separate submission which executes before it.
+        [earlier commit];
+      }
+      [command commit];
       if(reuseGPUGeneration) {
         // Original Native work is complete, without a captured explicit wait.
         for(unsigned attempt=0;command.status<MTLCommandBufferStatusCompleted && attempt<5000;attempt++)usleep(1000);

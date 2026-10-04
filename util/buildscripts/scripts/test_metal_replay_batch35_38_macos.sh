@@ -25,7 +25,10 @@ if [[ ! -f "${CAPTURE_DIR}/t10_debug_capture.rdc" ]]; then
   echo "Run phase38 capture batch first." >&2; exit 1
 fi
 
-"${SCRIPT_DIR}/build_metal_dev_macos.sh"
+if [[ "${RENDERDOC_METAL_SKIP_BUILD:-0}" != 1 ]]; then
+  "${SCRIPT_DIR}/build_metal_dev_macos.sh"
+fi
+shasum -a 256 "${BUILD_DIR}/lib/librenderdoc.dylib" >"${BUILD_DIR}/start-hash.log"
 for test in output lifecycle; do
   clang++ -std=c++17 -arch "$(uname -m)" -mmacosx-version-min=12.0 \
     -DRENDERDOC_PLATFORM_APPLE -I"${REPO_ROOT}" \
@@ -73,6 +76,14 @@ if (( LAST_TEST >= 41 )); then
   invalid_count=239
 fi
 if (( LAST_TEST >= 43 )); then
+  clang++ -std=c++17 -DRENDERDOC_PLATFORM_APPLE -I"${REPO_ROOT}" \
+    "${REPO_ROOT}/util/test/metal/metal_barrier_usage_replay.cpp" \
+    -L"${BUILD_DIR}/lib" -lrenderdoc -Wl,-rpath,"${BUILD_DIR}/lib" \
+    -o "${BUILD_DIR}/metal_barrier_usage_replay"
+  for fixture in t42 t43; do
+    MTL_DEBUG_LAYER=1 "${BUILD_DIR}/metal_barrier_usage_replay" \
+      "${CAPTURE_DIR}/${fixture}_capture.rdc"
+  done
   for fixture in t12 t19 t42 t43; do
     MTL_DEBUG_LAYER=1 "${BUILD_DIR}/metal_replay_output_smoke" \
       "${CAPTURE_DIR}/${fixture}_capture.rdc" "${CAPTURE_DIR}/${fixture}_validation.ppm"
@@ -1375,3 +1386,6 @@ if (( LAST_TEST >= 143 )); then invalid_count=$((invalid_count + 1)); fi
 # The T36 post-draw texture-barrier rejection was added after the cumulative ledger above.
 invalid_count=$(( invalid_count + 1 ))
 echo "Metal combined replay regression passed: ${#captures[@]} captures, ${invalid_count} malformed cases, $(( ${#captures[@]} * 10 )) lifecycle opens."
+
+shasum -a 256 "${BUILD_DIR}/lib/librenderdoc.dylib" >"${BUILD_DIR}/end-hash.log"
+cmp "${BUILD_DIR}/start-hash.log" "${BUILD_DIR}/end-hash.log"

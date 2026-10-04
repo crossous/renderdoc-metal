@@ -279,7 +279,10 @@ ShaderToolOutput ShaderProcessingTool::DisassembleShader(QWidget *window,
       arg = output_file = tmpPath(lit("shader_output"));
     if(arg == lit("{entry_point}"))
     {
-      arg = shaderDetails->entryPoint;
+      // A Metal specialized function can be renamed without renaming its library entry.
+      arg = shaderDetails->encoding == ShaderEncoding::MetalLib &&
+                    !shaderDetails->debugInfo.entrySourceName.empty()
+                ? shaderDetails->debugInfo.entrySourceName : shaderDetails->entryPoint;
       if(arg.isEmpty())
         arg = lit("main");
     }

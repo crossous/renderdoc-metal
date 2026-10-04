@@ -823,7 +823,8 @@ void TimelineBar::paintEvent(QPaintEvent *e)
         else if(use.usage == ResourceUsage::StreamOut || use.usage == ResourceUsage::ResolveDst ||
                 use.usage == ResourceUsage::ColorTarget ||
                 use.usage == ResourceUsage::DepthStencilTarget ||
-                use.usage == ResourceUsage::CopyDst || use.usage == ResourceUsage::CPUWrite)
+                use.usage == ResourceUsage::CopyDst || use.usage == ResourceUsage::CPUWrite ||
+                use.usage == ResourceUsage::MetalFXOutput)
         {
           pipranges[WriteUsage].push(pos, triRadius);
         }

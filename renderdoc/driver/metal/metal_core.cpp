@@ -319,6 +319,10 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
                                                                                          NULL);
     case MetalChunk::MTLCommandBuffer_enqueue:
       return m_DummyReplayCommandBuffer->Serialise_enqueue(ser);
+    case MetalChunk::MTLCommandBuffer_encodeMetalFXTemporal:
+      return m_DummyReplayCommandBuffer->Serialise_encodeMetalFXTemporal(ser, ResourceId(), {}, NULL, NULL, {}, {});
+    case MetalChunk::MTLCommandBuffer_encodeMetalFXSpatial:
+      return m_DummyReplayCommandBuffer->Serialise_encodeMetalFXSpatial(ser, NULL, NULL, NULL, {});
     case MetalChunk::MTLCommandBuffer_commit:
       return m_DummyReplayCommandBuffer->Serialise_commit(ser);
     case MetalChunk::MTLCommandBuffer_addScheduledHandler:
@@ -1241,6 +1245,9 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       RDCERR("Metal shared-event CPU mutation or handle export cannot be replayed");
       return false;
 
+    case MetalChunk::MTLResource_setLabel:
+      return Serialise_ResourceLabel(ser, ResourceId(), "");
+
     // no default to get compile error if a chunk is not handled
     case MetalChunk::Max: break;
   }
@@ -1393,7 +1400,7 @@ static bool FindMetalFrameDiagnosticBoundary(StreamReader *reader, uint64_t vers
     }
     else if(chunk==MetalChunk::MTLCommandBuffer_enqueue || chunk==MetalChunk::MTLCommandBuffer_commit ||
         (name.contains("MTLCommandBuffer::") && (name.contains("Encoder") ||
-         name.contains("encodeSignalEvent") || name.contains("encodeWaitForEvent") || name.contains("presentDrawable"))))
+         name.contains("encodeSignalEvent") || name.contains("encodeWaitForEvent") || (name.contains("encodeMetalFXSpatial") || name.contains("encodeMetalFXTemporal")) || name.contains("presentDrawable"))))
     {
       ResourceId command;scan.Serialise("CommandBuffer"_lit,command);
       if(!pending.count(command))break;
@@ -1767,6 +1774,80 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
   return ResultCode::Succeeded;
 }
 
+void WrappedMTLDevice::CacheReplaySubmissionChunks(const rdcarray<APIEvent> &events)
+{
+  m_ReplayChunkOwners.clear();
+  m_ReplaySubmissionEndOffsets.clear();
+  // Cache physical chunk ownership independently of public submission EIDs.
+  // The descriptor/lifetime preflight has already validated the supported stream.
+  rdcarray<ResourceId> submissions;
+  std::map<ResourceId, ResourceId> encoders;
+  std::map<DescriptorSlotKey, ResourceId> gpuSlotOwners;
+  const auto encoderField = [](const SDObject *field) {
+    return strstr(field->name.c_str(), "CommandEncoder") != NULL ||
+           field->name == "Encoder" || field->name == "encoder";
+  };
+  for(size_t i = 1; i < events.size(); i++)
+  {
+    const APIEvent &event = events[i];
+    if(event.chunkIndex >= m_StructuredFile->chunks.size())
+      continue;
+    const SDChunk *chunk = m_StructuredFile->chunks[event.chunkIndex];
+    ResourceId owner;
+    if(const SDObject *command = chunk->FindChild("CommandBuffer"))
+      owner = command->AsResourceId();
+    for(const SDObject *field : *chunk)
+    {
+      if(encoderField(field))
+      {
+        const auto found = encoders.find(field->AsResourceId());
+        if(owner == ResourceId() && found != encoders.end())
+          owner = found->second;
+      }
+    }
+    const MetalChunk chunkType = (MetalChunk)chunk->metadata.chunkID;
+    if(chunkType == MetalChunk::MTLBuffer_DescriptorSlotProducer ||
+       chunkType == MetalChunk::MTLBuffer_DescriptorSlotEvent ||
+       chunkType == MetalChunk::MTLBuffer_DescriptorSlotBinding)
+    {
+      const SDObject *buffer = chunk->FindChild("buffer"), *offset = chunk->FindChild("offset");
+      if(buffer && offset)
+      {
+        const DescriptorSlotKey key = make_rdcpair(buffer->AsResourceId(), offset->AsUInt64());
+        if(chunkType == MetalChunk::MTLBuffer_DescriptorSlotProducer && owner != ResourceId())
+          gpuSlotOwners[key] = owner;
+        else if(chunkType == MetalChunk::MTLBuffer_DescriptorSlotEvent)
+        {
+          const SDObject *kind = chunk->FindChild("event");
+          if(kind && kind->AsUInt32() == 3 && gpuSlotOwners.count(key))
+            owner = gpuSlotOwners[key];
+          else
+            gpuSlotOwners.erase(key);
+        }
+        else if(chunkType == MetalChunk::MTLBuffer_DescriptorSlotBinding && gpuSlotOwners.count(key))
+          owner = gpuSlotOwners[key];
+      }
+    }
+    if(owner != ResourceId())
+    {
+      m_ReplayChunkOwners[event.fileOffset] = owner;
+      for(const SDObject *field : *chunk)
+        if(encoderField(field))
+          encoders[field->AsResourceId()] = owner;
+      if(chunk->metadata.chunkID == (uint32_t)MetalChunk::MTLCommandBuffer_commit)
+      {
+        submissions.push_back(owner);
+        m_ReplaySubmissionEndOffsets[owner] =
+            GetReplay()->GetNextEventOffset(event.eventId, m_FrameReader->GetSize());
+      }
+    }
+  }
+  for(const auto &snapshot : m_DescriptorSubmissionSnapshotOwners)
+    m_ReplayChunkOwners[snapshot.first] = snapshot.second;
+  if(m_DescriptorSubmissionOrder.empty())
+    m_DescriptorSubmissionOrder = submissions;
+}
+
 RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endEventID,
                                             ReplayLogType replayType, uint64_t diagnosticEndOffset)
 {
@@ -1811,6 +1892,9 @@ RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endE
 
   uint64_t startOffset = ser.GetReader()->GetOffset();
   uint64_t endOffset = ser.GetReader()->GetSize();
+  std::set<uint64_t> selectedChunks;
+  ResourceId selectedSubmission;
+  std::set<ResourceId> precedingSubmissions;
   if(diagnosticEndOffset)
   {
     if(!IsLoading(m_State) || diagnosticEndOffset<startOffset || diagnosticEndOffset>endOffset)
@@ -1845,6 +1929,30 @@ RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endE
         ser.GetReader()->SetOffset(startOffset);
       }
     }
+    const auto owner = m_ReplayChunkOwners.find(event->fileOffset);
+    if(replayType != eReplay_OnlyDraw && owner != m_ReplayChunkOwners.end() &&
+       m_DescriptorSubmissionOrder.contains(owner->second))
+    {
+      selectedSubmission = owner->second;
+      // A parallel child's earlier GPU commands can be physically recorded
+      // after the selected child. Select its baked prefix rather than a CPU
+      // offset prefix, including the necessary earlier child tail.
+      GetReplay()->GetSubmissionReplayPrefix(selectedSubmission, endEventID,
+          replayType == eReplay_WithoutDraw, selectedChunks, endOffset);
+      // D3D12 ExecuteCommandLists and Vulkan QueueSubmit replay complete earlier
+      // submissions before the selected command. CPU encoding order can differ:
+      // include the tail of an earlier producer, but no later GPU submissions.
+      for(ResourceId prior : m_DescriptorSubmissionOrder)
+      {
+        if(prior == selectedSubmission)
+          break;
+        precedingSubmissions.insert(prior);
+        const auto commit = m_ReplaySubmissionEndOffsets.find(prior);
+        if(commit == m_ReplaySubmissionEndOffsets.end())
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Missing Metal submission replay boundary");
+        endOffset = RDCMAX(endOffset, commit->second);
+      }
+    }
   }
 
   while(!ser.GetReader()->AtEnd() && ser.GetReader()->GetOffset() < endOffset)
@@ -1853,6 +1961,19 @@ RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endE
     MetalChunk chunk = ser.ReadChunk<MetalChunk>();
     if(ser.IsErrored())
       break;
+
+    if(selectedSubmission != ResourceId())
+    {
+      const auto owner = m_ReplayChunkOwners.find(m_CurChunkOffset);
+      if(owner != m_ReplayChunkOwners.end() &&
+         !precedingSubmissions.count(owner->second) &&
+         (owner->second != selectedSubmission || !selectedChunks.count(m_CurChunkOffset)))
+      {
+        ser.SkipCurrentChunk();
+        ser.EndChunk();
+        continue;
+      }
+    }
 
     const uint32_t eventBeforeChunk = IsLoading(m_State) ? GetReplay()->GetNextEventID() : 0;
     bool success = ProcessChunk(ser, chunk);
@@ -2018,12 +2139,41 @@ bool WrappedMTLDevice::FinishReplayCommands()
     {
       if(!m_ReplayRenderCommandEncoder->GetParallelParent())
         m_ReplayRenderCommandEncoder->ResolveDeferredStoreActions();
+      if(!m_ReplayRenderCommandEncoder->GetParallelParent())
+        FinaliseReplayStores(Unwrap(m_ReplayRenderCommandEncoder), true);
+      if(GetResID(m_ReplayRenderCommandEncoder) == m_OverlayPreservePass)
+      {
+        const auto &pass = GetReplay()->GetRenderPassDescriptor();
+        if(m_ClearBeforePass == m_OverlayPreservePass)
+          for(unsigned i = 0; i < pass.colorAttachments.size(); i++)
+            if(pass.colorAttachments[i].texture)
+              Unwrap(m_ReplayRenderCommandEncoder)->setColorStoreAction(
+                  pass.colorAttachments[i].resolveTexture ? MTL::StoreActionStoreAndMultisampleResolve : MTL::StoreActionStore, i);
+        if(pass.depthAttachment.texture)
+          Unwrap(m_ReplayRenderCommandEncoder)->setDepthStoreAction(MTL::StoreActionStore);
+        if(pass.stencilAttachment.texture)
+          Unwrap(m_ReplayRenderCommandEncoder)->setStencilStoreAction(MTL::StoreActionStore);
+      }
       Unwrap(m_ReplayRenderCommandEncoder)->endEncoding();
       m_ReplayRenderCommandEncoder = NULL;
     }
     if(m_ReplayParallelRenderCommandEncoder)
     {
       m_ReplayParallelRenderCommandEncoder->ResolveDeferredStoreActions();
+      FinaliseReplayStores(Unwrap(m_ReplayParallelRenderCommandEncoder), true);
+      if(GetResID(m_ReplayParallelRenderCommandEncoder) == m_OverlayPreservePass)
+      {
+        const auto &pass = GetReplay()->GetRenderPassDescriptor();
+        if(m_ClearBeforePass == m_OverlayPreservePass)
+          for(unsigned i = 0; i < pass.colorAttachments.size(); i++)
+            if(pass.colorAttachments[i].texture)
+              Unwrap(m_ReplayParallelRenderCommandEncoder)->setColorStoreAction(
+                  pass.colorAttachments[i].resolveTexture ? MTL::StoreActionStoreAndMultisampleResolve : MTL::StoreActionStore, i);
+        if(pass.depthAttachment.texture)
+          Unwrap(m_ReplayParallelRenderCommandEncoder)->setDepthStoreAction(MTL::StoreActionStore);
+        if(pass.stencilAttachment.texture)
+          Unwrap(m_ReplayParallelRenderCommandEncoder)->setStencilStoreAction(MTL::StoreActionStore);
+      }
       Unwrap(m_ReplayParallelRenderCommandEncoder)->endEncoding();
       m_ReplayParallelRenderCommandEncoder = NULL;
     }
@@ -2064,7 +2214,7 @@ bool WrappedMTLDevice::FinishReplayCommands()
     }
     it->second.buffer = NULL;
   }
-  if(success && !ApplyTerminalReplayBufferPurges())
+  if(success && m_OverlayPreservePass == ResourceId() && !ApplyTerminalReplayBufferPurges())
     success = false;
   m_ReplayCommandBuffers.clear();
   m_ReplayCommandBufferOrder.clear();
@@ -2080,6 +2230,183 @@ bool WrappedMTLDevice::FinishReplayCommands()
   m_ReplayRenderTarget = ResourceId();
   GetReplay()->ClearEncoderContexts();
   return success;
+}
+
+bool WrappedMTLDevice::BeginOverlayReplayPrefix(ResourceId encoder)
+{
+  if(m_OverlayPreservePass != ResourceId() || m_OverlayReplayEncoder || encoder == ResourceId())
+    return false;
+  if(!FinishReplayCommands()) return false;
+  m_OverlayPreservePass = encoder;
+  return true;
+}
+
+bool WrappedMTLDevice::FinishOverlayReplayPrefix(ResourceId encoder)
+{
+  if(encoder == ResourceId() || encoder != m_OverlayPreservePass || m_OverlayReplayEncoder)
+    return false;
+  const bool success = FinishReplayCommands();
+  m_OverlayPreservePass = ResourceId();
+  return success;
+}
+
+bool WrappedMTLDevice::ReplayOverlayDraw(
+    uint32_t eventId, MTL::RenderCommandEncoder *nativeEncoder,
+    const std::function<void(MTL::RenderCommandEncoder *)> &prepare, bool originalPipeline)
+{
+  const APIEvent *event = GetReplay()->GetEvent(eventId);
+  if(!event || !nativeEncoder || m_OverlayReplayEncoder || !IsActiveReplaying(m_State) ||
+     event->chunkIndex >= m_StructuredFile->chunks.size()) return false;
+  const SDChunk *draw = m_StructuredFile->chunks[event->chunkIndex];
+  const SDObject *field = draw->FindChild("RenderCommandEncoder");
+  const MetalChunk kind = MetalChunk(draw->metadata.chunkID);
+  if(!field || kind < MetalChunk::MTLRenderCommandEncoder_drawPrimitives ||
+     kind > MetalChunk::MTLRenderCommandEncoder_drawIndexedPrimitives_indirect) return false;
+  const ResourceId sourceID = field->AsResourceId();
+  const bool trace = !Process::GetEnvVariable("RENDERDOC_METAL_TRACE_OVERLAY").empty();
+  auto object = GetResourceManager()->GetResource(sourceID, true);
+  if(!object || object->m_Type != eResRenderCommandEncoder || !object->m_Real) return false;
+  auto source = (WrappedMTLRenderCommandEncoder *)object;
+
+  // Reuse captured setters, not a partial reconstruction of Native state. This
+  // includes descriptor relocation, residency, dynamic strides, viewports,
+  // depth bias, samplers and stencil references. Never replay earlier draws.
+  rdcarray<uint64_t> setters;
+  for(uint32_t i = 1; i < eventId; i++)
+  {
+    const APIEvent *previous = GetReplay()->GetEvent(i);
+    if(!previous || previous->chunkIndex >= m_StructuredFile->chunks.size()) continue;
+    const SDChunk *chunk = m_StructuredFile->chunks[previous->chunkIndex];
+    const SDObject *encoder = chunk->FindChild("RenderCommandEncoder");
+    if(!encoder || encoder->AsResourceId() != sourceID) continue;
+    const rdcstr &name = chunk->name;
+    if(!name.beginsWith("MTLRenderCommandEncoder::set") &&
+       !name.beginsWith("MTLRenderCommandEncoder::use")) continue;
+    // Function tables are pipeline-owned. Their remapping needs a separate
+    // implementation; layered amplification needs a layered overlay target.
+    if(!originalPipeline && name.contains("FunctionTable"))
+    {
+      if(trace) fprintf(stderr, "Metal overlay unsupported setter: %s\n", name.c_str());
+      return false;
+    }
+    if(name.contains("StoreAction") || name.contains("StoreOptions") ||
+       name.contains("VisibilityResult") || name.contains("Tile")) continue;
+    if(setters.empty() || setters.back() != previous->fileOffset)
+      setters.push_back(previous->fileOffset);
+  }
+  const uint64_t savedOffset = m_FrameReader->GetOffset(), savedChunk = m_CurChunkOffset;
+  // Inline pointer layouts/bindings are one-shot annotations consumed by the
+  // ordinary setter. Replay them with that setter, retaining capture order.
+  // They do not create API events, so obtain their offsets from the frame stream.
+  rdcarray<uint64_t> commands;
+  m_FrameReader->SetOffset(0);
+  ReadSerialiser scan(m_FrameReader, Ownership::Nothing);
+  scan.SetVersion(m_SectionVersion);
+  while(!m_FrameReader->AtEnd() && m_FrameReader->GetOffset() < event->fileOffset && !scan.IsErrored())
+  {
+    const uint64_t offset = m_FrameReader->GetOffset();
+    const MetalChunk chunk = scan.ReadChunk<MetalChunk>();
+    bool selected = setters.contains(offset);
+    if(chunk == MetalChunk::MTLCommandEncoder_DescriptorInlineLayout ||
+       chunk == MetalChunk::MTLCommandEncoder_DescriptorInlineBinding)
+    {
+      ResourceId encoder;
+      scan.Serialise("encoder"_lit, encoder);
+      selected = encoder == sourceID;
+    }
+    if(selected) commands.push_back(offset);
+    scan.EndChunk();
+  }
+  m_FrameReader->SetOffset(savedOffset);
+  if(scan.IsErrored()) return false;
+  const auto savedState = GetReplay()->SaveEncoderState();
+  const auto savedInlineShadow = m_DescriptorInlineShadow;
+  void *savedReal = source->m_Real;
+  const bool savedGPUWork = m_ReplayChunkIsGPUWork;
+  m_OverlayReplayEncoder = source;
+  m_OverlayReplayOriginalPipeline = originalPipeline;
+  // Borrow only for this synchronous encoding scope; ownership never changes.
+  source->m_Real = nativeEncoder;
+  bool success = true;
+  auto replay = [&](uint64_t offset) {
+    m_FrameReader->SetOffset(offset);
+    m_CurChunkOffset = offset;
+    ReadSerialiser ser(m_FrameReader, Ownership::Nothing);
+    ser.SetVersion(m_SectionVersion);
+    ser.SetUserData(GetResourceManager());
+    const MetalChunk chunk = ser.ReadChunk<MetalChunk>();
+    const bool result = !ser.IsErrored() && ProcessChunk(ser, chunk);
+    ser.EndChunk();
+    if(trace && (!result || ser.IsErrored()))
+      fprintf(stderr, "Metal overlay failed chunk=%u offset=%llu\n", uint32_t(chunk), offset);
+    return result && !ser.IsErrored();
+  };
+  prepare(nativeEncoder);
+  for(uint64_t offset : commands)
+    if(!replay(offset)) { success = false; break; }
+  if(success)
+  {
+    prepare(nativeEncoder);
+    success = replay(event->fileOffset);
+  }
+  source->m_Real = savedReal;
+  m_OverlayReplayEncoder = NULL;
+  m_OverlayReplayOriginalPipeline = false;
+  m_ReplayChunkIsGPUWork = savedGPUWork;
+  m_DescriptorInlineShadow = savedInlineShadow;
+  GetReplay()->RestoreEncoderState(savedState);
+  m_FrameReader->SetOffset(savedOffset);
+  m_CurChunkOffset = savedChunk;
+  return success;
+}
+
+RDResult WrappedMTLDevice::ReplayClearBeforePass(uint32_t eventId, ResourceId encoder,
+                                               FloatVector color, double depthClear)
+{
+  if(encoder == ResourceId() || m_ClearBeforePass != ResourceId() || m_OverlayReplayEncoder)
+    RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal clear-before pass scope");
+  if(!BeginOverlayReplayPrefix(encoder))
+    RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal clear-before prefix completion");
+  m_ClearBeforePass = encoder;
+  m_ClearBeforeColor = color;
+  m_ClearBeforeDepth = depthClear;
+  // Ordinary replay retains original shaders, MRT formats, queries and all
+  // intervening commands. Only this native pass's attachment loads change.
+  RDResult result = ReplayLog(eventId, eReplay_Full);
+  const bool finished = FinishOverlayReplayPrefix(encoder);
+  m_ClearBeforePass = ResourceId();
+  m_ClearBeforeDepth = -1.0;
+  if(result == ResultCode::Succeeded && !finished)
+    RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal clear-before completion");
+  return result;
+}
+
+void WrappedMTLDevice::ApplyReplayPassClear(ResourceId encoder,
+                                          MTL::RenderPassDescriptor *descriptor) const
+{
+  if(encoder != m_ClearBeforePass || m_ClearBeforePass == ResourceId()) return;
+  for(unsigned i = 0; i < 8; i++)
+  {
+    auto color = descriptor->colorAttachments()->object(i);
+    if(!color->texture()) continue;
+    color->setLoadAction(MTL::LoadActionClear);
+    color->setStoreAction(MTL::StoreActionUnknown);
+    color->setClearColor(MTL::ClearColor::Make(m_ClearBeforeColor.x, m_ClearBeforeColor.y,
+                                             m_ClearBeforeColor.z, m_ClearBeforeColor.w));
+  }
+  if(m_ClearBeforeDepth >= 0)
+  {
+    if(descriptor->depthAttachment()->texture())
+    {
+      descriptor->depthAttachment()->setLoadAction(MTL::LoadActionClear);
+      descriptor->depthAttachment()->setClearDepth(m_ClearBeforeDepth);
+    }
+    if(descriptor->stencilAttachment()->texture())
+    {
+      descriptor->stencilAttachment()->setLoadAction(MTL::LoadActionClear);
+      descriptor->stencilAttachment()->setClearStencil(0);
+    }
+  }
 }
 
 bool WrappedMTLDevice::DeferTerminalBufferPurge(ResourceId id)
@@ -2184,6 +2511,7 @@ RDResult WrappedMTLDevice::ReplayLog(uint32_t endEventID, ReplayLogType replayTy
   {
     if(!FinishReplayCommands())
       RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal replay completion");
+    GetReplay()->ResetMetalFXTemporal();
     if(!RestoreReplayPurgedBuffers())
       RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal purgeable buffer restore");
     // Frame-created placement children belong to a previous execution of the frame stream.
@@ -2315,6 +2643,10 @@ bool WrappedMTLDevice::CanEncodeReplayEvent(WrappedMTLCommandBuffer *buffer)
 WrappedMTLRenderCommandEncoder *WrappedMTLDevice::GetReplayRenderCommandEncoder(
     WrappedMTLRenderCommandEncoder *encoder)
 {
+  // Overlay setters/draws reuse the captured serializer and validation, but
+  // encode into a separate completed-prefix command, not the ended original.
+  if(m_OverlayReplayEncoder && encoder == m_OverlayReplayEncoder)
+    return encoder;
   if(encoder && encoder->m_Type == eResRenderCommandEncoder &&
      SelectReplayCommandBuffer(encoder->GetCommandBuffer()))
   {
@@ -2401,6 +2733,23 @@ void WrappedMTLDevice::AssignPendingReplayCPUBufferUpdates(WrappedMTLCommandBuff
 
 bool WrappedMTLDevice::ApplyFutureSharedAliasCPUUpdate(const CPUBufferUpdate &update)
 {
+  if(!m_DescriptorCoverage)
+  {
+    const auto birth = m_ReplayStandaloneBufferBirths.find(update.buffer);
+    const auto placement = m_FramePlacementResources.find(update.buffer);
+    const auto object = GetResourceManager()->GetResource(update.buffer, true);
+    // This snapshot was validated while loading the complete submission. A standalone
+    // allocation born after the selected prefix cannot affect its GPU work. Keep the
+    // logical resource unmaterialized; a later seek will replay its creation and snapshot.
+    // Do not accept unknown objects, heap aliases, or updates outside the creation bounds.
+    return birth != m_ReplayStandaloneBufferBirths.end() &&
+           placement != m_FramePlacementResources.end() && !placement->second &&
+           object && object->m_Type == eResBuffer && !object->m_Real &&
+           birth->second.chunkOffset > m_CurChunkOffset &&
+           (birth->second.options & 0xf0ULL) == MTL::ResourceStorageModeShared &&
+           !update.data.empty() && update.offset <= birth->second.length &&
+           update.data.size() <= birth->second.length - update.offset;
+  }
   auto future = m_DescriptorFrameBuffers.find(update.buffer);
   if(m_DescriptorCoverage < 24 || future == m_DescriptorFrameBuffers.end() ||
      (future->second.options & 0xf0ULL) != MTL::ResourceStorageModeShared ||
@@ -2423,16 +2772,14 @@ bool WrappedMTLDevice::ApplyFutureSharedAliasCPUUpdate(const CPUBufferUpdate &up
   if(futureTable)
   {
     if(m_DescriptorCoverage < 65) return false;
-    bool validatedAlias = false;
-    for(const auto &pair : m_ValidatedDescriptorBackingAliases)
-      validatedAlias |= pair.second == update.buffer;
-    if(!validatedAlias) return false;
     // A submission snapshot can include a later-created descriptor table. Do
     // not materialize that future logical identity or write its captured VAs
     // into an earlier backing. The preflight alias proof retires every old
     // slot and closes its consumers at the later birth. Defer these bytes only
     // when every currently overlapping backing has that exact proof and all
     // its GPU consumers have actually completed before this submission.
+    // If there is no overlapping backing, these future bytes cannot affect
+    // the selected prefix. A fresh range has no predecessor alias to prove.
     for(const BufferDescription &description : GetReplay()->GetBuffers())
     {
       auto object = GetResourceManager()->GetResource(description.resourceId, true);
@@ -2533,6 +2880,8 @@ bool WrappedMTLDevice::ApplyReplayCPUBufferUpdates(WrappedMTLCommandBuffer *buff
   if(m_DescriptorCoverage >= 25)
     for(const auto &slot : m_DescriptorSlotShadow)
     {
+      if(m_DescriptorCoverage >= 65 &&
+         !m_DescriptorSubmissionSlots[GetResID(buffer)].count(slot.first)) continue;
       if(!slot.second.live || slot.second.gpuExpected ||
          (m_DescriptorCoverage>=63 && slot.second.data.empty() &&
           m_DescriptorGPUWrittenBuffers.count(slot.first.first)) ||
@@ -2544,7 +2893,10 @@ bool WrappedMTLDevice::ApplyReplayCPUBufferUpdates(WrappedMTLCommandBuffer *buff
          24 > native->length() - slot.first.second || !PatchDescriptorSlot(slot.second, patched) ||
          memcmp((byte *)native->contents() + slot.first.second, patched.data(), 24))
       {
-        RDCERR("Metal live descriptor bytes do not match the logical source before submission");
+        RDCERR("Metal live descriptor bytes do not match the logical source before submission: command=%s buffer=%s offset=%llu generation=%llu sources=%zu",
+               ToStr(GetResID(buffer)).c_str(), ToStr(slot.first.first).c_str(),
+               (unsigned long long)slot.first.second,
+               (unsigned long long)slot.second.generation, slot.second.sources.size());
         return false;
       }
     }
@@ -2783,8 +3135,8 @@ void WrappedMTLDevice::AddResource(ResourceId id, ResourceType type, const char 
 
   uint64_t num;
   memcpy(&num, &id, sizeof(uint64_t));
-  descr.name = defaultNamePrefix + (" " + ToStr(num));
-  descr.autogeneratedName = true;
+  if(descr.autogeneratedName)
+    descr.name = defaultNamePrefix + (" " + ToStr(num));
   descr.type = type;
   AddResourceCurChunk(descr);
 }

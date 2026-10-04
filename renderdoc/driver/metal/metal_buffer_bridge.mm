@@ -73,6 +73,7 @@
 - (void)setLabel:value
 {
   self.real.label = value;
+  GetWrapped(self)->m_Device->CaptureResourceLabel(GetWrapped(self), (NS::String *)value);
 }
 
 - (id<MTLDevice>)device

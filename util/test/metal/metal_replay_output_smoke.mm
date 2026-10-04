@@ -875,7 +875,7 @@ static bool ValidateRenderDynamicStateFixture(IReplayController *renderer, Resou
     if(action->customName.contains("End Metal Render Pass"))
       end = action;
   }
-  if(!begin || !end || !end->customName.contains("C0=Store, D=Store, S=Store") ||
+  if(!begin || !end || !end->customName.contains("C=Store, DS=Store") ||
      draw->depthOut == ResourceId())
     return fail("dynamic attachment store state missing");
   renderer->SetFrameEvent(end->eventId, true);
@@ -1829,6 +1829,11 @@ static bool ValidateBinaryLibraryFixture(IReplayController *renderer, ResourceId
     }
     return true;
   };
+  auto hasCapturedBinary = [](const ShaderReflection *reflection) {
+    return reflection && reflection->encoding == ShaderEncoding::MetalLib &&
+           reflection->rawBytes.size() >= 4 &&
+           memcmp(reflection->rawBytes.data(), "MTLB", 4) == 0;
+  };
   ResourceId shaderIDs[5];
   for(uint32_t i : {0U, 1U, 2U, 3U, 4U, 0U, 3U, 1U, 4U})
   {
@@ -1836,12 +1841,20 @@ static bool ValidateBinaryLibraryFixture(IReplayController *renderer, ResourceId
     const auto &pipe = renderer->GetPipelineState();
     const auto *state = pipe.GetMetalPipelineState();
     const auto *reflection = pipe.GetShaderReflection(ShaderStage::Compute);
-    if(!reflection || reflection->entryPoint != "cs_binary" || !reflection->rawBytes.empty() ||
+    if(!reflection || reflection->entryPoint != "cs_binary" || !hasCapturedBinary(reflection) ||
        !reflection->debugInfo.files.empty() || reflection->readWriteResources.size() != 1 ||
        reflection->constantBlocks.size() != 1 || reflection->constantBlocks[0].byteSize != 4 ||
        !state || state->computeBuffers.size() < 2 || state->computeBuffers[0].resourceId != output ||
        state->computeBuffers[0].byteOffset != i * 128 || state->computeBuffers[1].byteSize != 4)
       return fail("binary compute reflection, source availability or bindings");
+    if(getenv("RENDERDOC_METAL_TEST_AIR") && i == 0)
+    {
+      const rdcstr air = renderer->DisassembleShader(ResourceId(), reflection, "Metal AIR (Apple toolchain)");
+      if(air.find("define ") < 0 || air.find("@cs_binary(") < 0)
+        return fail("captured binary AIR disassembly");
+      const rdcstr source = renderer->DisassembleShader(ResourceId(), reflection, "Captured MSL");
+      if(source.find("not MSL source") < 0) return fail("binary must not masquerade as source");
+    }
     shaderIDs[i] = reflection->resourceId;
   }
   for(uint32_t i = 0; i < 5; i++)
@@ -1852,7 +1865,7 @@ static bool ValidateBinaryLibraryFixture(IReplayController *renderer, ResourceId
   const auto *vs = pipe.GetShaderReflection(ShaderStage::Vertex);
   const auto *fs = pipe.GetShaderReflection(ShaderStage::Fragment);
   if(!vs || !fs || vs->entryPoint != "vs_binary" || fs->entryPoint != "fs_binary" ||
-     fs->readOnlyResources.size() != 1 || !vs->rawBytes.empty() || !fs->rawBytes.empty())
+     fs->readOnlyResources.size() != 1 || !hasCapturedBinary(vs) || !hasCapturedBinary(fs))
     return fail("binary render reflection");
   return HasUsage(renderer, output, ResourceUsage::CS_RWResource) &&
          HasUsage(renderer, output, ResourceUsage::PS_Resource) &&
@@ -8251,9 +8264,9 @@ static bool ValidateDepthStencilFixture(IReplayController *renderer, ResourceId 
           end ? end->customName.c_str() : "missing",
           HasUsageAt(renderer, colorTarget, ResourceUsage::Clear, clear->eventId),
           HasUsageAt(renderer, draws[0]->depthOut, ResourceUsage::Clear, clear->eventId));
-  if(clear->customName.find("C0=Clear, D=Clear, S=Clear") == -1 ||
+  if(clear->customName.find("C=Clear, DS=Clear") == -1 ||
      !(clear->flags & (ActionFlags::PassBoundary | ActionFlags::BeginPass)) || !end ||
-     end->customName.find("C0=Store, D=Store, S=Store") == -1 ||
+     end->customName.find("C=Store, DS=Store") == -1 ||
      !(end->flags & (ActionFlags::PassBoundary | ActionFlags::EndPass)) ||
      !HasUsageAt(renderer, colorTarget, ResourceUsage::Clear, clear->eventId) ||
      !HasUsageAt(renderer, draws[0]->depthOut, ResourceUsage::Clear, clear->eventId))
@@ -8366,8 +8379,8 @@ static bool ValidateMSAAResolveFixture(IReplayController *renderer, ResourceId c
           HasUsageAt(renderer, multisampleTarget.resourceId, ResourceUsage::Clear, clear->eventId),
           end && HasUsageAt(renderer, multisampleTarget.resourceId, ResourceUsage::ResolveSrc, end->eventId),
           end && HasUsageAt(renderer, resolveTarget.resourceId, ResourceUsage::ResolveDst, end->eventId));
-  if(clear->customName.find("C0=Clear") == -1 || !end ||
-     end->customName.find("C0=Resolve") == -1 ||
+  if(clear->customName.find("C=Clear") == -1 || !end ||
+     end->customName.find("C=Resolve") == -1 ||
      !HasUsageAt(renderer, multisampleTarget.resourceId, ResourceUsage::Clear, clear->eventId) ||
      !HasUsageAt(renderer, multisampleTarget.resourceId, ResourceUsage::ResolveSrc, end->eventId) ||
      !HasUsageAt(renderer, resolveTarget.resourceId, ResourceUsage::ResolveDst, end->eventId))

@@ -234,6 +234,7 @@ public:
   {
   }
   ~MetalResourceRecord();
+  bool MarkResourceFrameReferenced(ResourceId id, FrameRefType type);
   void DiscardBackgroundBufferMarkers();
   WrappedMTLObject *m_Resource;
   MetalResourceType m_Type;

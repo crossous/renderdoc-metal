@@ -25,9 +25,11 @@ int main()
   if(unsigned(integer)+unsigned(unorm8)+unsigned(packed10)>1 || (atomic&&!integer))return 16;
   const bool actual=getenv("RENDERDOC_METAL_FRAME_FAMILY_ACTUAL")!=nullptr;
   const bool twoD=getenv("RENDERDOC_METAL_FRAME_FAMILY_2D")!=nullptr;
+  const bool extended2D=getenv("RENDERDOC_METAL_FRAME_FAMILY_EXTENDED_2D")!=nullptr;
   if(twoD && array)return 15;
-  const NSUInteger width=integer?(twoD?128:1):unorm8?512:packed10?1:actual?64:3;
-  const NSUInteger height=integer||packed10?1:unorm8?512:actual?64:5;
+  if(extended2D && (!twoD || extra || array))return 15;
+  const NSUInteger width=extended2D?160:integer?(twoD?128:1):unorm8?512:packed10?1:actual?64:3;
+  const NSUInteger height=extended2D?120:integer||packed10?1:unorm8?512:actual?64:5;
   const NSUInteger layers=twoD||packed10?1:integer?3:actual?64:2;
   NSString *source=@R"MSL(
 #include <metal_stdlib>
@@ -107,7 +109,7 @@ kernel void write_color(const device ulong *root [[buffer(0)]]) {
   if(const char *path=getenv("RENDERDOC_METAL_CAPTURE_PATH")) {
    auto get=(pRENDERDOC_GetAPI)dlsym(RTLD_DEFAULT,"RENDERDOC_GetAPI");
    if(!get||!get(eRENDERDOC_API_Version_1_7_0,(void **)&api))return 4;
-   api->SetCaptureFilePathTemplate(path);RENDERDOC_AnnotationValue v={};v.uint32=work||dispatchCount>4?46:extra?44:actual||twoD?43:39;
+   api->SetCaptureFilePathTemplate(path);RENDERDOC_AnnotationValue v={};v.uint32=extended2D?65:work||dispatchCount>4?46:extra?44:actual||twoD?43:39;
    if(api->SetObjectAnnotation((__bridge void *)device,(__bridge void *)device,"metal.descriptorCoverage",eRENDERDOC_UInt32,0,&v))return 5;
   }
   auto annotation=[&](id object,const char *key,uint64_t a,uint64_t b,uint64_t c,uint64_t e) {

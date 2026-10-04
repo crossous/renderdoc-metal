@@ -36,7 +36,7 @@ def main():
             ('heap-size-huge', 'MTLDevice::newHeapWithDescriptor', 'size', 2**63),
             ('heap-storage', 'MTLDevice::newHeapWithDescriptor', 'storageMode', 0),
             ('heap-cache', 'MTLDevice::newHeapWithDescriptor', 'cacheMode', 1),
-            ('heap-hazard', 'MTLDevice::newHeapWithDescriptor', 'hazardMode', 0),
+            ('heap-hazard', 'MTLDevice::newHeapWithDescriptor', 'hazardMode', 3),
             ('heap-sparse', 'MTLDevice::newHeapWithDescriptor', 'type', 2),
             ('buffer-heap-zero', 'MTLHeap::newBuffer', 'Heap', 0),
             ('buffer-heap-wrong-type', 'MTLHeap::newBuffer', 'Heap', 20),

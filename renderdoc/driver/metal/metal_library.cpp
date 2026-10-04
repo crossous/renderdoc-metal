@@ -205,6 +205,14 @@ bool WrappedMTLLibrary::Serialise_newSpecializedFunction(SerialiserType &ser,
     GetResourceManager()->WrapResource(Function, real, wrapped, true);
     m_Device->AddResource(Function, ResourceType::Shader, "Specialized Function");
     m_Device->GetReplay()->AddShader(Function, GetResID(Library), real, real->name()->utf8String());
+    snapshot.name = functionName;
+    snapshot.specializedName = specializedName;
+    snapshot.options = options;
+    snapshot.constantNames = constantNames;
+    snapshot.constantIndices = constantIndices;
+    snapshot.constantTypes = constantTypes;
+    snapshot.constantValues = constantValues;
+    m_Device->GetReplay()->SetShaderSpecialization(Function, snapshot);
     m_Device->DerivedResource(Library, Function);
   }
   return true;

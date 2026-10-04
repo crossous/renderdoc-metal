@@ -52,6 +52,7 @@ set(sources
     metal_event.cpp
     metal_event.h
     metal_event_bridge.mm
+    metal_fx.mm
     metal_fence.h
     metal_fence_bridge.mm
     metal_heap.cpp
@@ -110,9 +111,14 @@ set(sources
     metal_manager.h
     metal_init_state.cpp
     metal_helpers_bridge.mm
+    metal_discard_pattern.mm
     metal_serialise.cpp
     metal_stringise.cpp
     metal_replay.h
+    metal_shader_inspect.cpp
+    metal_shader_edit.cpp
+    metal_shader_sources.cpp
+    metal_air_access.h
     metal_replay.cpp
     official/metal-cpp.h
     official/metal-cpp.cpp)

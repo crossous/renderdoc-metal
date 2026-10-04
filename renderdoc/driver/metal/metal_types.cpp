@@ -84,6 +84,8 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
       objc_setAssociatedObject((id)real, real, objc, OBJC_ASSOCIATION_ASSIGN);                    \
     if(WrappedMTL##CPPTYPE::TypeEnum == eResLibrary ||                                          \
        WrappedMTL##CPPTYPE::TypeEnum == eResFunction ||                                        \
+       WrappedMTL##CPPTYPE::TypeEnum == eResDepthStencilState ||                               \
+       WrappedMTL##CPPTYPE::TypeEnum == eResSamplerState ||                                    \
        WrappedMTL##CPPTYPE::TypeEnum == eResRenderPipelineState ||                             \
        WrappedMTL##CPPTYPE::TypeEnum == eResVisibleFunctionTable ||                            \
        WrappedMTL##CPPTYPE::TypeEnum == eResIntersectionFunctionTable ||                       \
@@ -843,32 +845,47 @@ static const char *RenderPassStoreOpName(MTL::StoreAction action)
 
 rdcstr RenderPassOpString(const RenderPassDescriptor &descriptor, bool store)
 {
+  // Match D3D12/Vulkan pass summaries: collapse identical colour operations and
+  // depth/stencil operations. Per-attachment details remain in the structured API event.
   rdcstr result;
-  for(size_t i = 0; i < descriptor.colorAttachments.size(); i++)
+  rdcstr colorOp;
+  bool colorsSame = true;
+  for(const RenderPassColorAttachmentDescriptor &attachment : descriptor.colorAttachments)
   {
-    const RenderPassColorAttachmentDescriptor &attachment = descriptor.colorAttachments[i];
     if(!attachment.texture)
       continue;
-    if(!result.empty())
-      result += ", ";
-    result += StringFormat::Fmt("C%zu=%s", i, store ? RenderPassStoreOpName(attachment.storeAction)
-                                                  : RenderPassLoadOpName(attachment.loadAction));
+    const rdcstr op = store ? RenderPassStoreOpName(attachment.storeAction)
+                           : RenderPassLoadOpName(attachment.loadAction);
+    if(colorOp.empty())
+      colorOp = op;
+    else if(colorOp != op)
+      colorsSame = false;
   }
-  if(descriptor.depthAttachment.texture)
+  if(!colorOp.empty())
+    result = "C=" + (colorsSame ? colorOp
+                               : rdcstr(store ? "Different store ops" : "Different load ops"));
+
+  const bool depth = descriptor.depthAttachment.texture != NULL;
+  const bool stencil = descriptor.stencilAttachment.texture != NULL;
+  const rdcstr depthOp = store ? RenderPassStoreOpName(descriptor.depthAttachment.storeAction)
+                              : RenderPassLoadOpName(descriptor.depthAttachment.loadAction);
+  const rdcstr stencilOp = store ? RenderPassStoreOpName(descriptor.stencilAttachment.storeAction)
+                                : RenderPassLoadOpName(descriptor.stencilAttachment.loadAction);
+  if(depth || stencil)
   {
     if(!result.empty())
       result += ", ";
-    result += "D=";
-    result += store ? RenderPassStoreOpName(descriptor.depthAttachment.storeAction)
-                    : RenderPassLoadOpName(descriptor.depthAttachment.loadAction);
-  }
-  if(descriptor.stencilAttachment.texture)
-  {
-    if(!result.empty())
-      result += ", ";
-    result += "S=";
-    result += store ? RenderPassStoreOpName(descriptor.stencilAttachment.storeAction)
-                    : RenderPassLoadOpName(descriptor.stencilAttachment.loadAction);
+    if(depth && stencil && depthOp == stencilOp)
+      result += "DS=" + depthOp;
+    else
+    {
+      if(depth)
+        result += "D=" + depthOp;
+      if(depth && stencil)
+        result += ", ";
+      if(stencil)
+        result += "S=" + stencilOp;
+    }
   }
   return result.empty() ? "-" : result;
 }
@@ -898,6 +915,7 @@ RenderPassDescriptor::RenderPassDescriptor(MTL::RenderPassDescriptor *objc)
     : depthAttachment(objc->depthAttachment()),
       stencilAttachment(objc->stencilAttachment()),
       visibilityResultBuffer(GetWrapped(objc->visibilityResultBuffer())),
+      visibilityResultBufferId(GetResID(visibilityResultBuffer)),
       renderTargetArrayLength(objc->renderTargetArrayLength()),
       imageblockSampleLength(objc->imageblockSampleLength()),
       threadgroupMemoryLength(objc->threadgroupMemoryLength()),

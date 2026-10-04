@@ -554,6 +554,7 @@ struct RenderPassDescriptor
   RenderPassDepthAttachmentDescriptor depthAttachment;
   RenderPassStencilAttachmentDescriptor stencilAttachment;
   WrappedMTLBuffer *visibilityResultBuffer = NULL;
+  ResourceId visibilityResultBufferId;
   NS::UInteger renderTargetArrayLength = 0;
   NS::UInteger imageblockSampleLength = 0;
   NS::UInteger threadgroupMemoryLength = 0;

@@ -447,6 +447,9 @@ enum class MetalChunk : uint32_t
   MTLComputeCommandEncoder_CaptureIndirectArguments,
   MTLDevice_CaptureRenderIndirectArgumentsCount,
   MTLRenderCommandEncoder_CaptureIndirectArguments,
+  MTLResource_setLabel,
+  MTLCommandBuffer_encodeMetalFXSpatial,
+  MTLCommandBuffer_encodeMetalFXTemporal,
   Max
 };
 

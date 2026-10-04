@@ -5,6 +5,23 @@
 #include "renderdoc/api/replay/renderdoc_replay.h"
 REPLAY_PROGRAM_MARKER()
 
+struct LogEvidence
+{
+  rdcstr path;
+  void Save()
+  {
+    rdcstr contents;
+    RENDERDOC_GetLogFileContents(0, contents);
+    if(contents.empty()) return;
+    if(FILE *output = fopen(path.c_str(), "wb"))
+    {
+      fwrite(contents.c_str(), 1, contents.size(), output);
+      fclose(output);
+    }
+  }
+  ~LogEvidence() { Save(); }
+};
+
 struct Inventory
 {
   uint32_t last = 0, draws = 0, dispatches = 0, markers = 0;
@@ -15,7 +32,7 @@ static void Inspect(const rdcarray<ActionDescription> &actions, Inventory &info)
 {
   for(const auto &a : actions)
   {
-    if(a.eventId > info.last) info.last = a.eventId;
+    if(!a.IsFakeMarker() && a.eventId > info.last) info.last = a.eventId;
     if(a.flags & ActionFlags::Drawcall) info.draws++;
     if(a.flags & ActionFlags::Dispatch) info.dispatches++;
     if(a.flags & ActionFlags::PushMarker) info.markers++;
@@ -70,6 +87,10 @@ int main(int argc, char **argv)
   GlobalEnvironment environment; environment.enumerateGPUs = false;
   rdcarray<rdcstr> args; args.push_back(argv[0]);
   RENDERDOC_InitialiseReplay(environment, args);
+  char logfile[4096];
+  snprintf(logfile, sizeof(logfile), "%s/renderdoc.log", argv[2]);
+  RENDERDOC_SetDebugLogFile(logfile);
+  LogEvidence evidence = {rdcstr(argv[2]) + "/renderdoc-final.log"};
   auto file = RENDERDOC_OpenCaptureFile();
   auto result = file->OpenFile(argv[1], "rdc", nullptr);
   if(!result.OK()) return 3;
@@ -94,6 +115,7 @@ int main(int argc, char **argv)
     char phase[64]; snprintf(phase, sizeof(phase), "replay-%u", cycle);
     if(!SavePresented(controller, info, argv[2], phase)) return 8;
   }
+  evidence.Save();
   controller->Shutdown(); RENDERDOC_ShutdownReplay();
   puts("PASS normal open, two full EID0/reset replays and Native presented texture readbacks");
   return 0;

@@ -894,6 +894,14 @@ rdcstr DoStringise(const ResourceUsage &el)
     STRINGISE_ENUM_CLASS_NAMED(Barrier, "Barrier");
 
     STRINGISE_ENUM_CLASS_NAMED(CPUWrite, "CPU Write");
+    STRINGISE_ENUM_CLASS_NAMED(MetalFXInput, "MetalFX - Input");
+    STRINGISE_ENUM_CLASS_NAMED(MetalFXOutput, "MetalFX - Output");
+    STRINGISE_ENUM_CLASS_NAMED(RasterizationRateMap, "Rasterization Rate Map");
+    STRINGISE_ENUM_CLASS_NAMED(MetalFXDepthInput, "MetalFX - Depth Input");
+    STRINGISE_ENUM_CLASS_NAMED(MetalFXMotionInput, "MetalFX - Motion Vectors Input");
+    STRINGISE_ENUM_CLASS_NAMED(MetalFXExposureInput, "MetalFX - Exposure Input");
+    STRINGISE_ENUM_CLASS_NAMED(MetalFXReactiveInput, "MetalFX - Reactive Mask Input");
+
   }
   END_ENUM_STRINGISE();
 }
@@ -1099,6 +1107,8 @@ rdcstr DoStringise(const ShaderEncoding &el)
     STRINGISE_ENUM_CLASS_NAMED(OpenGLSPIRVAsm, "SPIR-V Asm (OpenGL)");
     STRINGISE_ENUM_CLASS(Slang);
     STRINGISE_ENUM_CLASS(MSL);
+    STRINGISE_ENUM_CLASS(MetalLib);
+    STRINGISE_ENUM_CLASS(MetalAIRAsm);
   }
   END_ENUM_STRINGISE();
 }

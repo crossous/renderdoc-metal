@@ -27,6 +27,9 @@
 #include "replay/replay_driver.h"
 #include "metal_common.h"
 #include "metal_render_indirect_readback.h"
+#include "metal_function_constants.h"
+
+rdcarray<ShaderSourceFile> ExtractMetalDebugSources(const bytebuf &binary);
 
 class WrappedMTLDevice;
 
@@ -51,7 +54,7 @@ public:
   rdcarray<DescriptorStoreDescription> GetDescriptorStores() { return {}; }
 
   void AddBuffer(ResourceId id, uint64_t length);
-  void AddTexture(ResourceId id, MTL::Texture *texture, bool swapBuffer);
+  void AddTexture(ResourceId id, MTL::Texture *texture, bool swapBuffer, MTL::StorageMode originalStorage = MTL::StorageMode(0xff));
   void RegisterTextureViewSource(ResourceId id);
   void RegisterBufferTextureSource(ResourceId view, ResourceId buffer) { m_BufferTextureSources[view] = buffer; }
   ResourceId GetBufferTextureSource(ResourceId view) const
@@ -62,15 +65,33 @@ public:
   bool SnapshotTextureViewSources();
   bool ResetTextureViewSources();
   void AddShaderLibrary(ResourceId id, const rdcstr &source);
+  void AddShaderBinary(ResourceId library, const bytebuf &data);
+  void SetShaderSpecialization(ResourceId shader, const MetalFunctionSnapshot &snapshot);
+  // Own an exact native descriptor copy, including stage inputs and Metal-only options.
+  void CacheShaderPipeline(ResourceId pipeline, NS::Object *descriptor, uint32_t kind);
   void AddShader(ResourceId id, ResourceId library, MTL::Function *function,
                  const rdcstr &entryPoint);
   void AddRenderPipeline(ResourceId id, const RDMTL::RenderPipelineDescriptor &descriptor,
                          MTL::RenderPipelineReflection *reflection);
   void AddTilePipeline(ResourceId id, ResourceId function,
                        MTL::RenderPipelineReflection *reflection);
+  void SetMetalFXSpatial(ResourceId input, ResourceId output, const rdcarray<uint64_t> &parameters);
+  void ResetMetalFXTemporal();
+  bool EncodeMetalFXTemporal(WrappedMTLCommandBuffer *command, ResourceId scaler,
+      const rdcarray<WrappedMTLTexture *> &inputs, WrappedMTLTexture *output,
+      WrappedMTLFence *fence, const rdcarray<uint64_t> &parameters, const rdcarray<float> &values);
+  void SetTileDispatch(const MTL::Size &threads, uint32_t width, uint32_t height);
+  void SetTileMemory(uint32_t index, uint64_t length, uint64_t offset);
+  void PopulateShaderFeatures(MetalPipe::Shader &shader);
   bool IsTilePipeline(ResourceId id) const { return m_TilePipelines.count(id) != 0; }
   void AddMeshPipeline(ResourceId id, ResourceId meshFunction, ResourceId fragmentFunction,
-                       uint32_t sampleCount, MTL::RenderPipelineReflection *reflection);
+                       uint32_t sampleCount, MTL::RenderPipelineReflection *reflection,
+                       const rdcarray<uint32_t> &colorFormats, ResourceId objectFunction = ResourceId());
+  void BindExtendedBuffer(ShaderStage stage, uint32_t index, ResourceId id, uint64_t offset);
+  void BindExtendedBytes(ShaderStage stage, uint32_t index, const rdcarray<byte> &data, ResourceId encoder);
+  void BindExtendedTexture(ShaderStage stage, uint32_t index, ResourceId id);
+  void BindExtendedSampler(ShaderStage stage, uint32_t index, ResourceId id);
+  void BindAccelerationStructure(ShaderStage stage, uint32_t index, ResourceId id);
   bool IsMeshPipeline(ResourceId id) const { return m_MeshPipelines.count(id) != 0; }
   void AddComputePipeline(ResourceId id, ResourceId function,
                           MTL::ComputePipelineReflection *reflection,
@@ -81,9 +102,16 @@ public:
     MetalPipe::State pipeline;
     RDMTL::RenderPassDescriptor renderPass;
     std::map<uint32_t, uint64_t> computeInlineBytes, computeThreadgroupMemory;
+    struct InlineData
+    {
+      bytebuf data;
+      std::map<uint64_t, rdcpair<ResourceId, uint64_t>> pointers;
+    };
+    std::map<rdcpair<uint32_t, uint32_t>, InlineData> graphicsInlineData;
     std::map<uint32_t, rdcarray<byte>> computeInlineData;
     std::map<uint32_t, rdcpair<float, float>> samplerLOD;
     rdcarray<uint32_t> vertexAttributeStrides;
+    uint32_t viewportCount = 1, scissorCount = 1;
   };
   EncoderReplayState SaveEncoderState() const;
   void RestoreEncoderState(const EncoderReplayState &state);
@@ -107,7 +135,9 @@ public:
       const std::map<uint32_t, uint64_t> &memory, const MTL::Size *grid = NULL) const;
   void SetComputeThreadgroupMemory(uint32_t index, uint64_t length);
   void BindComputeBytes(uint32_t index, const rdcarray<byte> &data);
-  void BindGraphicsBytes(uint32_t stage, uint32_t index, uint64_t length);
+  void SaveShaderInlineData(uint32_t stage, uint32_t index, const rdcarray<byte> &data,
+                            ResourceId encoder);
+  void BindGraphicsBytes(uint32_t stage, uint32_t index, const rdcarray<byte> &data, ResourceId encoder);
   bool SetComputeBufferOffset(uint32_t index, uint64_t offset);
   void SetSamplerLOD(ShaderStage stage, uint32_t index, float minimum, float maximum);
   ResourceId GetComputeTexture(uint32_t index) const;
@@ -162,11 +192,33 @@ public:
   void BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType indexType,
                        uint64_t indexCount = 0);
   void SetIndirectBuffer(ResourceId id, uint64_t offset, uint64_t size);
-  void SetViewport(const MTL::Viewport &viewport);
-  void SetScissor(const MTL::ScissorRect &scissor);
+  void SetViewport(const MTL::Viewport &viewport, uint32_t count = 1);
+  void SetScissor(const MTL::ScissorRect &scissor, uint32_t count = 1);
   void SetFrontFacingWinding(MTL::Winding winding);
   void SetCullMode(MTL::CullMode cullMode);
   void SetPrimitiveTopology(MTL::PrimitiveType primitiveType);
+  void SetInspectionDepthClip(bool clip) { m_CurrentPipelineState.rasterizer.depthClip = clip; }
+  void SetInspectionDepthBias(float bias, float slope, float clamp)
+  {
+    m_CurrentPipelineState.rasterizer.depthBias = bias;
+    m_CurrentPipelineState.rasterizer.slopeScaledDepthBias = slope;
+    m_CurrentPipelineState.rasterizer.depthBiasClamp = clamp;
+  }
+  void SetInspectionFillMode(FillMode mode) { m_CurrentPipelineState.rasterizer.fillMode = mode; }
+  void SetInspectionBlendFactor(float red, float green, float blue, float alpha)
+  {
+    float values[] = {red, green, blue, alpha};
+    memcpy(m_CurrentPipelineState.blendFactor, values, sizeof(values));
+  }
+  void SetInspectionPatchControlPoints(uint32_t count)
+  {
+    m_CurrentPipelineState.patchControlPoints = count;
+    m_CurrentPipelineState.topology = Topology(uint32_t(Topology::PatchList_1CPs) + count - 1);
+  }
+  void SetInspectionTessellationBuffer(ResourceId id, uint64_t offset, uint64_t stride);
+  void SetInspectionTessellationScale(float scale) { m_CurrentPipelineState.tessellationFactorScale = scale; }
+  void SetInspectionViewports(const rdcarray<MTL::Viewport> &viewports);
+  void SetInspectionScissors(const rdcarray<MTL::ScissorRect> &scissors);
   rdcarray<BufferDescription> GetBuffers() { return m_Buffers; }
   BufferDescription GetBuffer(ResourceId id);
   rdcarray<TextureDescription> GetTextures() { return m_Textures; }
@@ -176,11 +228,8 @@ public:
   rdcarray<ShaderEntryPoint> GetShaderEntryPoints(ResourceId shader);
   const ShaderReflection *GetShader(ResourceId pipeline, ResourceId shader,
                                     ShaderEntryPoint entry);
-  rdcarray<rdcstr> GetDisassemblyTargets(bool withPipeline) { return {}; }
-  rdcstr DisassembleShader(ResourceId pipeline, const ShaderReflection *refl, const rdcstr &target)
-  {
-    return "; Metal shader disassembly is not implemented.";
-  }
+  rdcarray<rdcstr> GetDisassemblyTargets(bool withPipeline);
+  rdcstr DisassembleShader(ResourceId pipeline, const ShaderReflection *refl, const rdcstr &target);
   rdcarray<EventUsage> GetUsage(ResourceId id);
 
   void SetPipelineStates(D3D11Pipe::State *d3d11, D3D12Pipe::State *d3d12, GLPipe::State *gl,
@@ -196,16 +245,14 @@ public:
                                                     const rdcarray<DescriptorRange> &ranges);
   rdcarray<DescriptorAccess> GetDescriptorAccess(uint32_t eventId);
   rdcarray<DescriptorLogicalLocation> GetDescriptorLocations(ResourceId descriptorStore,
-                                                             const rdcarray<DescriptorRange> &ranges)
-  {
-    return {};
-  }
+                                                             const rdcarray<DescriptorRange> &ranges);
 
   FrameRecord &WriteFrameRecord() { return m_FrameRecord; }
   FrameRecord GetFrameRecord() { return m_FrameRecord; }
   void AddEvent(uint32_t chunkIndex, uint64_t fileOffset);
   uint32_t GetNextEventID() const { return m_NextEventID; }
   void AddAction(const ActionDescription &action);
+  void ResolveSubmissionBindlessUsage(ResourceId commandBuffer);
   void AddDebugGroup(const NS::String *label, ActionFlags flag);
   bool RegisterComputeIndirectAction(uint32_t eventId, ResourceId buffer, uint64_t offset,
                                      MTL::ComputeCommandEncoder *encoder,
@@ -225,15 +272,18 @@ public:
   void BeginMultiAction(uint32_t childCount);
   uint32_t GetMultiActionEndEvent(uint32_t eventId) const;
   void AddUsage(ResourceId id, ResourceUsage usage);
+  void AddUsage(ResourceId id, ResourceUsage usage, uint32_t eventId);
   void AddRenderPassLoadUsage(const RDMTL::RenderPassDescriptor &descriptor);
   void AddRenderPassStoreUsage(const RDMTL::RenderPassDescriptor &descriptor);
   const APIEvent *GetEvent(uint32_t eventId) const;
   uint64_t GetNextEventOffset(uint32_t eventId, uint64_t frameSize) const;
+  void GetSubmissionReplayPrefix(ResourceId owner, uint32_t eventId, bool withoutDraw,
+                                 std::set<uint64_t> &chunks, uint64_t &endOffset) const;
 
   RDResult ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBuffers);
   void ReplayLog(uint32_t endEventID, ReplayLogType replayType);
   SDFile *GetStructuredFile();
-  rdcarray<uint32_t> GetPassEvents(uint32_t eventId) { return {eventId}; }
+  rdcarray<uint32_t> GetPassEvents(uint32_t eventId);
 
   void InitPostVSBuffers(uint32_t eventId) {}
   void InitPostVSBuffers(const rdcarray<uint32_t> &passEvents) {}
@@ -251,10 +301,11 @@ public:
   void BuildTargetShader(ShaderEncoding sourceEncoding, const bytebuf &source, const rdcstr &entry,
                          const ShaderCompileFlags &compileFlags, ShaderStage type, ResourceId &id,
                          rdcstr &errors);
-  rdcarray<ShaderEncoding> GetTargetShaderEncodings() { return {}; }
+  rdcarray<ShaderEncoding> GetTargetShaderEncodings()
+  { return {ShaderEncoding::MSL, ShaderEncoding::MetalLib, ShaderEncoding::MetalAIRAsm}; }
   void ReplaceResource(ResourceId from, ResourceId to);
   void RemoveReplacement(ResourceId id);
-  void FreeTargetResource(ResourceId id) {}
+  void FreeTargetResource(ResourceId id);
   void ClearReplayCache() {}
   void ReloadShaderDebugInformation() {}
 
@@ -303,10 +354,7 @@ public:
   rdcarray<ShaderDebugState> ContinueDebug(ShaderDebugger *debugger) { return {}; }
   void FreeDebugger(ShaderDebugger *debugger) {}
   ResourceId RenderOverlay(ResourceId texid, FloatVector clearCol, DebugOverlay overlay,
-                           uint32_t eventId, const rdcarray<uint32_t> &passEvents)
-  {
-    return ResourceId();
-  }
+                           uint32_t eventId, const rdcarray<uint32_t> &passEvents);
   bool IsRenderOutput(ResourceId id);
   void FileChanged() {}
   bool NeedRemapForFetch(const ResourceFormat &format) { return false; }
@@ -353,7 +401,7 @@ public:
   ResourceId ApplyCustomShader(TextureDisplay &display) { return ResourceId(); }
   void FreeCustomShader(ResourceId id) {}
   void RenderCheckerboard(FloatVector dark, FloatVector light);
-  void RenderHighlightBox(float w, float h, float scale) {}
+  void RenderHighlightBox(float w, float h, float scale);
   uint32_t PickVertex(uint32_t eventId, int32_t width, int32_t height, const MeshDisplay &cfg,
                       uint32_t x, uint32_t y)
   {
@@ -361,6 +409,15 @@ public:
   }
 
 private:
+  struct TemporalScalerReplay
+  {
+    void *object = NULL;
+    rdcarray<uint64_t> parameters;
+    rdcarray<float> values;
+    bool historyUnavailable = false;
+  };
+  std::map<ResourceId, TemporalScalerReplay> m_TemporalScalers;
+
   struct OutputWindow
   {
     CA::MetalLayer *layer = NULL;
@@ -372,8 +429,13 @@ private:
   bool InitialiseOutputResources();
   bool ResizeOutputWindow(OutputWindow &output, int32_t width, int32_t height);
   bool ReadTextureSubresource(MTL::Texture *texture, const Subresource &sub, bytebuf &data, ResourceId id);
+  bool ReadTextureInspection(ResourceId id, const Subresource &sub, CompType typeCast,
+                             bytebuf &data, ResourceFormat &format, uint32_t &stride,
+                             size_t &offset, size_t &count);
+  void RenderOutputBackground(FloatVector dark, FloatVector light, float w, float h, float scale);
   bool RenderTextureInternal(MTL::Texture *source, MTL::Texture *target, TextureDisplay cfg,
-                             MTL::LoadAction loadAction, MTL::ClearColor clearColor);
+                             MTL::LoadAction loadAction, MTL::ClearColor clearColor,
+                             uint32_t displayWidth = 0, uint32_t displayHeight = 0);
   void AddShaderBindings(ResourceId shader, NS::Array *arguments);
 
   WrappedMTLDevice *m_pDriver = NULL;
@@ -406,6 +468,11 @@ private:
   rdcarray<PendingRenderIndirectAction> m_PendingRenderIndirectActions;
   std::map<ResourceId,uint32_t> m_LoadRenderIndirectOrdinals;
   std::map<ResourceId,rdcarray<MetalIndirectWriteFootprint>> m_RenderIndirectWrites;
+  void AppendAction(ActionDescription &action);
+  bool BakeSubmissionEvents();
+  std::map<uint32_t, ResourceId> m_ActionEncoderContexts;
+  std::map<ResourceId, rdcarray<uint32_t>> m_SubmissionBindlessEvents;
+  std::set<uint64_t> m_FrameChunkOffsets;
   rdcarray<APIEvent> m_PendingEvents;
   rdcarray<APIEvent> m_Events;
   std::map<ResourceId, rdcarray<EventUsage>> m_ResourceUses;
@@ -414,7 +481,11 @@ private:
   uint32_t m_LastActionEventID = 0;
   uint32_t m_MultiActionChildrenRemaining = 0;
   std::map<uint32_t, uint32_t> m_MultiActionEndEvents;
+  std::map<uint32_t, ActionFlags> m_EventActionFlags;
+  std::map<uint32_t, ResourceId> m_EventRenderPass;
+  std::map<ResourceId, rdcarray<uint32_t>> m_RenderPassEvents;
   std::map<ResourceId, rdcarray<uint32_t>> m_DebugGroupPaths;
+  std::map<uint32_t, uint32_t> m_ContinuationEvents;
 
   rdcarray<ResourceDescription> m_Resources;
   std::map<ResourceId, size_t> m_ResourceIdx;
@@ -428,8 +499,21 @@ private:
   };
   std::map<ResourceId, TextureViewSourceInitial> m_TextureViewSourceInitial;
   std::map<ResourceId, ResourceId> m_BufferTextureSources;
+  std::map<ResourceId, bytebuf> m_LibraryBinaries;
+  std::map<ResourceId, ResourceId> m_ShaderLibraries;
+  std::map<ResourceId, rdcstr> m_LibraryDisassembly;
+  using GraphicsInlineData = std::map<rdcpair<uint32_t, uint32_t>, EncoderReplayState::InlineData>;
+  GraphicsInlineData m_CurrentGraphicsInlineData, m_SelectedGraphicsInlineData;
+  std::map<uint32_t, GraphicsInlineData> m_EventGraphicsInlineData;
+  struct BindlessDescriptor { DescriptorAccess access; Descriptor descriptor; };
+  rdcarray<BindlessDescriptor> m_SelectedBindlessDescriptors;
+  void ResolveUniformBindlessAccess(bool cpuOnly = false);
+  void AddBindlessUsage(uint32_t eventId);
+  void AppendExtendedDescriptorAccess(rdcarray<DescriptorAccess> &ret) const;
   std::map<ResourceId, rdcstr> m_LibrarySources;
   std::map<ResourceId, ShaderReflection> m_Shaders;
+  std::map<ResourceId, MetalPipe::Shader> m_ShaderFeatures;
+  std::map<ResourceId, MTL::StorageMode> m_TextureStorage;
 
   struct ShaderBindingUsage
   {
@@ -441,8 +525,23 @@ private:
   };
   std::map<ResourceId, ShaderBindingUsage> m_ShaderBindingUsage;
 
+  struct ShaderPipelineTemplate
+  {
+    NS::Object *descriptor = NULL;
+    uint32_t kind = 0; // 0 render, 1 compute, 2 mesh, 3 tile
+  };
+  std::map<ResourceId, ShaderPipelineTemplate> m_ShaderPipelineTemplates;
+  std::map<ResourceId, rdcarray<ShaderSourceFile>> m_LibraryDebugSources;
+  std::map<ResourceId, MTL::Function *> m_FunctionObjects;
+  std::map<ResourceId, MetalFunctionSnapshot> m_FunctionSpecializations;
+  std::map<ResourceId, MTL::Library *> m_TargetShaderLibraries;
+  std::map<ResourceId, ResourceId> m_ShaderReplacements, m_DerivedShaderPipelines;
+  bool RefreshShaderReplacements(rdcstr &errors, bool publish = true);
+  void ReleaseShaderPipeline(ResourceId id);
+
   struct RenderPipelineInfo
   {
+    RDMTL::RenderPipelineDescriptor descriptor;
     ResourceId vertexFunction;
     ResourceId fragmentFunction;
     RDMTL::VertexDescriptor vertexDescriptor;
@@ -459,6 +558,7 @@ private:
   std::map<ResourceId, bool> m_ShaderIndirectReadOnly;
   std::map<ResourceId, ResourceId> m_TilePipelines;
   std::map<ResourceId, ResourceId> m_MeshPipelines;
+  std::map<ResourceId, ResourceId> m_ObjectPipelines;
   std::map<ResourceId, ResourceId> m_ComputePipelines;
   std::map<ResourceId, std::set<uint32_t>> m_ComputeReadOnlyBuffers;
   std::map<ResourceId, std::map<uint32_t, rdcpair<uint64_t, uint64_t>>> m_ComputeBufferMinimums;
@@ -489,11 +589,24 @@ private:
   typedef std::map<uint32_t, rdcpair<float, float>> SamplerLODOverrides;
   SamplerLODOverrides m_CurrentSamplerLOD, m_SelectedSamplerLOD;
   rdcarray<uint32_t> m_CurrentVertexAttributeStrides;
+  uint32_t m_CurrentViewportCount = 1, m_CurrentScissorCount = 1;
   std::map<uint32_t, SamplerLODOverrides> m_EventSamplerLOD;
   MetalPipe::State *m_MetalPipelineState = NULL;
 
   MTL::CommandQueue *m_OutputQueue = NULL;
+  ResourceId m_OverlayTexture;
+  MTL::Texture *GetOverlayTexture(const TextureDescription &target);
+  ResourceId RenderGeometryOverlay(ResourceId texid, DebugOverlay overlay, uint32_t eventId,
+                                const rdcarray<uint32_t> &passEvents);
+  ResourceId RenderDepthExportOverlay(ResourceId texid, uint32_t eventId,
+                                      WrappedMTLRenderCommandEncoder *source);
+  ResourceId RenderClearBefore(ResourceId texid, FloatVector clearCol, DebugOverlay overlay,
+                               uint32_t eventId, const rdcarray<uint32_t> &passEvents);
+  bool m_OverlayNeedsFullReplay = false;
+  uint32_t m_ClearBeforeCompletedEvent = 0;
   MTL::RenderPipelineState *m_OutputPipeline = NULL;
+  MTL::RenderPipelineState *m_RawOutputPipeline = NULL;
+  MTL::RenderPipelineState *m_BackgroundPipeline = NULL;
   MTL::RenderPipelineState *m_MeshPipeline = NULL;
   std::map<uint64_t, OutputWindow> m_OutputWindows;
   uint64_t m_NextOutputWindowID = 1;

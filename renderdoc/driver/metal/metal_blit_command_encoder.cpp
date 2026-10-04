@@ -270,20 +270,17 @@ bool WrappedMTLBlitCommandEncoder::Serialise_insertDebugSignpost(SerialiserType 
   SERIALISE_ELEMENT(string).Important();
 
   SERIALISE_CHECK_READ_ERRORS();
-  if(IsLoading(m_State))
-  {
-    AddEvent();
-    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::SetMarker);
-  }
-
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
        !BlitCommandEncoder->m_Real ||
        BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
       return false;
-
+  }
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::SetMarker);
   }
   return true;
 }
@@ -317,21 +314,19 @@ bool WrappedMTLBlitCommandEncoder::Serialise_pushDebugGroup(SerialiserType &ser,
   SERIALISE_ELEMENT(string).Important();
 
   SERIALISE_CHECK_READ_ERRORS();
-  if(IsLoading(m_State))
-  {
-    AddEvent();
-    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::PushMarker);
-  }
-
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
        !BlitCommandEncoder->m_Real ||
        BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
       return false;
-
   }
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::PushMarker);
+  }
+
   return true;
 }
 
@@ -363,21 +358,19 @@ bool WrappedMTLBlitCommandEncoder::Serialise_popDebugGroup(SerialiserType &ser)
   SERIALISE_ELEMENT_LOCAL(BlitCommandEncoder, this);
 
   SERIALISE_CHECK_READ_ERRORS();
-  if(IsLoading(m_State))
-  {
-    AddEvent();
-    m_Device->GetReplay()->AddDebugGroup(NULL, ActionFlags::PopMarker);
-  }
-
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
        !BlitCommandEncoder->m_Real ||
        BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
       return false;
-
   }
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(NULL, ActionFlags::PopMarker);
+  }
+
   return true;
 }
 
@@ -419,7 +412,6 @@ bool WrappedMTLBlitCommandEncoder::Serialise_synchronizeResource(SerialiserType 
        !BlitCommandEncoder->m_Real ||
        BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
       return false;
-
   }
   return true;
 }
@@ -1242,7 +1234,6 @@ bool WrappedMTLBlitCommandEncoder::Serialise_getTextureAccessCounters(
        !BlitCommandEncoder->m_Real ||
        BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
       return false;
-
   }
   return true;
 }
@@ -1296,7 +1287,6 @@ bool WrappedMTLBlitCommandEncoder::Serialise_resetTextureAccessCounters(Serialis
        !BlitCommandEncoder->m_Real ||
        BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
       return false;
-
   }
   return true;
 }
@@ -1690,7 +1680,6 @@ bool WrappedMTLBlitCommandEncoder::Serialise_sampleCountersInBuffer(
        !BlitCommandEncoder->m_Real ||
        BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
       return false;
-
   }
   return false;
 }

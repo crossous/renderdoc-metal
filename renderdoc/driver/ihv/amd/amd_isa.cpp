@@ -154,6 +154,9 @@ static bool IsSupported(ShaderEncoding encoding)
 
 void CacheSupport(GraphicsAPI api)
 {
+  // Native metallib/AIR cannot be consumed by the AMD DXBC/DXIL/SPIR-V disassembler.
+  if(api == GraphicsAPI::Metal)
+    return;
   ShaderEncoding primary = ShaderEncoding::SPIRV, secondary = ShaderEncoding::SPIRV;
   GetEncodings(api, primary, secondary);
 
@@ -162,6 +165,8 @@ void CacheSupport(GraphicsAPI api)
 
 void GetTargets(GraphicsAPI api, const DriverInformation &driver, rdcarray<rdcstr> &targets)
 {
+  if(api == GraphicsAPI::Metal)
+    return;
   targets.reserve(asicCount + 1);
 
   ShaderEncoding primary = ShaderEncoding::SPIRV, secondary = ShaderEncoding::SPIRV;

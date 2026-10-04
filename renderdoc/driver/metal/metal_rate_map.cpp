@@ -101,6 +101,10 @@ bool WrappedMTLDevice::Serialise_newRasterizationRateMap(
     }
     WrappedMTLRasterizationRateMap *wrapped = NULL;
     GetResourceManager()->WrapResource(RateMap, real, wrapped, true);
+    wrapped->horizontal.push_back(horizontal);
+    wrapped->vertical.push_back(vertical);
+    wrapped->horizontal.append(extraHorizontal);
+    wrapped->vertical.append(extraVertical);
     AddResource(RateMap, ResourceType::StateObject, "Rasterization Rate Map");
     DerivedResource(this, RateMap);
   }

@@ -464,7 +464,18 @@ void DoSerialise(SerialiserType &ser, RDMTL::RenderPassDescriptor &el)
   SERIALISE_MEMBER(colorAttachments);
   SERIALISE_MEMBER(depthAttachment);
   SERIALISE_MEMBER(stencilAttachment);
-  SERIALISE_MEMBER(visibilityResultBuffer);
+  // Preserve the logical identity even when a frame-created buffer has not
+  // been instantiated during preflight. The serialized field is unchanged.
+  if(ser.IsWriting() || ser.IsStructurising())
+    el.visibilityResultBufferId = GetResID(el.visibilityResultBuffer);
+  ser.Serialise("visibilityResultBuffer"_lit, el.visibilityResultBufferId).TypedAs("MTLBuffer"_lit);
+  if(ser.IsReading())
+  {
+    MetalResourceManager *rm = (MetalResourceManager *)ser.GetUserData();
+    el.visibilityResultBuffer = NULL;
+    if(rm && !IsStructuredExporting(rm->GetState()))
+      el.visibilityResultBuffer = (WrappedMTLBuffer *)rm->GetResource(el.visibilityResultBufferId, true);
+  }
   SERIALISE_MEMBER(renderTargetArrayLength);
   SERIALISE_MEMBER(imageblockSampleLength);
   SERIALISE_MEMBER(threadgroupMemoryLength);

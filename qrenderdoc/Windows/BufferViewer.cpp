@@ -5565,7 +5565,8 @@ void BufferViewer::updateLabelsAndLayout()
 
       QString title = QFormatStr("%1 %2 %3")
                           .arg(ToQStr(m_CBufferSlot.stage, pipeType))
-                          .arg(IsD3D(pipeType) ? lit("CB") : lit("UBO"))
+                          .arg(IsD3D(pipeType) || pipeType == GraphicsAPI::Metal ? lit("CB")
+                                                                              : lit("UBO"))
                           .arg(m_CBufferSlot.slot);
 
       if(m_Ctx.CurPipelineState().SupportsResourceArrays() && arraySize > 1)

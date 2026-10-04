@@ -570,6 +570,13 @@ void ShaderViewer::debugShader(const ShaderReflection *shader, ResourceId pipeli
         }
       }
 
+      // Source-created Metal libraries expose captured MSL, not a captured metallib.
+      // Match the initially displayed source to its target label instead of calling it AIR.
+      if(m_ShaderDetails->encoding == ShaderEncoding::MSL)
+        targets.removeIf([](const rdcstr &target) {
+          return target == "Metal AIR (Apple toolchain)" || target == "Metal AIR (editable)";
+        });
+
       rdcstr disasm = r->DisassembleShader(m_Pipeline, m_ShaderDetails, "");
 
       if(!me)
@@ -6418,6 +6425,13 @@ bool ShaderViewer::ProcessIncludeDirectives(QString &source, const rdcstrpairs &
         }
       }
 
+      if(fileText.isEmpty() && currentEncoding() == ShaderEncoding::MSL)
+      {
+        // Keep Metal standard-library includes for the native compiler. Captured user
+        // headers above are expanded; unresolved headers should produce a compiler error.
+        offs = source.indexOf(lit("#include"), lineEnd + 1);
+        continue;
+      }
       if(fileText.isEmpty())
         fileText = QFormatStr("// Can't find file %1\n").arg(fname);
     }
@@ -6508,7 +6522,7 @@ void ShaderViewer::on_refresh_clicked()
     QString source = files[0].second;
 
     if(encoding == ShaderEncoding::HLSL || encoding == ShaderEncoding::Slang ||
-       encoding == ShaderEncoding::GLSL)
+       encoding == ShaderEncoding::GLSL || encoding == ShaderEncoding::MSL)
     {
       rdcarray<rdcstr> allIncluded = {files[0].first};
       bool success = ProcessIncludeDirectives(source, files, allIncluded, {files[0].first});

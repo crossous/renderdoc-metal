@@ -320,6 +320,7 @@ bool WrappedMTLDevice::Serialise_newComputePipelineStateWithDescriptor(
         (uint64_t)MTL::PipelineOptionArgumentInfo | (optionsValue & 4));
     MTL::ComputePipelineState *real = Unwrap(this)->newComputePipelineState(
         realDescriptor, replayOptions, &reflection, &error);
+    if(real) GetReplay()->CacheShaderPipeline(ComputePipelineState, realDescriptor, 1);
     realDescriptor->release();
     if(!real)
     {

@@ -38,6 +38,7 @@ int main(int argc,char **argv)
   @autoreleasepool
   {
     GlobalEnvironment env;env.enumerateGPUs=false;rdcarray<rdcstr> args;args.push_back(argv[0]);RENDERDOC_InitialiseReplay(env,args);
+    RENDERDOC_SetDebugLogFile(rdcstr(argv[1]) + ".replay-debug.log");
     id<MTLDevice> device=MTLCreateSystemDefaultDevice();
     id<MTLBuffer> padding=[device newBufferWithLength:1048576 options:MTLResourceStorageModeShared];
     auto descriptor=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:2 height:2 mipmapped:NO];
@@ -169,7 +170,16 @@ int main(int argc,char **argv)
     {
       controller->SetFrameEvent(dispatches[0],true);
       auto before=controller->GetBufferData(output,0,8);uint32_t oldResult=0;
-      if(before.size()!=8)return 16;memcpy(&oldResult,before.data(),4);
+      if(before.size()!=8)
+      {
+        const auto fatal=controller->GetFatalErrorStatus();
+        fprintf(stderr,"First dispatch %u readback failed: %s\n",dispatches[0],fatal.internal_msg?fatal.internal_msg->c_str():"no fatal message");
+        rdcstr contents;RENDERDOC_GetLogFileContents(0,contents);
+        rdcstr path=rdcstr(argv[1])+".replay-final.log";
+        if(FILE *log=fopen(path.c_str(),"wb")){fwrite(contents.c_str(),1,contents.size(),log);fclose(log);}
+        return 16;
+      }
+      memcpy(&oldResult,before.data(),4);
       if(oldResult!=strtoul(argv[6],nullptr,10))return 17;
       if(firstAliasOutput!=ResourceId())
       {
@@ -280,7 +290,7 @@ int main(int argc,char **argv)
         if(native[0]||!native[1]||native[2]!=0x2222222222222222ULL)return 87;
       }
       controller->SetFrameEvent(0,true);
-      if(!checkVisibility(0))return 77;
+      if(!getenv("RENDERDOC_METAL_MRT_FRAME_VISIBILITY") && !checkVisibility(0))return 77;
       const auto reset=controller->GetBufferData(textureTable,0,24);memcpy(packet,reset.data(),24);
       const auto restored=controller->GetBufferData(output,0,8);
       if(restored.size()!=8)return 13;

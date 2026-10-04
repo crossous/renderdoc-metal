@@ -84,9 +84,12 @@ void MetalHook::RegisterGlobalNonHookedMetalFunctions()
 
 extern void AppleRegisterRealSymbol(const char *functionName, void *address);
 
+extern void RegisterMetalFXHooks();
+
 void MetalHook::RegisterGlobalHookedMetalFunctions()
 {
   RegisterMetalFunctionConstantHooks();
+  RegisterMetalFXHooks();
 #define METAL_FUNC(func)                                     \
   AppleRegisterRealSymbol(STRINGIZE(func), (void *)&::func); \
   LibraryHooks::RegisterFunctionHook(                        \

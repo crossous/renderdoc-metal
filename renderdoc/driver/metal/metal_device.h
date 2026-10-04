@@ -27,11 +27,13 @@
 #include "metal_common.h"
 #include "metal_core.h"
 #include "metal_manager.h"
+#include <functional>
 
 bool ValidateMetalPipelineFunction(WrappedMTLFunction *function, MTL::FunctionType type);
 
 class WrappedMTLDevice;
 class MetalReplay;
+enum class DiscardType : int;
 
 struct MetalDrawableInfo
 {
@@ -304,6 +306,9 @@ public:
 
   CaptureState &GetStateRef() { return m_State; }
   CaptureState GetState() { return m_State; }
+  void CaptureResourceLabel(WrappedMTLObject *resource, NS::String *label);
+  template <typename SerialiserType>
+  bool Serialise_ResourceLabel(SerialiserType &ser, ResourceId resource, rdcstr label);
   MetalResourceManager *GetResourceManager() { return m_ResourceManager; };
   void WaitForGPU();
   Threading::RWLock &GetCaptureTransitionLock() { return m_CapTransitionLock; }
@@ -320,6 +325,38 @@ public:
   }
   void SetReplayVersion(uint64_t sectionVersion) { m_SectionVersion = sectionVersion; }
   SDFile *GetStructuredFile() { return m_StructuredFile; }
+  void CacheReplaySubmissionChunks(const rdcarray<APIEvent> &events);
+  const std::map<uint64_t, ResourceId> &GetReplayChunkOwners() const { return m_ReplayChunkOwners; }
+  const rdcarray<ResourceId> &GetReplaySubmissionOrder() const { return m_DescriptorSubmissionOrder; }
+
+  bool BeginOverlayReplayPrefix(ResourceId encoder);
+  bool PreserveOverlayPass(ResourceId encoder) const { return encoder == m_OverlayPreservePass; }
+  bool IsOverlayReplayEncoder(WrappedMTLRenderCommandEncoder *encoder) const
+  {
+    return encoder && encoder == m_OverlayReplayEncoder;
+  }
+  bool IsOverlayPipelineOverride(WrappedMTLRenderCommandEncoder *encoder) const
+  {
+    return IsOverlayReplayEncoder(encoder) && !m_OverlayReplayOriginalPipeline;
+  }
+  bool FinishOverlayReplayPrefix(ResourceId encoder);
+  bool ReplayOverlayDraw(uint32_t eventId, MTL::RenderCommandEncoder *nativeEncoder,
+                         const std::function<void(MTL::RenderCommandEncoder *)> &prepare,
+                         bool originalPipeline = false);
+  RDResult ReplayClearBeforePass(uint32_t eventId, ResourceId encoder, FloatVector color,
+                                double depthClear);
+  void ApplyReplayPassClear(ResourceId encoder, MTL::RenderPassDescriptor *descriptor) const;
+  void SetReplayOptions(const ReplayOptions &options) { m_ReplayOptions = options; }
+  void *m_ReplayDiscardDrawState = NULL;
+  void ReleaseReplayDiscardResources();
+  bool FillReplayRenderDiscard(MTL::CommandBuffer *command, MTL::Texture *texture,
+                               uint64_t level, uint64_t slice, uint64_t layers,
+                               DiscardType type, unsigned aspect);
+  void ApplyReplayLoadDiscards(MTL::CommandBuffer *command, MTL::RenderPassDescriptor *descriptor);
+  void ApplyReplayStoreDiscards(MTL::CommandBuffer *command,
+                               const RDMTL::RenderPassDescriptor &descriptor);
+  void FinaliseReplayStores(MTL::RenderCommandEncoder *encoder, bool partial);
+  void FinaliseReplayStores(MTL::ParallelRenderCommandEncoder *encoder, bool partial);
   SDFile *DetachStructuredFile()
   {
     SDFile *file = m_StoredStructuredData;
@@ -438,7 +475,6 @@ public:
   }
   bool HasValidatedSourcedComputeDispatch(ResourceId encoder) const
   { return m_DescriptorCoverage >= 39 && m_DescriptorValidatedComputeResources.count(encoder) != 0; }
-  void AddValidatedSourcedComputeUsage(ResourceId encoder);
   void SaveDescriptorHistoryChunk(ResourceId buffer, Chunk *chunk);
   void SnapshotDescriptorHistory();
   void ClearDescriptorHistorySnapshot();
@@ -446,6 +482,8 @@ public:
   // full-entry typed GPU copy, preserving actual GPU destination writes.
   // Full UE coverage is deliberately not declared by the provider.
   struct DescriptorSource { ResourceId resource; uint64_t offset = 0; };
+  bool IsDescriptorGPUWritten(ResourceId buffer) const
+  { return m_DescriptorGPUWrittenBuffers.count(buffer) != 0; }
   struct DescriptorSlotShadow
   {
     uint64_t generation = 0;
@@ -459,6 +497,7 @@ public:
   };
   using DescriptorSlotKey = rdcpair<ResourceId, uint64_t>;
   std::map<DescriptorSlotKey, DescriptorSlotShadow> m_DescriptorSlotShadow, m_DescriptorSlotInitial;
+  std::map<ResourceId, std::set<DescriptorSlotKey>> m_DescriptorSubmissionSlots;
   std::set<DescriptorSlotKey> m_CapturedLiveDescriptorSlots;
   std::map<DescriptorSlotKey, std::map<uint32_t, ResourceId>> m_CapturedDescriptorSlotSources;
   std::set<ResourceId> m_CaptureRetiredDescriptorBackings;
@@ -491,9 +530,10 @@ public:
   std::map<ResourceId, uint32_t> m_DescriptorDispatches;
   bool TrackDescriptorGPUCopy(ResourceId source, uint64_t sourceOffset,
       ResourceId destination, uint64_t destinationOffset, uint64_t size);
-  bool OverlayDescriptorSlotBuffer(ResourceId buffer, bool initialRestore = false);
+  bool OverlayDescriptorSlotBuffer(ResourceId buffer, bool initialRestore = false,
+                                   uint64_t start = 0, uint64_t size = ~0ULL);
   bool IsRetiredDescriptorBacking(ResourceId buffer) const;
-  bool OverlayAliasedDescriptorTables(ResourceId buffer);
+  bool OverlayAliasedDescriptorTables(ResourceId buffer, uint64_t start = 0, uint64_t size = ~0ULL);
   bool PrepareDescriptorSlotShadow();
   bool ValidateDescriptorSlotFrame();
   bool RelocateGraphicsDescriptorBytes(ResourceId encoder, uint32_t stage, uint64_t index,
@@ -595,6 +635,7 @@ public:
   bool EnqueueReplayCommandBuffer(WrappedMTLCommandBuffer *buffer);
   bool IsReplayCommandBufferCommitted(WrappedMTLCommandBuffer *buffer) const;
   bool WaitReplayCommandBuffer(WrappedMTLCommandBuffer *buffer, const char *reason = "captured CPU wait");
+  bool WaitForShaderReplacement() { return FinishReplayCommands(); }
   bool ReplayCPUBufferUpdate(WrappedMTLBuffer *buffer, uint64_t start, const bytebuf &data,
       bool submissionSnapshot = false);
   bool RecordReplayBufferInitialContents(ResourceId id, const bytebuf &contents);
@@ -619,7 +660,7 @@ public:
   bool RestoreReplayTextureInitialContents();
   WrappedMTLRenderCommandEncoder *GetReplayRenderCommandEncoder() const
   {
-    return m_ReplayRenderCommandEncoder;
+    return m_OverlayReplayEncoder ? m_OverlayReplayEncoder : m_ReplayRenderCommandEncoder;
   }
   WrappedMTLRenderCommandEncoder *GetReplayRenderCommandEncoder(
       WrappedMTLRenderCommandEncoder *encoder);
@@ -728,6 +769,13 @@ private:
   Threading::CriticalSection m_CapturedFrameResourcesLock;
   std::set<ResourceId> m_CapturedFrameResources;
   std::map<ResourceId, WrappedMTLHeap *> m_FramePlacementResources;
+  // Ordinary frame buffers have no descriptor preflight metadata. Retain their validated
+  // creation bounds and position after releasing the native allocation for an event seek.
+  struct ReplayStandaloneBufferBirth
+  {
+    uint64_t length, options, chunkOffset;
+  };
+  std::map<ResourceId, ReplayStandaloneBufferBirth> m_ReplayStandaloneBufferBirths;
   std::set<ResourceId> m_ReplayAliasableResources;
   std::set<ResourceId> m_FrameBufferTextureViews;
   ResourceId m_LastPresentedImage;
@@ -757,6 +805,7 @@ private:
   WrappedMTLIndirectRenderCommand *m_DummyReplayIndirectRenderCommand = NULL;
 
   MetalReplay *m_Replay = NULL;
+  ReplayOptions m_ReplayOptions;
 
   // Back buffer and swap chain emulation
   Threading::CriticalSection m_CapturePotentialBackBuffersLock;
@@ -828,6 +877,14 @@ private:
   std::map<ResourceId, PartialCopySubmissionPlan> m_DescriptorPartialCopySubmissions;
   std::map<ResourceId, uint64_t> m_DescriptorFrameBufferBirthOffsets;
   rdcarray<ResourceId> m_DescriptorSubmissionOrder;
+  std::map<uint64_t, ResourceId> m_ReplayChunkOwners;
+  ResourceId m_OverlayPreservePass;
+  WrappedMTLRenderCommandEncoder *m_OverlayReplayEncoder = NULL;
+  bool m_OverlayReplayOriginalPipeline = false;
+  ResourceId m_ClearBeforePass;
+  FloatVector m_ClearBeforeColor;
+  double m_ClearBeforeDepth = -1.0;
+  std::map<ResourceId, uint64_t> m_ReplaySubmissionEndOffsets;
   std::map<ResourceId, rdcarray<CPUBufferUpdate>> m_ReplayCPUBufferUpdates;
   rdcarray<CPUBufferUpdate> m_PendingReplayCPUBufferUpdates;
   std::map<ResourceId, bytebuf> m_ReplayBufferInitialContents;

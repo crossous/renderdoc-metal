@@ -53,6 +53,57 @@
 #include <unistd.h>
 
 template <typename SerialiserType>
+bool WrappedMTLDevice::Serialise_ResourceLabel(SerialiserType &ser, ResourceId resource,
+                                            rdcstr label)
+{
+  SERIALISE_ELEMENT(resource).Important();
+  SERIALISE_ELEMENT(label).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    WrappedMTLObject *object = GetResourceManager()->GetResource(resource, true);
+    if(!object || (object->m_Type != eResTexture && object->m_Type != eResBuffer))
+      return false;
+    ResourceDescription &description = GetReplay()->GetResourceDesc(resource);
+    // Match D3D12 SetName: the capture's application name is distinct from its generated ID.
+    if(!label.empty()) description.SetCustomName(label);
+    AddResourceCurChunk(description);
+  }
+  return true;
+}
+
+void WrappedMTLDevice::CaptureResourceLabel(WrappedMTLObject *resource, NS::String *label)
+{
+  SCOPED_READLOCK(GetCaptureTransitionLock());
+  SCOPED_LOCK(GetCaptureSubmissionLock());
+  if(!IsCaptureMode(m_State) || !resource || !GetRecord(resource)) return;
+  CACHE_THREAD_SERIALISER();
+  SCOPED_SERIALISE_CHUNK(MetalChunk::MTLResource_setLabel);
+  Serialise_ResourceLabel(ser, GetResID(resource),
+                         label && label->utf8String() ? rdcstr(label->utf8String()) : rdcstr());
+  MetalResourceRecord *record = GetRecord(resource);
+  // Names belong to resource initialisation, as in D3D12, rather than GPU actions. Collapse
+  // consecutive updates without dropping any intervening resource operations.
+  record->LockChunks();
+  while(record->HasChunks() &&
+        record->GetLastChunk()->GetChunkType<MetalChunk>() == MetalChunk::MTLResource_setLabel)
+  {
+    record->GetLastChunk()->Delete();
+    record->PopChunk();
+  }
+  record->UnlockChunks();
+  Chunk *chunk = scope.Get();
+  record->AddChunk(chunk);
+  // Frame-born placement resource records are omitted from the initialisation prefix. Their
+  // label must follow their frame creation; retain the record too for subsequent captures.
+  if(IsActiveCapturing(m_State) && IsCapturedFrameResource(GetResID(resource)))
+    AddFrameCaptureRecordChunk(chunk->Duplicate());
+}
+
+template bool WrappedMTLDevice::Serialise_ResourceLabel(ReadSerialiser &, ResourceId, rdcstr);
+template bool WrappedMTLDevice::Serialise_ResourceLabel(WriteSerialiser &, ResourceId, rdcstr);
+
+template <typename SerialiserType>
 bool WrappedMTLDevice::Serialise_newFence(SerialiserType &ser, WrappedMTLFence *fence)
 {
   SERIALISE_ELEMENT_LOCAL(Fence, GetResID(fence)).TypedAs("MTLFence"_lit);
@@ -537,6 +588,7 @@ WrappedMTLDevice::~WrappedMTLDevice()
      m_ReplayBlitCommandEncoder || m_ReplayAccelerationStructureCommandEncoder ||
      m_ReplayParallelRenderCommandEncoder)
     FinishReplayCommands();
+  ReleaseReplayDiscardResources();
   SAFE_DELETE(m_FrameReader);
   SAFE_DELETE(m_DummyReplayArgumentEncoder);
   SAFE_DELETE(m_DummyReplayIndirectRenderCommand);
@@ -839,6 +891,7 @@ bool WrappedMTLDevice::Serialise_newDefaultLibrary(SerialiserType &ser, WrappedM
     WrappedMTLLibrary *wrappedMTLLibrary;
     GetResourceManager()->WrapResource(Library, realMTLLibrary, wrappedMTLLibrary, true);
     AddResource(Library, ResourceType::Pool, "Library");
+    GetReplay()->AddShaderBinary(Library, data);
     DerivedResource(this, Library);
   }
   return true;
@@ -1100,7 +1153,12 @@ bool WrappedMTLDevice::Serialise_newBufferWithBytes(SerialiserType &ser, Wrapped
       GetReplay()->AddBuffer(Buffer, length);
       DerivedResource(this, Buffer);
     }
-    if(frameBuffer) RegisterFramePlacementResource(Buffer, NULL);
+    if(frameBuffer)
+    {
+      RegisterFramePlacementResource(Buffer, NULL);
+      if(IsLoading(m_State))
+        m_ReplayStandaloneBufferBirths[Buffer] = {length, uint64_t(options), m_CurChunkOffset};
+    }
   }
   return true;
 }
@@ -1482,6 +1540,8 @@ bool WrappedMTLDevice::Serialise_newRenderPipelineStateWithDescriptor(
     MTL::AutoreleasedRenderPipelineReflection pipelineReflection = NULL;
     MTL::RenderPipelineState *realMTLRenderPipelineState = Unwrap(this)->newRenderPipelineState(
         mtlDescriptor, MTL::PipelineOptionArgumentInfo, &pipelineReflection, error);
+    if(realMTLRenderPipelineState)
+      GetReplay()->CacheShaderPipeline(RenderPipelineState, mtlDescriptor, 0);
     mtlDescriptor->release();
     if(!realMTLRenderPipelineState)
     {
@@ -1686,6 +1746,7 @@ bool WrappedMTLDevice::Serialise_newTileRenderPipelineState(
     MTL::RenderPipelineState *real = Unwrap(this)->newRenderPipelineState(
         descriptor, (MTL::PipelineOption)(options |
             (uint32_t)MTL::PipelineOptionArgumentInfo), &reflection, &error);
+    if(real) GetReplay()->CacheShaderPipeline(PipelineState, descriptor, 3);
     descriptor->release();
     if(!real)
     {
@@ -1787,7 +1848,7 @@ bool WrappedMTLDevice::Serialise_newMeshRenderPipelineState(
         colorFormats[0] != MTL::PixelFormatRGBA8Unorm) ||
        sampleCount != 1 || !maxMeshThreads || maxMeshThreads > 1024 ||
        maxMeshGrid > 1048575 ||
-       (options & ~((uint32_t)MTL::PipelineOptionArgumentInfo |
+       (options & ~((uint32_t)MTL::PipelineOptionArgumentInfo | (uint32_t)MTL::PipelineOptionBufferTypeInfo |
                     (uint32_t)MTL::PipelineOptionFailOnBinaryArchiveMiss)) != 0)
     {
       RDCERR("Invalid or unsupported Metal mesh pipeline identity or descriptor");
@@ -1834,7 +1895,8 @@ bool WrappedMTLDevice::Serialise_newMeshRenderPipelineState(
     NS::Error *error = NULL;
     MTL::RenderPipelineState *real = Unwrap(this)->newRenderPipelineState(
         desc, (MTL::PipelineOption)(options |
-            (uint32_t)MTL::PipelineOptionArgumentInfo), &reflection, &error);
+            (uint32_t)MTL::PipelineOptionArgumentInfo | (uint32_t)MTL::PipelineOptionBufferTypeInfo), &reflection, &error);
+    if(real) GetReplay()->CacheShaderPipeline(PipelineState, desc, 2);
     desc->release();
     if(!real)
     {
@@ -1846,7 +1908,7 @@ bool WrappedMTLDevice::Serialise_newMeshRenderPipelineState(
     GetResourceManager()->WrapResource(PipelineState, real, wrapped, true);
     AddResource(PipelineState, ResourceType::PipelineState, "Mesh Pipeline State");
     GetReplay()->AddMeshPipeline(PipelineState, GetResID(meshFunction),
-                                 GetResID(fragmentFunction), (uint32_t)sampleCount, reflection);
+                                 GetResID(fragmentFunction), (uint32_t)sampleCount, reflection, colorFormats);
     DerivedResource(meshFunction, PipelineState);
     DerivedResource(fragmentFunction, PipelineState);
     for(WrappedMTLBinaryArchive *archive : binaryArchives)
@@ -1942,7 +2004,7 @@ bool WrappedMTLDevice::Serialise_newObjectMeshPipelineState(
         colorFormats[0] != MTL::PixelFormatRGBA8Unorm) ||
        sampleCount != 1 || maxObjectThreads != 32 || !maxMeshThreads ||
        maxMeshThreads > 1024 || payloadLength != 16 || maxMeshGrid != 1 ||
-       (options & ~(uint32_t)MTL::PipelineOptionArgumentInfo) != 0)
+       (options & ~((uint32_t)MTL::PipelineOptionArgumentInfo | (uint32_t)MTL::PipelineOptionBufferTypeInfo)) != 0)
     {
       RDCERR("Invalid or unsupported Metal object/mesh pipeline descriptor");
       return false;
@@ -1967,7 +2029,8 @@ bool WrappedMTLDevice::Serialise_newObjectMeshPipelineState(
     MTL::AutoreleasedRenderPipelineReflection reflection = NULL;
     NS::Error *error = NULL;
     MTL::RenderPipelineState *real = Unwrap(this)->newRenderPipelineState(
-        desc, MTL::PipelineOptionArgumentInfo, &reflection, &error);
+        desc, (MTL::PipelineOption)(MTL::PipelineOptionArgumentInfo | MTL::PipelineOptionBufferTypeInfo), &reflection, &error);
+    if(real) GetReplay()->CacheShaderPipeline(PipelineState, desc, 2);
     desc->release();
     if(!real)
     {
@@ -1979,7 +2042,8 @@ bool WrappedMTLDevice::Serialise_newObjectMeshPipelineState(
     GetResourceManager()->WrapResource(PipelineState, real, wrapped, true);
     AddResource(PipelineState, ResourceType::PipelineState, "Object/Mesh Pipeline State");
     GetReplay()->AddMeshPipeline(PipelineState, GetResID(meshFunction),
-                                 GetResID(fragmentFunction), (uint32_t)sampleCount, reflection);
+                                 GetResID(fragmentFunction), (uint32_t)sampleCount, reflection, colorFormats,
+                                 GetResID(objectFunction));
     DerivedResource(objectFunction, PipelineState);
     DerivedResource(meshFunction, PipelineState);
     DerivedResource(fragmentFunction, PipelineState);
@@ -2024,6 +2088,10 @@ bool WrappedMTLDevice::Serialise_newComputePipelineStateWithFunction(
       RDCERR("Failed to recreate Metal compute pipeline");
       return false;
     }
+    MTL::ComputePipelineDescriptor *editDescriptor = MTL::ComputePipelineDescriptor::alloc()->init();
+    editDescriptor->setComputeFunction(Unwrap(computeFunction));
+    GetReplay()->CacheShaderPipeline(ComputePipelineState, editDescriptor, 1);
+    editDescriptor->release();
     WrappedMTLComputePipelineState *wrappedPipeline;
     GetResourceManager()->WrapResource(ComputePipelineState, realPipeline, wrappedPipeline, true);
     AddResource(ComputePipelineState, ResourceType::PipelineState, "Compute Pipeline State");
@@ -2086,6 +2154,17 @@ bool WrappedMTLDevice::Serialise_newTextureWithDescriptor(SerialiserType &ser,
       descriptor.usage = (MTL::TextureUsage)(descriptor.usage | MTL::TextureUsageShaderRead);
 
     MTL::TextureDescriptor *mtlDescriptor(descriptor);
+    // Debugger-created transfers/inspection need resource dependencies even
+    // when the application opted out of automatic tracking. Preserve captured
+    // fences; strengthen tracking only on this standalone replay allocation.
+    // Heap allocations keep their separately validated heap tracking contract.
+    if(descriptor.hazardTrackingMode == MTL::HazardTrackingModeUntracked)
+      mtlDescriptor->setHazardTrackingMode(MTL::HazardTrackingModeTracked);
+    // Like Vulkan's non-transient debug allocations, give transient targets
+    // backing memory so partial replay and discard diagnostics can preserve them.
+    // Captured load/store/resolve operations and ResourceIds remain unchanged.
+    if(descriptor.storageMode == MTL::StorageModeMemoryless)
+      mtlDescriptor->setStorageMode(MTL::StorageModePrivate);
     MTL::Texture *realMTLTexture = Unwrap(this)->newTexture(mtlDescriptor);
     mtlDescriptor->release();
     if(!realMTLTexture) return false;
@@ -2094,7 +2173,7 @@ bool WrappedMTLDevice::Serialise_newTextureWithDescriptor(SerialiserType &ser,
         GetResourceManager()->WrapResource(Texture, realMTLTexture, wrappedMTLTexture, true);
 
     AddResource(Texture, ResourceType::Texture, "Texture");
-    GetReplay()->AddTexture(Texture, realMTLTexture, false);
+    GetReplay()->AddTexture(Texture, realMTLTexture, false, descriptor.storageMode);
     DerivedResource(this, Texture);
   }
   return true;

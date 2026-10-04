@@ -34,6 +34,8 @@
 #include <QMenu>
 #include <QPainter>
 #include <QPointer>
+#include <QSharedPointer>
+#include <QStandardItemModel>
 #include <QStyledItemDelegate>
 #include "Code/QRDUtils.h"
 #include "Code/Resources.h"
@@ -174,8 +176,10 @@ void Following::GetActionContext(ICaptureContext &ctx, bool &copy, bool &clear, 
   copy = curAction != NULL &&
          (curAction->flags & (ActionFlags::Copy | ActionFlags::Resolve | ActionFlags::Present));
   clear = curAction != NULL && (curAction->flags & ActionFlags::Clear);
+  const MetalPipe::State *metal = ctx.CurPipelineState().GetMetalPipelineState();
   compute = curAction != NULL && (curAction->flags & ActionFlags::Dispatch) &&
-            ctx.CurPipelineState().GetShader(ShaderStage::Compute) != ResourceId();
+            (ctx.CurPipelineState().GetShader(ShaderStage::Compute) != ResourceId() ||
+             (metal && (metal->metalFXSpatial.size() == 9 || metal->metalFXTemporal.size() == 17)));
 }
 
 int Following::GetHighestMip(ICaptureContext &ctx)
@@ -666,6 +670,8 @@ TextureViewer::TextureViewer(ICaptureContext &ctx, QWidget *parent)
                          tr("Histogram Clipping"), tr("Clear Before Pass"), tr("Clear Before Draw"),
                          tr("Quad Overdraw (Pass)"), tr("Quad Overdraw (Draw)"),
                          tr("Triangle Size (Pass)"), tr("Triangle Size (Draw)")});
+  for(int i = 0; i < ui->overlay->count(); i++)
+    ui->overlay->setItemData(i, ui->overlay->itemText(i), Qt::UserRole);
 
   ui->textureListFilter->addItems({QString(), tr("Textures"), tr("Render Targets")});
 
@@ -1207,6 +1213,11 @@ void TextureViewer::UI_UpdateTextureDetails()
     BufferDescription *followbuf = m_Ctx.GetBuffer(followID);
 
     QString title;
+    // A dynamic heap access has no reflected binding index. Display its real array element,
+    // rather than the NoShaderBinding sentinel (65535), for all descriptor-based APIs.
+    const QString binding = m_Following.index == DescriptorAccess::NoShaderBinding
+                                ? tr("Descriptor[%1]").arg(m_Following.arrayEl)
+                                : QString::number(m_Following.index);
 
     if(followID == ResourceId())
     {
@@ -1223,10 +1234,10 @@ void TextureViewer::UI_UpdateTextureDetails()
           break;
         case FollowType::OutputDepth: title = QString(tr("Cur Depth Output - %1")).arg(name); break;
         case FollowType::ReadWrite:
-          title = QString(tr("Cur RW Output %1 - %2")).arg(m_Following.index).arg(name);
+          title = QString(tr("Cur RW Output %1 - %2")).arg(binding).arg(name);
           break;
         case FollowType::ReadOnly:
-          title = QString(tr("Cur Input %1 - %2")).arg(m_Following.index).arg(name);
+          title = QString(tr("Cur Input %1 - %2")).arg(binding).arg(name);
           break;
         case FollowType::OutputDepthResolve:
           title = QString(tr("Cur Depth Resolve Output - %1")).arg(name);
@@ -1242,10 +1253,10 @@ void TextureViewer::UI_UpdateTextureDetails()
           break;
         case FollowType::OutputDepth: title = QString(tr("Cur Depth Output")); break;
         case FollowType::ReadWrite:
-          title = QString(tr("Cur RW Output %1")).arg(m_Following.index);
+          title = QString(tr("Cur RW Output %1")).arg(binding);
           break;
         case FollowType::ReadOnly:
-          title = QString(tr("Cur Input %1")).arg(m_Following.index);
+          title = QString(tr("Cur Input %1")).arg(binding);
           break;
         case FollowType::OutputDepthResolve: title = QString(tr("Cur Depth Resolve Output")); break;
       }
@@ -2393,6 +2404,7 @@ void TextureViewer::OpenResourceContextMenu(ResourceId id, bool input,
   QAction openLockedTab(tr("Open new Locked Tab"), this);
   QAction openResourceInspector(tr("Open in Resource Inspector"), this);
   QAction usageTitle(tr("Used:"), this);
+  usageTitle.setEnabled(false);
   QAction imageLayout(this);
 
   openLockedTab.setIcon(Icons::action_hover());
@@ -2519,16 +2531,22 @@ void TextureViewer::UI_PreviewResized(ResourcePreview *prev)
   sub.slice = prev->property("slice").toUInt();
   CompType typeCast = (CompType)prev->property("cast").toUInt();
 
+  if(!m_Output)
+    return;
+  // Construct guards on the UI thread while the widgets are alive. Capture the output
+  // belonging to this renderer: a capture switch can reset m_Output before queued work runs.
+  QPointer<TextureViewer> viewer(this);
+  QPointer<ResourcePreview> preview(prev);
+  IReplayOutput *output = m_Output;
   m_Ctx.Replay().AsyncInvoke(lit("preview%1").arg((qulonglong)(void *)prev),
-                             [this, prev, s, sub, id, typeCast](IReplayController *) {
-                               bytebuf data =
-                                   m_Output->DrawThumbnail(s.width(), s.height(), id, sub, typeCast);
-                               // new and swap to move the data into the lambda
-                               bytebuf *copy = new bytebuf;
-                               copy->swap(data);
-                               GUIInvoke::call(prev, [prev, s, copy]() {
-                                 prev->UpdateThumb(s, *copy);
-                                 delete copy;
+                             [viewer, preview, output, s, sub, id, typeCast](IReplayController *) {
+                               QSharedPointer<bytebuf> data(new bytebuf);
+                               *data = output->DrawThumbnail(s.width(), s.height(), id, sub, typeCast);
+                               // The preview can be deleted by CloseCapture. Dispatch through the
+                               // application, then check the weak widgets on the UI thread.
+                               GUIInvoke::call(qApp, [viewer, preview, s, data]() {
+                                 if(viewer && preview)
+                                   preview->UpdateThumb(s, *data);
                                });
                              });
 }
@@ -3003,6 +3021,8 @@ void TextureViewer::OnCaptureLoaded()
 
 void TextureViewer::Reset()
 {
+  ++m_DescriptorThumbGeneration;
+  m_DescriptorThumbUpdates.clear();
   m_CachedTexture = NULL;
 
   m_PickedPoint.setX(-1);
@@ -3137,6 +3157,7 @@ void TextureViewer::refreshTextureList(FilterType filterType, const QString &fil
 void TextureViewer::OnCaptureClosed()
 {
   Reset();
+  UI_UpdateOverlaySupport();
 
   refreshTextureList();
 
@@ -3157,8 +3178,64 @@ void TextureViewer::OnCaptureClosed()
   UI_UpdateChannels();
 }
 
+void TextureViewer::UI_UpdateOverlaySupport()
+{
+  // Keep shared ordering/enum values and expose the tested Native draw overlays.
+  auto model = qobject_cast<QStandardItemModel *>(ui->overlay->model());
+  if(!model)
+    return;
+  const bool metal = m_Ctx.IsCaptureLoaded() && m_Ctx.APIProps().pipelineType == GraphicsAPI::Metal;
+  const MetalPipe::State *metalState = metal ? m_Ctx.CurPipelineState().GetMetalPipelineState() : nullptr;
+  const bool metalMSAA = metalState && metalState->sampleCount > 1;
+  for(int i = 0; i < ui->overlay->count(); i++)
+  {
+    auto item = model->item(i);
+    if(!item)
+      continue;
+    const bool quad = i == int(DebugOverlay::QuadOverdrawDraw) ||
+                      i == int(DebugOverlay::QuadOverdrawPass);
+    const bool triangle = i == int(DebugOverlay::TriangleSizeDraw) ||
+                          i == int(DebugOverlay::TriangleSizePass);
+    const bool supported = !metal || i == int(DebugOverlay::NoOverlay) ||
+                           i == int(DebugOverlay::NaN) || i == int(DebugOverlay::Clipping) ||
+                           i == int(DebugOverlay::Depth) || i == int(DebugOverlay::Stencil) ||
+                           i == int(DebugOverlay::Drawcall) || i == int(DebugOverlay::Wireframe) ||
+                           i == int(DebugOverlay::BackfaceCull) ||
+                           i == int(DebugOverlay::ViewportScissor) ||
+                           i == int(DebugOverlay::ClearBeforeDraw) ||
+                           i == int(DebugOverlay::ClearBeforePass) ||
+                           ((quad || triangle) && !metalMSAA);
+    if(!supported)
+    {
+      if((quad || triangle) && metalMSAA)
+      {
+        ui->overlay->setItemText(i, tr("%1 (N/A on MSAA)").arg(ui->overlay->itemData(i).toString()));
+        item->setToolTip(quad ? tr("Quad Overdraw requires a single-sample render pipeline, as on Vulkan.")
+                             : tr("Metal Triangle Size currently requires a single-sample render pipeline."));
+      }
+      else
+      {
+        ui->overlay->setItemText(i, tr("%1 (N/A on Metal)").arg(ui->overlay->itemData(i).toString()));
+        item->setToolTip(tr("This overlay requires GPU draw replay which the Metal backend does not "
+                            "yet implement."));
+      }
+      QFont font = ui->overlay->font();
+      font.setItalic(true);
+      item->setFont(font);
+    }
+    else
+    {
+      ui->overlay->setItemText(i, ui->overlay->itemData(i).toString());
+      item->setToolTip(QString());
+      item->setFont(ui->overlay->font());
+    }
+    item->setEnabled(supported);
+  }
+}
+
 void TextureViewer::OnEventChanged(uint32_t eventId)
 {
+  const uint64_t generation = ++m_DescriptorThumbGeneration;
   bool copy = false, clear = false, compute = false;
   Following::GetActionContext(m_Ctx, copy, clear, compute);
 
@@ -3168,6 +3245,10 @@ void TextureViewer::OnEventChanged(uint32_t eventId)
   };
 
   QFont font = ui->overlay->font();
+  const bool metalCapture = m_Ctx.APIProps().pipelineType == GraphicsAPI::Metal;
+  // Restore Metal capability labels before Vulkan applies its MSAA labels.
+  if(!metalCapture)
+    UI_UpdateOverlaySupport();
   if(m_Ctx.APIProps().pipelineType == GraphicsAPI::Vulkan &&
      m_Ctx.CurVulkanPipelineState()->multisample.rasterSamples > 1)
   {
@@ -3184,6 +3265,9 @@ void TextureViewer::OnEventChanged(uint32_t eventId)
     ui->overlay->setItemData((int)DebugOverlay::QuadOverdrawDraw, font, Qt::FontRole);
     ui->overlay->setItemData((int)DebugOverlay::QuadOverdrawPass, font, Qt::FontRole);
   }
+
+  if(metalCapture)
+    UI_UpdateOverlaySupport();
 
   int count = 7;
 
@@ -3312,14 +3396,18 @@ void TextureViewer::OnEventChanged(uint32_t eventId)
 
   if(!m_DescriptorThumbUpdates.empty())
   {
-    m_Ctx.Replay().AsyncInvoke([this](IReplayController *r) {
+    // Snapshot on the UI thread: the next event/capture can replace or delete previews
+    // while descriptor names are queried on the replay thread.
+    QPointer<TextureViewer> viewer(this);
+    auto updates = m_DescriptorThumbUpdates;
+    m_Ctx.Replay().AsyncInvoke([viewer, generation, updates](IReplayController *r) mutable {
       // we could collate ranges by descriptor store, but in practice we don't expect descriptors to be
       // scattered across multiple stores. So to keep the code simple for now we do a linear sweep
       ResourceId store;
       rdcarray<DescriptorRange> ranges;
       rdcarray<DescriptorLogicalLocation> locations;
 
-      for(const DescriptorThumbUpdate &update : m_DescriptorThumbUpdates)
+      for(const DescriptorThumbUpdate &update : updates)
       {
         if(update.access.descriptorStore != store)
         {
@@ -3346,15 +3434,17 @@ void TextureViewer::OnEventChanged(uint32_t eventId)
       if(store != ResourceId())
         locations.append(r->GetDescriptorLocations(store, ranges));
 
-      for(size_t i = 0; i < m_DescriptorThumbUpdates.size(); i++)
+      for(size_t i = 0; i < updates.size(); i++)
       {
         if(i < locations.size())
-          m_DescriptorThumbUpdates[i].slotName = locations[i].logicalBindName;
+          updates[i].slotName = locations[i].logicalBindName;
       }
 
-      GUIInvoke::call(this, [this]() {
-        for(DescriptorThumbUpdate &update : m_DescriptorThumbUpdates)
-          if(!update.slotName.isEmpty())
+      GUIInvoke::call(qApp, [viewer, generation, updates]() {
+        if(!viewer || viewer->m_DescriptorThumbGeneration != generation || !viewer->m_Ctx.IsCaptureLoaded())
+          return;
+        for(const DescriptorThumbUpdate &update : updates)
+          if(update.preview && !update.slotName.isEmpty())
             update.preview->setSlotName(update.slotName);
       });
     });

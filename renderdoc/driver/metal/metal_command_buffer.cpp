@@ -814,6 +814,17 @@ bool WrappedMTLCommandBuffer::Serialise_renderCommandEncoderWithDescriptor(
       else
         mtlDescriptor->stencilAttachment()->setStoreAction(MTL::StoreActionStore);
     }
+    // Only the selected overlay prefix needs its in-pass depth/stencil stored.
+    // Metal permits encoder store setters only when the initial action is Unknown.
+    if(m_Device->PreserveOverlayPass(RenderCommandEncoder))
+    {
+      if(descriptor.depthAttachment.texture)
+        mtlDescriptor->depthAttachment()->setStoreAction(MTL::StoreActionUnknown);
+      if(descriptor.stencilAttachment.texture)
+        mtlDescriptor->stencilAttachment()->setStoreAction(MTL::StoreActionUnknown);
+    }
+    m_Device->ApplyReplayPassClear(RenderCommandEncoder, mtlDescriptor);
+    m_Device->ApplyReplayLoadDiscards(Unwrap(CommandBuffer), mtlDescriptor);
     MTL::RenderCommandEncoder *realEncoder =
         Unwrap(CommandBuffer)->renderCommandEncoder(mtlDescriptor);
     mtlDescriptor->release();
@@ -994,6 +1005,15 @@ bool WrappedMTLCommandBuffer::Serialise_parallelRenderCommandEncoderWithDescript
       else
         nativeDescriptor->stencilAttachment()->setStoreAction(MTL::StoreActionStore);
     }
+    if(m_Device->PreserveOverlayPass(ParallelRenderCommandEncoder))
+    {
+      if(descriptor.depthAttachment.texture)
+        nativeDescriptor->depthAttachment()->setStoreAction(MTL::StoreActionUnknown);
+      if(descriptor.stencilAttachment.texture)
+        nativeDescriptor->stencilAttachment()->setStoreAction(MTL::StoreActionUnknown);
+    }
+    m_Device->ApplyReplayPassClear(ParallelRenderCommandEncoder, nativeDescriptor);
+    m_Device->ApplyReplayLoadDiscards(Unwrap(CommandBuffer), nativeDescriptor);
     MTL::ParallelRenderCommandEncoder *real =
         Unwrap(CommandBuffer)->parallelRenderCommandEncoder(nativeDescriptor);
     nativeDescriptor->release();
@@ -1234,6 +1254,8 @@ bool WrappedMTLCommandBuffer::Serialise_commit(SerialiserType &ser)
     m_Device->AssignPendingReplayCPUBufferUpdates(CommandBuffer);
     if(!m_Device->ApplyReplayCPUBufferUpdates(CommandBuffer))
       return false;
+    if(IsLoading(m_State))
+      m_Device->GetReplay()->ResolveSubmissionBindlessUsage(GetResID(CommandBuffer));
     CommandBuffer->commit();
     m_Device->MarkReplayCommandBufferCommitted();
   }

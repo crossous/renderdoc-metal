@@ -38,6 +38,19 @@ bool ValidateMetalComputePassCounters(WrappedMTLDevice *device,
 class WrappedMTLCommandBuffer : public WrappedMTLObject
 {
 public:
+  void CaptureMetalFXTemporal(ResourceId scaler, rdcarray<WrappedMTLTexture *> inputs,
+      WrappedMTLTexture *output, WrappedMTLFence *fence,
+      rdcarray<uint64_t> parameters, rdcarray<float> values);
+  template <typename SerialiserType>
+  bool Serialise_encodeMetalFXTemporal(SerialiserType &ser, ResourceId scaler,
+      rdcarray<WrappedMTLTexture *> inputs, WrappedMTLTexture *output,
+      WrappedMTLFence *fence, rdcarray<uint64_t> parameters, rdcarray<float> values);
+  void CaptureMetalFXSpatial(WrappedMTLTexture *colour, WrappedMTLTexture *output,
+                             WrappedMTLFence *fence, rdcarray<uint64_t> parameters);
+  template <typename SerialiserType>
+  bool Serialise_encodeMetalFXSpatial(SerialiserType &ser, WrappedMTLTexture *colour,
+                                     WrappedMTLTexture *output, WrappedMTLFence *fence,
+                                     rdcarray<uint64_t> parameters);
   DECLARE_FUNCTION_SERIALISED(void, encodeEvent, WrappedMTLEvent *event, uint64_t value, bool signal);
   void CaptureEvent(WrappedMTLEvent *event, uint64_t value, bool signal);
   WrappedMTLCommandBuffer(MTL::CommandBuffer *realMTLCommandBuffer, ResourceId objId,

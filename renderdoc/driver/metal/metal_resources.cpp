@@ -72,6 +72,23 @@ MetalResourceManager *WrappedMTLObject::GetResourceManager()
   return m_Device->GetResourceManager();
 }
 
+bool MetalResourceRecord::MarkResourceFrameReferenced(ResourceId id, FrameRefType type)
+{
+  // Native Metal encoders retain immutable state even when the application's
+  // proxy goes out of scope before submission. Preserve its creation record
+  // with the standard ResourceRecord parent ownership used by other drivers.
+  // Keeping a descriptor record does not retain writable GPU resources.
+  MetalResourceRecord *state = NULL;
+  if(id != ResourceId() && m_Resource)
+    state = m_Resource->GetResourceManager()->GetResourceRecord(id);
+  LockChunks();
+  const bool added = ResourceRecord::MarkResourceFrameReferenced(id, type);
+  if(state && (state->m_Type == eResDepthStencilState || state->m_Type == eResSamplerState))
+    AddParent(state);
+  UnlockChunks();
+  return added;
+}
+
 MetalResourceRecord::~MetalResourceRecord()
 {
   if(m_Type == eResCommandBuffer)

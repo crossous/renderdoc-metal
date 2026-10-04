@@ -262,9 +262,9 @@ Viewport PipeState::GetViewport(uint32_t index) const
     {
       return m_Vulkan->viewportScissor.viewportScissors[index].vp;
     }
-    else if(IsCaptureMetal() && index == 0)
+    else if(IsCaptureMetal() && index < m_Metal->rasterizer.viewports.size())
     {
-      return m_Metal->rasterizer.viewport;
+      return m_Metal->rasterizer.viewports[index];
     }
   }
 
@@ -293,9 +293,9 @@ Scissor PipeState::GetScissor(uint32_t index) const
     {
       return m_Vulkan->viewportScissor.viewportScissors[index].scissor;
     }
-    else if(IsCaptureMetal() && index == 0)
+    else if(IsCaptureMetal() && index < m_Metal->rasterizer.scissors.size())
     {
-      return m_Metal->rasterizer.scissor;
+      return m_Metal->rasterizer.scissors[index];
     }
   }
 
@@ -370,6 +370,10 @@ const ShaderReflection *PipeState::GetShaderReflection(ShaderStage stage) const
         return m_Metal->vertexShader.reflection;
       if(stage == ShaderStage::Fragment)
         return m_Metal->fragmentShader.reflection;
+      if(stage == ShaderStage::Task)
+        return m_Metal->taskShader.reflection;
+      if(stage == ShaderStage::Mesh)
+        return m_Metal->meshShader.reflection;
     }
   }
 
@@ -444,6 +448,10 @@ rdcstr PipeState::GetShaderEntryPoint(ShaderStage stage) const
       return m_Metal->vertexShader.entryPoint;
     if(stage == ShaderStage::Fragment)
       return m_Metal->fragmentShader.entryPoint;
+    if(stage == ShaderStage::Task)
+      return m_Metal->taskShader.entryPoint;
+    if(stage == ShaderStage::Mesh)
+      return m_Metal->meshShader.entryPoint;
   }
 
   return "main";
@@ -517,6 +525,10 @@ ResourceId PipeState::GetShader(ShaderStage stage) const
         return m_Metal->vertexShader.resourceId;
       if(stage == ShaderStage::Fragment)
         return m_Metal->fragmentShader.resourceId;
+      if(stage == ShaderStage::Task)
+        return m_Metal->taskShader.resourceId;
+      if(stage == ShaderStage::Mesh)
+        return m_Metal->meshShader.resourceId;
     }
   }
 
@@ -1400,6 +1412,7 @@ RasterState PipeState::GetRasterState() const
     {
       ret.cullMode = m_Metal->rasterizer.cullMode;
       ret.frontCCW = m_Metal->rasterizer.frontCCW;
+    ret.fillMode = m_Metal->rasterizer.fillMode;
     }
   }
 

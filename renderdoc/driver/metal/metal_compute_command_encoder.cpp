@@ -270,6 +270,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_memoryBarrierWithResources(Seria
     const auto real = UnwrapMetalResources(resources);
     if(!real.empty())
       Unwrap(ComputeCommandEncoder)->memoryBarrier(real.data(), real.size());
+    if(IsLoading(m_State))
+      for(auto resource : resources)
+        m_Device->GetReplay()->AddUsage(GetResID(resource), ResourceUsage::Barrier,
+                                       m_Device->GetReplay()->GetNextEventID());
   }
   return true;
 }
@@ -300,16 +304,18 @@ bool WrappedMTLComputeCommandEncoder::Serialise_pushDebugGroup(SerialiserType &s
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
   SERIALISE_ELEMENT(string).Important();
   SERIALISE_CHECK_READ_ERRORS();
+  // Select the owning command context before recording marker state and hierarchy.
+  if(IsReplayingAndReading() &&
+     (!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+      !ComputeCommandEncoder->m_Real ||
+      ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder)))
+    return false;
   if(IsLoading(m_State))
   {
     AddEvent();
     m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::PushMarker);
   }
-  // Keep markers as structured API events. Partial replay may stop inside a debug group.
-  return !IsReplayingAndReading() ||
-         (ComputeCommandEncoder && ComputeCommandEncoder->m_Type == eResComputeCommandEncoder &&
-          ComputeCommandEncoder->m_Real &&
-          ComputeCommandEncoder == m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder));
+  return true;
 }
 
 void WrappedMTLComputeCommandEncoder::pushDebugGroup(NS::String *string)
@@ -332,16 +338,18 @@ bool WrappedMTLComputeCommandEncoder::Serialise_insertDebugSignpost(SerialiserTy
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
   SERIALISE_ELEMENT(string).Important();
   SERIALISE_CHECK_READ_ERRORS();
+  // Select the owning command context before recording marker state and hierarchy.
+  if(IsReplayingAndReading() &&
+     (!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+      !ComputeCommandEncoder->m_Real ||
+      ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder)))
+    return false;
   if(IsLoading(m_State))
   {
     AddEvent();
     m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::SetMarker);
   }
-  // Keep markers as structured API events. Partial replay may stop inside a debug group.
-  return !IsReplayingAndReading() ||
-         (ComputeCommandEncoder && ComputeCommandEncoder->m_Type == eResComputeCommandEncoder &&
-          ComputeCommandEncoder->m_Real &&
-          ComputeCommandEncoder == m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder));
+  return true;
 }
 
 void WrappedMTLComputeCommandEncoder::insertDebugSignpost(NS::String *string)
@@ -363,16 +371,18 @@ bool WrappedMTLComputeCommandEncoder::Serialise_popDebugGroup(SerialiserType &se
 {
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this);
   SERIALISE_CHECK_READ_ERRORS();
+  // Select the owning command context before recording marker state and hierarchy.
+  if(IsReplayingAndReading() &&
+     (!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
+      !ComputeCommandEncoder->m_Real ||
+      ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder)))
+    return false;
   if(IsLoading(m_State))
   {
     AddEvent();
     m_Device->GetReplay()->AddDebugGroup(NULL, ActionFlags::PopMarker);
   }
-  // Keep markers as structured API events. Partial replay may stop inside a debug group.
-  return !IsReplayingAndReading() ||
-         (ComputeCommandEncoder && ComputeCommandEncoder->m_Type == eResComputeCommandEncoder &&
-          ComputeCommandEncoder->m_Real &&
-          ComputeCommandEncoder == m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder));
+  return true;
 }
 
 void WrappedMTLComputeCommandEncoder::popDebugGroup()
@@ -1055,6 +1065,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setAccelerationStructure(
       return false;
     }
     Unwrap(ComputeCommandEncoder)->setAccelerationStructure(Unwrap(structure), index);
+    m_Device->GetReplay()->BindAccelerationStructure(ShaderStage::Compute, uint32_t(index), GetResID(structure));
   }
   return true;
 }
@@ -1179,6 +1190,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setBytes(SerialiserType &ser, rd
       RDCERR("Invalid Metal compute inline bytes binding");
       return false;
     }
+    m_Device->GetReplay()->SaveShaderInlineData(0, (uint32_t)index, data,
+                                               GetResID(ComputeCommandEncoder));
     if(!m_Device->RelocateDescriptorBytes(GetResID(ComputeCommandEncoder), index, data))
       return false;
     Unwrap(ComputeCommandEncoder)->setBytes(data.data(), data.size(), index);
@@ -1380,10 +1393,12 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
     {
       AddEvent();
       ActionDescription action;
-      action.customName = StringFormat::Fmt("dispatchThreadgroups(%llux%llux1, %llux%llux1)",
+      action.customName = StringFormat::Fmt("dispatchThreadgroups(%llux%llux%llu, %llux%llux%llu)",
                                              (uint64_t)groups.width, (uint64_t)groups.height,
+                                             (uint64_t)groups.depth,
                                              (uint64_t)threadsPerGroup.width,
-                                             (uint64_t)threadsPerGroup.height);
+                                             (uint64_t)threadsPerGroup.height,
+                                             (uint64_t)threadsPerGroup.depth);
       action.flags = ActionFlags::Dispatch;
       action.dispatchDimension[0] = (uint32_t)groups.width;
       action.dispatchDimension[1] = (uint32_t)groups.height;
@@ -1392,21 +1407,21 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       action.dispatchThreadsDimension[1] = (uint32_t)threadsPerGroup.height;
       action.dispatchThreadsDimension[2] = (uint32_t)threadsPerGroup.depth;
       AddAction(action);
-      if(sourcedInlineOnly)
-        m_Device->AddValidatedSourcedComputeUsage(GetResID(ComputeCommandEncoder));
-      else if(slot0BufferOnly)
+      // Sourced closure validates residency/lifetime, not shader access. AddAction
+      // records reflection and proven bindless usage; never turn the closure into UAVs.
+      if(!sourcedInlineOnly && slot0BufferOnly)
       {
         // With no shader resource reflection, report all bound buffers conservatively.
         for(uint32_t slot = 0; slot < 31; slot++)
           replay->AddUsage(replay->GetComputeBuffer(slot).resourceId,
                            ResourceUsage::CS_RWResource);
       }
-      else if(!bufferOnly)
+      else if(!sourcedInlineOnly && !bufferOnly)
       {
         replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
         replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);
       }
-      else
+      else if(!sourcedInlineOnly)
       {
         if(source.resourceId != ResourceId())
           replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
@@ -1524,15 +1539,14 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
       action.dispatchThreadsDimension[2] = (uint32_t)threadsPerGroup.depth;
       AddAction(action);
       replay->AddUsage(GetResID(indirectBuffer), ResourceUsage::Indirect);
-      if(sourcedInlineOnly)
-        m_Device->AddValidatedSourcedComputeUsage(GetResID(ComputeCommandEncoder));
-      else if(slot0BufferOnly)
+      // The safety closure is not evidence of shader reads or writes.
+      if(!sourcedInlineOnly && slot0BufferOnly)
       {
         for(uint32_t slot = 0; slot < 31; slot++)
           replay->AddUsage(replay->GetComputeBuffer(slot).resourceId,
                            ResourceUsage::CS_RWResource);
       }
-      else
+      else if(!sourcedInlineOnly)
       {
         replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
         replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);

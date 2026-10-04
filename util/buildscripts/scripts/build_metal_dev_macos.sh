@@ -34,8 +34,18 @@ fi
 
 export PATH="${QT5_PREFIX}/bin:${BISON_PREFIX}/bin:${PATH}"
 
+CACHED_TOOLS_ROOT=""
+if [ -f "${BUILD_DIR}/CMakeCache.txt" ]; then
+  CACHED_TOOLS_ROOT="$(sed -n 's/^METAL_SHADER_TOOLS_ROOT:PATH=//p' "${BUILD_DIR}/CMakeCache.txt")"
+fi
+TOOLS_ROOT="${RENDERDOC_METAL_SHADER_TOOLS_ROOT:-${CACHED_TOOLS_ROOT:-${HOME}/Library/Caches/renderdoc-metal/shader-tools/$(uname -m)}}"
+if [ ! -f "${TOOLS_ROOT}/manifest.json" ]; then
+  "${SCRIPT_DIR}/build_metal_shader_tools_macos.sh" "${TOOLS_ROOT}"
+fi
+
 cmake -S "${SOURCE_DIR}" -B "${BUILD_DIR}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
+  -DMETAL_SHADER_TOOLS_ROOT="${TOOLS_ROOT}" \
   -DQMAKE_QT5_COMMAND="${QMAKE}" \
   -DENABLE_METAL=ON \
   -DENABLE_GL=OFF \
@@ -46,7 +56,9 @@ cmake -S "${SOURCE_DIR}" -B "${BUILD_DIR}" -G Ninja \
   -DENABLE_RENDERDOCCMD=ON \
   -DCMAKE_REQUIRED_INCLUDES="$(brew --prefix pcre)/include"
 
-cmake --build "${BUILD_DIR}" --target build-qrenderdoc renderdoccmd -j "$(sysctl -n hw.ncpu)"
+# Keep the default build within the local M2's memory budget. Larger machines
+# can explicitly increase the number of jobs.
+cmake --build "${BUILD_DIR}" --target build-qrenderdoc renderdoccmd -j "${RENDERDOC_METAL_BUILD_JOBS:-2}"
 
 APP_PATH="${BUILD_DIR}/bin/qrenderdoc.app"
 APP_RENDERDOC_LIB="${APP_PATH}/Contents/lib/librenderdoc.dylib"

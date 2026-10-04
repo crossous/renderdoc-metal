@@ -57,6 +57,16 @@
 #include "scintilla/include/qt/ScintillaEdit.h"
 #include "ui_EventBrowser.h"
 
+// A continued command-buffer scope can contain another synthetic scope before
+// its first captured action. Synthetic IDs are outside the captured EID range.
+static const ActionDescription &FirstCapturedAction(const ActionDescription &action)
+{
+  const ActionDescription *first = &action;
+  while(first->IsFakeMarker() && !first->children.empty())
+    first = &first->children.front();
+  return *first;
+}
+
 struct EventBrowserPersistentStorage : public CustomPersistentStorage
 {
   EventBrowserPersistentStorage() : CustomPersistentStorage(rdcstr())
@@ -547,13 +557,13 @@ struct EventItemModel : public QAbstractItemModel
         if(a.eventId >= eid)
         {
           // except if the action is a fake marker. In this case its own event ID is invalid, so we
-          // check the range of its children (knowing it only has one layer of children)
+          // check its first captured descendant, including nested synthetic groups.
           if(a.IsFakeMarker())
           {
             if(a.eventId == eid)
               break;
 
-            if(a.children[0].eventId < eid)
+            if(FirstCapturedAction(a).eventId < eid)
             {
               rowInParent++;
               continue;
@@ -882,7 +892,7 @@ struct EventItemModel : public QAbstractItemModel
                 effectiveEID = it->effectiveEID;
 
               if(action->IsFakeMarker())
-                eid = action->children[0].events[0].eventId;
+                eid = FirstCapturedAction(*action).events[0].eventId;
 
               if(index.column() == COL_EID)
               {
@@ -896,7 +906,7 @@ struct EventItemModel : public QAbstractItemModel
                 uint32_t endActionId = m_Actions[effectiveEID]->actionId;
 
                 if(action->IsFakeMarker())
-                  actionId = action->children[0].actionId;
+                  actionId = FirstCapturedAction(*action).actionId;
 
                 return actionId == endActionId
                            ? QVariant()

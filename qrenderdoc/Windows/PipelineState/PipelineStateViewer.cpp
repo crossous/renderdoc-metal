@@ -1046,10 +1046,13 @@ IShaderViewer *PipelineStateViewer::EditDecompiledSource(const ShaderProcessingT
   ShaderCompileFlags flags;
 
   for(const ShaderCompileFlag &flag : shaderDetails->debugInfo.compileFlags.flags)
-    if(flag.name == "@spirver")
+    if(flag.name == "@spirver" || flag.name == "@metal_shader")
       flags.flags.push_back(flag);
 
-  IShaderViewer *sv = EditShader(id, shaderDetails->stage, shaderDetails->entryPoint, flags,
+  const rdcstr entry = m_Ctx.APIProps().pipelineType == GraphicsAPI::Metal &&
+                              !shaderDetails->debugInfo.entrySourceName.empty()
+                          ? shaderDetails->debugInfo.entrySourceName : shaderDetails->entryPoint;
+  IShaderViewer *sv = EditShader(id, shaderDetails->stage, entry, flags,
                                  KnownShaderTool::Unknown, tool.output, files);
 
   sv->ShowErrors(out.log);
@@ -1095,6 +1098,9 @@ void PipelineStateViewer::SetupShaderEditButton(QToolButton *button, ResourceId 
   for(const ShaderProcessingTool &tool : m_Ctx.Config().ShaderProcessors)
   {
     // skip tools that can't decode our shader, or doesn't produce a textual output
+    // Preview translators can change the native resource ABI. Offer them in View only.
+    if(tool.args.contains("--renderdoc-bundled") && tool.args.contains("--view-only"))
+      continue;
     if(tool.input != shaderDetails->encoding || !IsTextRepresentation(tool.output))
       continue;
 
@@ -1106,6 +1112,43 @@ void PipelineStateViewer::SetupShaderEditButton(QToolButton *button, ResourceId 
     });
 
     menu->addAction(action);
+  }
+
+  if(m_Ctx.APIProps().pipelineType == GraphicsAPI::Metal)
+  {
+    if(shaderDetails->encoding == ShaderEncoding::MetalLib)
+    {
+      QAction *action = menu->addAction(tr("Edit AIR (Apple toolchain)"));
+      action->setIcon(Icons::page_white_edit());
+      QObject::connect(action, &QAction::triggered, [this, pipelineId, shaderId, shaderDetails]() {
+        m_Ctx.Replay().AsyncInvoke([this, pipelineId, shaderId, shaderDetails](IReplayController *r) {
+          rdcstr air = r->DisassembleShader(pipelineId, shaderDetails, "Metal AIR (editable)");
+          GUIInvoke::call(this, [this, shaderId, shaderDetails, air]() {
+            if(air.contains("define "))
+              EditShader(shaderId, shaderDetails->stage,
+                         shaderDetails->debugInfo.entrySourceName.empty()
+                             ? shaderDetails->entryPoint : shaderDetails->debugInfo.entrySourceName,
+                         shaderDetails->debugInfo.compileFlags, KnownShaderTool::Unknown,
+                         ShaderEncoding::MetalAIRAsm, {{"edited.ll", air}});
+            else
+              RDDialog::critical(this, tr("AIR unavailable"), QString(air));
+          });
+        });
+      });
+    }
+    QAction *msl = menu->addAction(tr("Edit MSL replacement"));
+    msl->setIcon(Icons::page_white_edit());
+    QObject::connect(msl, &QAction::triggered, [this, shaderId, shaderDetails]() {
+      const rdcstr entry = shaderDetails->debugInfo.entrySourceName.empty()
+                              ? shaderDetails->entryPoint : shaderDetails->debugInfo.entrySourceName;
+      const rdcstr source = "// Write an MSL replacement for " + entry +
+          ".\n// Preserve the stage interface and captured resource binding indices.\n"
+          "#include <metal_stdlib>\nusing namespace metal;\n";
+      EditShader(shaderId, shaderDetails->stage, entry, shaderDetails->debugInfo.compileFlags,
+                 KnownShaderTool::Unknown, ShaderEncoding::MSL, {{"replacement.metal", source}});
+    });
+    button->setMenu(menu);
+    return;
   }
 
   // if all else fails we can generate a stub for editing. Skip this for GLSL as it always has
@@ -1534,7 +1577,17 @@ bool PipelineStateViewer::SaveShaderFile(const ShaderReflection *shader)
     case ShaderEncoding::DXIL: filter = tr("DXIL Shader files (*.dxbc)"); break;
     case ShaderEncoding::Slang: filter = tr("Slang Shader files (*.slang)"); break;
     case ShaderEncoding::MSL: filter = tr("Metal Shader files (*.metal)"); break;
+    case ShaderEncoding::MetalLib: filter = tr("Metal library files (*.metallib)"); break;
+    case ShaderEncoding::MetalAIRAsm: filter = tr("Metal AIR assembly files (*.ll)"); break;
     case ShaderEncoding::Unknown:
+      // Metal exposes an actual captured library, with no invented text encoding. Keep the
+      // common binary export while identifying its native container to the user.
+      if(m_Ctx.CurPipelineState().IsCaptureMetal() && shader->rawBytes.size() >= 4 &&
+         memcmp(shader->rawBytes.data(), "MTLB", 4) == 0)
+        filter = tr("Metal library files (*.metallib)");
+      else
+        filter = tr("All files (*.*)");
+      break;
     case ShaderEncoding::Count: filter = tr("All files (*.*)"); break;
   }
 

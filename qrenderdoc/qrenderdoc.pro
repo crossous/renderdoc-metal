@@ -153,6 +153,11 @@ win32 {
 		librd.path = Contents/lib
 		QMAKE_BUNDLE_DATA += librd
 
+		metalShaderTools.files = $$_PRO_FILE_PWD_/../util/shader_tools/metal_air_processor.py \
+		                         $$_PRO_FILE_PWD_/../util/shader_tools/metal_shader_processor.py
+		metalShaderTools.path = Contents/Resources/shader-tools
+		QMAKE_BUNDLE_DATA += metalShaderTools
+
 		INFO_PLIST_PATH = $$shell_quote($$DESTDIR/$${TARGET}.app/Contents/Info.plist)
 		QTPLUGINS_PATH = $$shell_quote($$DESTDIR/$${TARGET}.app/Contents/qtplugins)
 		QMAKE_POST_LINK += ln -sf $$[QT_INSTALL_PLUGINS] $${QTPLUGINS_PATH} ;

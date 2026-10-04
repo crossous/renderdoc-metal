@@ -31,7 +31,7 @@ bool WrappedMTLDevice::Serialise_newHeap(SerialiserType &ser, WrappedMTLHeap *he
        (storageMode != MTL::StorageModePrivate &&
         !(storageMode == MTL::StorageModeShared && type == MTL::HeapTypePlacement)) ||
        cacheMode != MTL::CPUCacheModeDefaultCache ||
-       hazardMode != MTL::HazardTrackingModeTracked ||
+       hazardMode > MTL::HazardTrackingModeTracked ||
        (type != MTL::HeapTypeAutomatic && type != MTL::HeapTypePlacement))
     {
       RDCERR("Invalid or unsupported Metal heap descriptor or identity");
@@ -41,7 +41,10 @@ bool WrappedMTLDevice::Serialise_newHeap(SerialiserType &ser, WrappedMTLHeap *he
     descriptor->setSize(size);
     descriptor->setStorageMode(storageMode);
     descriptor->setCpuCacheMode(cacheMode);
-    descriptor->setHazardTrackingMode(hazardMode);
+    // Heap children inherit tracking from their heap, so strengthen it at the
+    // allocation boundary as for standalone replay textures. Captured fences
+    // and the placement/alias lifetime checks remain in force.
+    descriptor->setHazardTrackingMode(MTL::HazardTrackingModeTracked);
     descriptor->setType(type);
     MTL::Heap *real = Unwrap(this)->newHeap(descriptor);
     descriptor->release();
@@ -362,17 +365,22 @@ bool WrappedMTLHeap::Serialise_newTexture(SerialiserType &ser, WrappedMTLTexture
     if(!Heap || Heap->m_Type != eResHeap || !Heap->m_Real ||
        Texture == ResourceId() || GetResourceManager()->HasResource(Texture) ||
        descriptor.storageMode != MTL::StorageModePrivate ||
-       descriptor.textureType != MTL::TextureType2D ||
+       (descriptor.textureType != MTL::TextureType2D &&
+        descriptor.textureType != MTL::TextureType2DMultisample) ||
        (descriptor.pixelFormat != MTL::PixelFormatRGBA8Unorm &&
         descriptor.pixelFormat != MTL::PixelFormatBGRA8Unorm) ||
        !descriptor.width || !descriptor.height || descriptor.width > 8192 ||
        descriptor.height > 8192 || descriptor.depth != 1 ||
        descriptor.mipmapLevelCount != 1 || descriptor.arrayLength != 1 ||
-       descriptor.sampleCount != 1 ||
-       descriptor.resourceOptions != MTL::ResourceStorageModePrivate ||
+       (descriptor.textureType == MTL::TextureType2D ? descriptor.sampleCount != 1 :
+          (descriptor.sampleCount != 2 && descriptor.sampleCount != 4 && descriptor.sampleCount != 8)) ||
+       !Unwrap(m_Device)->supportsTextureSampleCount(descriptor.sampleCount) ||
+       (descriptor.resourceOptions != MTL::ResourceStorageModePrivate &&
+        descriptor.resourceOptions != (MTL::ResourceStorageModePrivate | MTL::ResourceHazardTrackingModeUntracked) &&
+        descriptor.resourceOptions != (MTL::ResourceStorageModePrivate | MTL::ResourceHazardTrackingModeTracked)) ||
        descriptor.cpuCacheMode != MTL::CPUCacheModeDefaultCache ||
        (uint64_t(descriptor.usage) & ~uint64_t(7)) != 0 ||
-       descriptor.hazardTrackingMode != MTL::HazardTrackingModeDefault ||
+       descriptor.hazardTrackingMode > MTL::HazardTrackingModeTracked ||
        descriptor.swizzle.red != MTL::TextureSwizzleRed ||
        descriptor.swizzle.green != MTL::TextureSwizzleGreen ||
        descriptor.swizzle.blue != MTL::TextureSwizzleBlue ||
@@ -384,6 +392,7 @@ bool WrappedMTLHeap::Serialise_newTexture(SerialiserType &ser, WrappedMTLTexture
     if(descriptor.usage != MTL::TextureUsageUnknown)
       descriptor.usage = (MTL::TextureUsage)(descriptor.usage | MTL::TextureUsageShaderRead);
     MTL::TextureDescriptor *native(descriptor);
+    native->setHazardTrackingMode(MTL::HazardTrackingModeTracked);
     MTL::Texture *real = Unwrap(Heap)->newTexture(native);
     native->release();
     if(!real)
@@ -474,12 +483,19 @@ static bool ValidPlacementTextureShape(const RDMTL::TextureDescriptor &descripto
      descriptor.textureType != MTL::TextureType2DArray &&
      descriptor.textureType != MTL::TextureTypeCube &&
      descriptor.textureType != MTL::TextureTypeCubeArray &&
-     descriptor.textureType != MTL::TextureType3D)
+     descriptor.textureType != MTL::TextureType3D &&
+     descriptor.textureType != MTL::TextureType2DMultisample &&
+     descriptor.textureType != MTL::TextureType2DMultisampleArray)
     return false;
   if(!descriptor.width || !descriptor.height || !descriptor.depth ||
      descriptor.width > 16384 || descriptor.height > 16384 || descriptor.depth > 256 ||
      !descriptor.arrayLength || descriptor.arrayLength > 16 ||
-     descriptor.sampleCount != 1 || !descriptor.mipmapLevelCount)
+     !descriptor.mipmapLevelCount)
+    return false;
+  const bool msaa = descriptor.textureType == MTL::TextureType2DMultisample ||
+                    descriptor.textureType == MTL::TextureType2DMultisampleArray;
+  if(msaa ? ((descriptor.sampleCount != 2 && descriptor.sampleCount != 4 && descriptor.sampleCount != 8) ||
+              descriptor.mipmapLevelCount != 1) : descriptor.sampleCount != 1)
     return false;
   if(descriptor.textureType == MTL::TextureType3D)
   {
@@ -488,6 +504,7 @@ static bool ValidPlacementTextureShape(const RDMTL::TextureDescriptor &descripto
   else if(descriptor.depth != 1)
     return false;
   if(descriptor.textureType != MTL::TextureType2DArray &&
+     descriptor.textureType != MTL::TextureType2DMultisampleArray &&
      descriptor.textureType != MTL::TextureTypeCubeArray && descriptor.arrayLength != 1)
     return false;
   if((descriptor.textureType == MTL::TextureTypeCube || descriptor.textureType == MTL::TextureTypeCubeArray) &&
@@ -525,16 +542,18 @@ bool WrappedMTLHeap::Serialise_newTextureWithOffset(SerialiserType &ser,
        (descriptor.storageMode != MTL::StorageModePrivate && descriptor.storageMode != MTL::StorageModeShared) ||
        descriptor.storageMode != Unwrap(Heap)->storageMode() ||
        !ValidPlacementTextureShape(descriptor) ||
+       !Unwrap(m_Device)->supportsTextureSampleCount(descriptor.sampleCount) ||
        !ValidPlacementTextureFormat(descriptor.pixelFormat) ||
        (PlacementTextureBlockFormat(descriptor.pixelFormat) &&
         !ser.VersionAtLeast(0x10)) ||
        (descriptor.resourceOptions != (MTL::ResourceOptions)(uint64_t(descriptor.storageMode) << 4) &&
         descriptor.resourceOptions != ((MTL::ResourceOptions)(uint64_t(descriptor.storageMode) << 4) |
-                                       MTL::ResourceHazardTrackingModeTracked)) ||
+                                       MTL::ResourceHazardTrackingModeTracked) &&
+        descriptor.resourceOptions != ((MTL::ResourceOptions)(uint64_t(descriptor.storageMode) << 4) |
+                                       MTL::ResourceHazardTrackingModeUntracked)) ||
        descriptor.cpuCacheMode != MTL::CPUCacheModeDefaultCache ||
        (uint64_t(descriptor.usage) & ~uint64_t(55)) != 0 ||
-       (descriptor.hazardTrackingMode != MTL::HazardTrackingModeDefault &&
-        descriptor.hazardTrackingMode != MTL::HazardTrackingModeTracked) ||
+       descriptor.hazardTrackingMode > MTL::HazardTrackingModeTracked ||
        !descriptor.allowGPUOptimizedContents ||
        descriptor.swizzle.red != MTL::TextureSwizzleRed ||
        descriptor.swizzle.green != MTL::TextureSwizzleGreen ||
@@ -563,6 +582,7 @@ bool WrappedMTLHeap::Serialise_newTextureWithOffset(SerialiserType &ser,
     if(descriptor.usage != MTL::TextureUsageUnknown)
       descriptor.usage = (MTL::TextureUsage)(descriptor.usage | MTL::TextureUsageShaderRead);
     MTL::TextureDescriptor *native(descriptor);
+    native->setHazardTrackingMode(MTL::HazardTrackingModeTracked);
     const MTL::SizeAndAlign layout = Unwrap(m_Device)->heapTextureSizeAndAlign(native);
     const uint64_t heapSize = Unwrap(Heap)->size();
     if(layout.size == 0 || layout.align == 0 || offset % layout.align != 0 ||
