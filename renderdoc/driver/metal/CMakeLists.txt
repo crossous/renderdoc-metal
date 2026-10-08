@@ -6,6 +6,9 @@ set(sources
     metal_hook.h
     metal_device.cpp
     metal_descriptor_tables.cpp
+    metal_ray_ir.cpp
+    metal_ir_compute_abi.h
+    metal_ir_compute_abi.mm
     metal_device_library.cpp
     metal_device_pipeline.cpp
     metal_device_async.cpp

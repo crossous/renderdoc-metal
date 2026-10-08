@@ -83,7 +83,8 @@ static bool SavePresented(IReplayController *controller, const Inventory &info,
 
 int main(int argc, char **argv)
 {
-  if(argc != 3) return 2;
+  if(argc != 3 && !(argc == 4 && !strcmp(argv[3], "--open-output-only"))) return 2;
+  const bool openOutputOnly = argc == 4;
   GlobalEnvironment environment; environment.enumerateGPUs = false;
   rdcarray<rdcstr> args; args.push_back(argv[0]);
   RENDERDOC_InitialiseReplay(environment, args);
@@ -104,7 +105,7 @@ int main(int argc, char **argv)
          info.last, info.draws, info.dispatches, info.markers, info.presented.size(),
          controller->GetTextures().size(), controller->GetBuffers().size());
   if(!SavePresented(controller, info, argv[2], "loaded")) return 5;
-  for(uint32_t cycle = 0; cycle < 2; cycle++)
+  for(uint32_t cycle = 0; cycle < (openOutputOnly ? 0U : 2U); cycle++)
   {
     controller->SetFrameEvent(0, true);
     if(!controller->GetFatalErrorStatus().OK()) return 6;
@@ -117,6 +118,7 @@ int main(int argc, char **argv)
   }
   evidence.Save();
   controller->Shutdown(); RENDERDOC_ShutdownReplay();
-  puts("PASS normal open, two full EID0/reset replays and Native presented texture readbacks");
+  puts(openOutputOnly ? "GPU EXECUTION COMPLETE; presented texture readback saved; event resets not run; outputs unvalidated" :
+       "GPU EXECUTION COMPLETE; two full EID0/reset replays and presented readbacks saved; outputs unvalidated");
   return 0;
 }

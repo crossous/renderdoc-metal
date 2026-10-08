@@ -57,6 +57,10 @@ public:
   template <typename SerialiserType>
   bool Serialise_setVisibleFunctionTable(SerialiserType &ser,
       WrappedMTLVisibleFunctionTable *table, NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setIntersectionFunctionTable,
+                              WrappedMTLIntersectionFunctionTable *table, NS::UInteger index);
+  DECLARE_FUNCTION_SERIALISED(void, setAccelerationStructure,
+                              WrappedMTLAccelerationStructure *structure, NS::UInteger index);
 
   enum
   {

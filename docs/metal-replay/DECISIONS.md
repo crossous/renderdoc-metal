@@ -1,4 +1,56 @@
+2026-10-07 [PHASE59](PHASE59.md) / [B543](BATCH543_TYPED_HEAP_QUERY_INDIRECT.md)：参照VK FetchIndirectData/DX12 SaveExecuteIndirectParameters，补typed heap-query间接调度，逐encoder/ordinal/epoch核验原生GPU参数，保留原间接调用、零工作量与预算/闭包；修正typed只读资源误标CS_RW。最终backend/bundle2d7439ae、GUI3ba30e36、provideraba8b52b；八新间接query416事件（同encoder0/1/2、GPU1/132/0、末端offset/unretained/64几何/空TLAS）+14旧direct448事件+4旧heap64事件均Native/capture/API/CLI PASS。新72坏组144无GPUwait拒绝、6执行值不符组12次GPU核对后拒绝、2合法；普通计算间接八新capture56reset/seek、176坏组352无GPUwait/2执行不符组4拒绝PASS。56回归含官方两scene270事件10query/六能力、fresh四Sharedcompact18检查、20controller lifecycle（growth3063808）PASS，1798完成日志无严格诊断。复用B542实际UE9359c9e2，当前库normal/CPU65/pre-submit65仍API4无GPUwait/初态上传/frameGPU，UE完整输出与预算未验；40/48-byte CBV-root/二维调度/GPU producer-consumer仍缺。中间失败与502a结果保留不计最终PASS；full78IR/75RT/308/frame-family/Qt-ARC/官方坏13未跑，两flagsfalse、未提交推送。下一B544 typed CBV query闭包→实际Lumen，再短UE重放；持续active。
+
+2026-10-07 [PHASE59](PHASE59.md) / [B542](BATCH542_PRIVATE_PLACEMENT_GEOMETRY.md)：补Private/Tracked placement BLAS顶点/索引encoder-end冻结、kind1/2/8初态及帧内重建，复用VK/DX12 typed build-input路径与原预算/退休/范围/compact容量核验。backend/bundlea138d70a、GUI3ba30e36、provideraba8b52b；14新query448事件+4旧heap64事件、714坏组1428无GPUwait拒绝/26合法、56旧回归（含官方两scene270事件10query/六能力）、fresh四Sharedcompact18检查与20controller lifecycle PASS（growth11190272），4994完成日志无严格诊断。新UE9359c9e2/69862532bytes，主TLAS216bytes+两compact kind2 child6859/6863配方齐全（648/288与48/12bytes），另两空TLAS；60AIR全审查/两非零HW query[2,66,1]/[132,1,1]，实际root2为40/48byte CBV表。normal身份guard、CPU65/pre-submit65动态heap-query闭包均API4无GPUwait/初态上传/frameGPU；64heap1491815424/初态1127834757预算未验。保留fixture/审计脚本失败；UE输出/事件/EID0、full78IR/75RT/308/frame-family/Qt-ARC/官方坏13未跑，两flagsfalse、无提交推送。下一B543实际Lumen PSO/CBV-root/间接query和GPU producer-consumer声明，再UE整帧；持续active。
+
+2026-10-07 [PHASE59](PHASE59.md) / [B541](BATCH541_PRIVATE_COMPACT_SIZE_AND_UE_AS_INPUT.md)：定位UE空packet真正前置缺口为Private compact-size读取/独立query submission及native compact被跳过；补encoder-end4/8-byte冻结、query build来源、保留native转发且未知replay拒绝。最终backend/bundlef6a8029d、GUI3ba30e36、provider复用aba8b52b。六新placement/compact/空frame sample192事件，四旧heap64事件，168坏组336无GPUwait拒绝/六合法、56回归检查（含官方两scene270事件10query/六能力）、fresh四Sharedcompact18检查及20controller lifecycle PASS（growth3506176），1436完成日志无严格诊断。新UE716106d8，主TLAS216bytes+known两child7097/7101（GPU67/71），两个空TLASbytes0；60AIR全部审查/两非零HW query[2,7,1]/[132,1,1]，nativecompact错误消失，但两BLAS初态recipe缺失。normal/CPU65/pre-submit65仍动态heap-query闭包API4提交前拒绝，UE输出/事件/EID0/frameGPU未验；61heap1419217920/初态1110926467不宣称总预算通过。保留中间失败；full78IR/75RT/308/frame-family/Qt-ARC/官方坏13未跑，两flagsfalse、无提交推送。下一B542实际堆内BLAS几何/索引冻结与compact子配方，再Lumen PSO/root/indirect/GPU producer；持续active。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B540](BATCH540_FRAME_HEADER_HEAP_QUERY.md)：补coverage65新Shared64-byte Header创建/发布、CPU kind3槽位与当前Private typed TLAS build/query提交顺序及EID0；复用VK/DX12已知对象/冻结输入，未放宽未声明namespace。最终backend/bundlebfeca02b、GUI3ba30e36、provider复用aba8b52b。四新sample native/capture/API/CLI、128事件；四旧heap-query/64事件、六旧动态场景七capture/192事件，422坏组844无GPUwait拒绝/七合法控制、47旧回归（官方两scene270事件10query/六能力）及20 controller生命周期PASS（growth458752bytes），2985日志无严格诊断。复用B538UE c41abb06，最终normal/CPU65/pre-submit65仍提交前拒绝，无新UE/frameGPU/输出验收。新提取实际三TLAS输入options544 Private placement589824bytes、scratch1376256，构建snapshot皆空/children0；不能用standalone sample通过覆盖UE。保留首build/空initialshadow/gate单query计数失败与完整修复复验；full78IR/75RT/308/frame-family/Qt-ARC/官方坏13未跑，两生产能力false、未提交推送。下一B541实际Private placement每build快照/known-child闭包、GPU producer与sample→新UE，再Lumen PSO/root/indirect契约；持续active。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B539](BATCH539_TYPED_HEAP_QUERY_CONSUMERS.md)：完成coverage65初态AS/CPU kind3槽位/typed query PSO重放，双字段Header及descriptor VA重定位、依赖与EID0；限制frame AS build、GPU Header/贡献改写、未声明消费者，未全局放宽。最终backend/bundle1e13bd74、GUI3ba30e36、provider复用aba8b52b。四新sample native/capture/API/CLI、64事件；六旧动态场景七新capture/192事件，347坏组694无GPUwait拒绝/七合法控制、47旧回归（官方两scene270事件10query/六能力）及20 controller生命周期PASS（growth442368bytes），3762日志无严格诊断。复用B538UE c41abb06，仅最终库normal/CPU65/pre-submit65提交前拒绝frame新Header，无初态上传/frameGPU；无新UE capture/UE输出事件EID0验收。保留helper编译/空TLAS反例/遗漏oracle失败与完整复验；full78IR/75RT/308/frame-family/Qt-ARC/官方坏13未跑，两生产能力false、未提交推送。下一B540 Header帧内创建/发布+当前AS build/CPU slot消费时序，再实际Lumen PSO/root/indirect/GPU producer与UE验收；持续active。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B538](BATCH538_DYNAMIC_AS_HEADER_SNAPSHOTS.md)：补 StartCapture 最新 header 初态冻结、coverage3 同 Header 帧内显式版本/双字段重定位与提交顺序、Shared placement header和不可变 Private 贡献源，EID0恢复版本/raw。最终backend/bundle b71d6e4a、GUI3ba30e36、复用provider aba8b52b。七场景八capture native/capture/API/CLI、208事件选择/EID0、12 annotation拒绝、195坏组390无GPUwait拒绝/三合法控制、47旧回归（官方两scene270事件10查询/六能力）及20 controller生命周期PASS（growth425984bytes），1469日志无严格诊断。新UE c41abb06/66,705,869bytes、3TLAS/93direct+56indirect/60AIR全审查/两非零HW query；6header身份匹配、三背景snapshot与初态逐字节一致、26kind3记录，三frame header确为帧内新建，owned cleanup -9。65heap1,488,096,256/初态1,122,325,471，未宣称总预算通过；normal/CPU65/pre-submit65仍提交前拒绝UE新header/query闭包，无初态上传/frameGPU，UE输出/事件/EID0未验。保留build/fixture/oracle失败及修复复验；full78IR/75RT/308/frame-family/Qt-ARC/官方坏13未跑，两能力false、未提交推送。下一B539帧内新header、kind3当前slot/query consumer/依赖闭包，再实际UE验收；持续任务未完成、继续active。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B537](BATCH537_TYPED_AS_HEADER_PROVENANCE.md)：新增显式64-byte AS header对象/贡献来源与静态coverage3双字段重定位，UE factory kind3及实际header write捕获；Shared placement只授予捕获事实。最终backend/bundle2b363cb3、GUI3ba30e36、provider aba8b52b/98exports。八native/capture/API/CLI、152事件/EID0、12 annotation拒绝/同值重复接受、343坏组686无GPUwait拒绝/五合法控制、47旧回归（官方两scene270事件10查询/六能力）通过，2378日志无严格诊断。新UE b35de06d/65,098,798bytes、6header（三frame）/23kind3来源全核对、3TLAS/99direct+56indirect/60AIR全审查/两非零HW query；owned cleanup -9。68heap1,558,989,824/初态1,123,342,185，未宣称总预算通过；CPU65/pre-submit65动态header契约拒绝、无初态上传/frameGPU，UE输出/事件/EID0未验。保留两build/空fixture/首UE placement捕获拒绝；full78IR/75RT/308/frame-family/Qt-ARC/官方坏13未跑，两能力false、未提交推送。下一B538 typed动态header版本/Private贡献/descriptor producer-consumer及UE query PSO/root闭包，持续active。
+
+2026-10-06 [B536](BATCH536_UE_UINT16_BUFFER_TEXTURE.md)：补RGBA16Uint TextureBuffer8byte创建/读回/PickPixel及authoritative reflection的纯write typedUAV路径；backend/bundle5bbd0636、GUI3ba30e36。3shape六native/capture/API/CLI、408raw/pixel、24seek cycles/88事件选择、真实高位RGBA与RO/RW、零/非零offset、usage及EID0输出清零通过。72格式/范围/初态坏组144上传前拒绝，3writer组6加载期拒绝（发生初态上传，不计GPU前）。旧16格式两份/旧large R32三份API/CLI、新163初态纹理两capture12696subresource、八query/IR64、官方两scene270事件10查询及六能力通过，630完成日志无严格诊断。实际B535UE仅pre-submit65已越过buffer-view创建，下一slot25:27432/gen5508/type4无typedsource，API4且无GPUwait/初态上传；未验UE frameGPU/output/EID0。首三失败/oracle误判保留，生产flagsfalse、guard不放宽；下一B537显式AS-header factory/producer与typed动态header闭包，持续active、未提交推送。
+
+2026-10-06 [B535](BATCH535_UE_SMALL_PLACEMENT_BLOCKS.md)：隔离provider placement block64→16MiB，唯一源码变更MetalBuffer.cpp、98exports完整，新模块ee945869；--rhi明确选择并记录hash。f4f8b745 backend/bundle不变，新UE capture fbe1b7ac/73,738,545bytes、3间接TLAS/96direct+56indirectcompute、60 AIR全部审查/2shader两非零HW query，owned cleanup -9。80heap共1,731,791,872bytes（旧3.557GB），初态1,175,476,527反略增；CPU65首次接受metadata/预算(native1,765,703,936/snapshot12,835,615)，未执行GPU重放。pre-submit65 API4于RGBA16Uint TextureBuffer8192/row65536创建，无GPUwait/初态上传；10保存日志无严格诊断。生产flagsfalse，UE输出/事件/EID0/typed动态header未验，原引擎/用户工程及guard保持；下一B536 typed RGBA16Uint view真实读写sample与旧回归，再当前UE提交前预检。持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B534](BATCH534_UE_UINT16_TEXTURE.md)：coverage65 Private/Tracked R16Uint2D单mip RW≤4096x512，unsigned16 raw/PickPixel与每row32768+y→65535-y；backend/bundlef4f8b745、GUI3ba30e36。4096x16/4096x512/3x5六native/capture/API/CLI、72事件/EID0、ID/usage/全部像素通过；八像素/线程守262144预算，20坏组40拒绝。旧78texture/view/heap/volume、八query/四IR、fresh整数array/atomic四capture、官方两scene/270事件/10查询/六能力/CPU预算通过；616日志无严格诊断。B533实际新UE CPU65已越过frame创建，native3,593,011,456/initial1,170,276,095/snapshots12,957,904，GPU静态总预算拒绝，无frame GPU。两flagsfalse，下一B535独立provider16MiB block及实际低heap新UE，保留安装引擎/原用户工程和guard；旧B528 sRGB仍未支持，typed动态header/producer待补。持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B533](BATCH533_UE_SMALL_LUMEN_CACHES.md)：新增隔离--small-lumen-caches及运行cvar数值/来源检查，surface512²/grid4/probe8/atlas32实际生效；dba15ac3库，newUEcapture9238d0c3/70,728,712bytes、3间接TLAS/99direct+56indirectcompute，60 AIR全审查0unvalidated、2shader/2非零HW query [2,64,1]/[132,1,1]，owned cleanup -9不计正常退出，输出/重放未验。52heap3,556,769,792bytes比B528增加，初态blob1,170,276,095减少，heap alone超过3GiB-128MiB硬上限，不宣称预算达标。normal/CPU65 API4且无GPUwait/严格诊断，下一R16Uint2D4096x16 usage3；源码找到isolated provider block64MiB（原installed512MiB），可独立减小粒度、guard保持。两能力false，下一B534实际R16Uint二维样例，再有界provider heap粒度与typed动态header/sRGB，未改原用户工程/installed engine、持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B532](BATCH532_UE_PACKED_RENDER_TEXTURE.md)：coverage65 RGB10A2Unorm2D≤512单mip读写可带RT7；backend/bundledba15ac3、GUI3ba30e36。三shape六native/capture/API/CLI、96事件/EID0、native clear读32/96/160、每像素packedbits/PickPixel及独立clear EID往返通过；20坏组40拒绝。旧72texture/view/heap/volume、八query/四IR、fresh整数array/atomic四capture、官方两scene/270事件/10查询/六能力/CPU预算通过；592日志无严格诊断。实际B528UE仅CPU65越过RGB10A2 usage7，下一BGRA8Unorm_sRGB2D320x240 usage7拒绝；无新UE/GPU/full/Qt-ARC，两能力false。下一B533实际小Lumen缓存新UE截帧并核验保留HW query及成本，再补sRGB与typed动态header/producer，持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B531](BATCH531_UE_LARGE_PACKED_TEXTURE.md)：补coverage65 Private/Tracked RG11B10Float二维单mip RW≤4096²，wholeheap/总预算保持；backend/bundle3f7e0854、GUI3ba30e36。4096²/2048x1376/3x5六native/capture/API/CLI、72事件/EID0、全部packedbits/PickPixel/usage/ID通过；每线程≤8x8像素守262144调度预算，20坏组40拒绝。旧66texture/view/heap/volume、八query/四IR、fresh整数array/atomic四capture、官方两scene/270事件/10查询/六能力/CPU预算通过；568最终日志无严格诊断。实际B528UE仅CPU65越过大packed2D，下一RGB10A2Unorm二维320x240 usage7拒绝，无新UE/GPU/full/Qt-ARC；两能力false，下一B532 packed二维RT用途与clear/sample，随后小Lumen cache/typed动态header/producer及预算闭包，持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B530](BATCH530_UE_PACKED_FLOAT_VOLUME.md)：补coverage65 Private/Tracked RG11B10Float单mip RW3D≤64³，wholeheap/预算保持；backend/bundle99df52e4、GUI3ba30e36。三shape六native/capture/API/CLI、72事件/EID0、每z独立精确11-bit值/全部packedbits/PickPixel/usage/ID通过；20坏组40 GPU前拒绝。旧60texture/view/heap/volume、八query/四IR API/CLI、fresh整数array/atomic四capture、官方两scene/270事件/10查询/六能力/CPU预算通过；544完成日志无严格诊断。首轮wrong_format=92与原RG11B10Float值相同，合法OpenCapture成功，保留FAIL，不声称GPU前拒绝；换Depth32Float3D完整复验。实际B528UE仅CPU65越过packed3D，下一RG11B10Float二维4096x4096 RW拒绝，无新UE/GPU/full/Qt-ARC；两能力false，下一B531有界大packed二维sample，再动态header/producer/预算闭包，持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B529](BATCH529_UE_UINT_VOLUME.md)：补coverage65 Private/Tracked RW单mip R32Uint3D≤256x64x64、array1，复用typed placement/lifetime/预算。backend/bundleaee8c20d、GUI3ba30e36；3shape六native/capture/API/CLI、72选择/EID0、各z不同uint/全体素/PickPixel/两write+read usage/不同ID通过；20坏组40拒绝；fresh整数array/2Datomic四capture、旧50texture/view/heap+四floatvolume API/CLI、八query/四IR、官方2scene/270事件/10查询/六能力/CPU预算通过，524完成日志无严格诊断。保留首次sample每dispatch超262144预算拒绝（改每线程≤4相邻体素、guard不变）及fresh raw-source无AIR usage缺失失败（改对应编译metallib后通过）；此前已通过54旧纹理没有重复跑，不将失败计通过。原B528UE仅CPU65越过R32Uint，下一RG11B10Float3D10x8x26拒绝；没有新UE GPU/full/Qt-ARC。两能力false，下一B530 packed-float volume实际sample，再动态header/producer/预算闭包，持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B528](BATCH528_UE_BOUNDED_SHADOW_SCENE.md)：补UE isolated small-shadow命令配置，实际cvar256/256/1与Depth16 frame256x256核验，越过B527 8192x2048拒绝；新capture9fa35417/62,399,341bytes、6间接TLAS/186direct+112indirectcompute，60 AIR条目全部审查、2shader/4非零RayQuery；owned capture cleanup -9不计正常退出，输出与GPU重放未验。43heap2,962,489,344bytes，初态blob1,608,781,321，未证明总预算通过（比B527初态增加，不宣称单调优化）。CPU65下一拒绝R32Uint3D192x48x48/usage3，normal frame-born identity拒绝，两API4无GPUwait/严格诊断。backend/bundlee231e2bd、GUI3ba30e36，两能力false，无driver guard放宽、原用户工程/installed engine未改。下一B529实际R32Uint3D frame extent与native/sample反例，再typed动态AS header/producer及预算闭包；持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B527](BATCH527_UE_SMALL_RAY_SCENE.md)：新增隔离3 mesh/2 light Blueprint工程与有限NullRHI生成器（两关卡保存通过），禁用无关默认插件并配置必需SkinCache；小UE有限capture成功、owned cleanup -9，不计正常退出。e231e2bd库，capture1b19090e/56,406,168bytes，3间接TLAS/99direct+56indirectcompute/163编译完成；60原metallib AIR全部审查、2真实非零RayQuery [2,72,1]/[786,1,1]，输出和重放未验。45heap共3,029,598,208bytes（旧5,266,571,264），初态blob1,227,522,505（旧4,362,319,907）；未证明总预算通过。normal-open API4因frame-born identity，CPU65 API4因Depth16 8192x2048 frame texture，均无GPU wait/断言；保留首轮缺SkinCache Fatal及第二轮startup timeout，未计通过。原用户工程/installed engine未改，两能力false。下一B528小场景CSM分辨率/成本验证及实际typed producer闭包，持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B526](BATCH526_INLINE_QUERY_HEADER_RANGES.md)：query解析声明buffer+8对齐offset中的64-byte Shared AS header，保留whole backing≤16KiB/不可变来源/typed字段/地址唯一性；原chunk格式保持。backend/bundlee231e2bd、GUI3ba30e36；八native/capture/API/CLI、176事件/EID0、offset32/4096/16304与最后16字节保护区、frame/newTarget/multi64组合通过；236坏组472无GPU wait拒绝、五合法控制。旧query28（B524八份API，其余20 API/CLI）、TraceRay四份API/CLI、官方2scene/270事件/10查询/六能力通过，1734完成日志无严格诊断。旧texture/full/32CPU-AIR/Qt-ARC/官方坏13未重跑，无UE GPU。动态header、heap/nested绑定、producer及UE预算仍待补；下一先隔离低工作集UE场景和新截帧再补实际暴露缺口，两能力false、持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B525](BATCH525_INLINE_QUERY_NEW_TLAS.md)：query允许顺序验证的帧内新TLAS，无初态目标仅在typed冻结build提交后可用；独立前后Shared header/roots。backend/bundle99e80e2d、GUI3ba30e36；四native/capture/API/CLI、96事件/EID0、不同ASID/VA/两输出及前后usage通过；176坏组352无GPU wait拒绝含缺build/错target/提前query，四合法控制；旧query24 API（此前B524八份仅API）及旧16 API/CLI、TraceRay四份API/CLI、官方2scene/270事件/10查询/六能力通过，1280严格日志无诊断。保留首次MTLResourceID类型编译失败，._impl修复后全验；旧texture/full/Qt-ARC未重跑，无UE GPU。源码确认UE TLAS header为Shared动态子分配（纠正此前Private header猜测），下一补有界Shared header偏移、typed producer及低工作集UE；两能力false、持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B524](BATCH524_INLINE_QUERY_FRAME_GEOMETRY.md)：query消费Private帧内BLAS当前kind1/2/8配方，复用冻结验证及几何顺序/索引/finite约束。backend/bundle4d350b89、GUI3ba30e36；八native→capture→API/CLI、192事件/EID0、64几何+64实例最后命中4398、源清零、前后VA/ASID/usage通过；499坏组998无GPU wait拒绝、十合法控制通过；合法65实例native/capture成功而重放按上限拒绝，未声明控制拒绝。旧query16/TraceRay4、官方2scene/270事件/10查询/六能力通过，3358完成日志无严格诊断。保留首次读回buffer缺初态拒绝，明确零初态后完整复验；未放宽预检。旧50texture/full78IR/75RT/308/旧84/32CPU-AIR/Qt-ARC/官方13反例未重跑，无UE GPU，不继承旧hash。下一B525新TLAS目标，再Private/GPU header/typed producer与低工作集UE；两能力false、持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B523](BATCH523_INLINE_QUERY_FRAME_TLAS.md)：query消费同一已初始化TLAS的Private帧内typed冻结当前配方，子BLAS仍初态；Shared roots/header immutable。backend/bundlef71629a0、GUI3ba30e36；六native→capture→API/CLI、144事件/EID0、UserID73→74(2241→2258)、64实例3312→3329及空/屏蔽0→命中、两输出usage/两roots VA/保护字/AS-ID/BLAS前后usage/Private source清零与EID0通过；239坏组478 API/CLI无GPU wait拒绝、六合法UserID75/child-ID重编号控制通过。旧query十份/TraceRay四份、官方2scene/270事件/10查询/六能力及未声明控制通过，1744完成日志无严格诊断。保留oracle SDObject编译失败及合法控制漏CPU快照两次拒绝，修构造并完整复验。旧50texture/full78IR/75RT/308/旧84/Qt/ARC未重跑，UE预算阻塞未变化、本轮无UE GPU。下一B524 query消费Private帧内BLAS几何配方，再Private/GPU header/typed producer与小工作集UE；两能力false、持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B522](BATCH522_INLINE_QUERY_INDIRECT_TLAS.md)：inline query复用既有kind9/10/11间接/空/全屏蔽TLAStyped初態、72→68-byte UserID转换；保持Shared静态roots/header/output，子BLAS初态不可变。backend/bundle6f8bab50、GUI3ba30e36；八份native→capture→API/CLI、128事件/EID0/不同VA-ASID/保护字、UserID73→2241与64实例最后UserID136→3312、Private输入上传后88/5128bytes清零、空/屏蔽全0通过；149坏组298 API/CLI预提交拒绝、无GPU wait；旧query两份/TraceRay四份、官方2scene/270事件/10查询/六能力和未声明拒绝控制通过，1108完成日志无严格诊断。旧50纹理/full78IR/75RT/308/旧84/Qt/ARC未重跑、不继承旧hash；UE预算阻塞未变化未无效重跑，本轮无UE GPU。Private/GPU header/heap query/typed producer和帧内TLAS更新仍缺，下一B523复用已捕获的帧内冻结配方与事件状态；两能力false，持续active、未提交推送。
+
+2026-10-06 [PHASE59](PHASE59.md) / [B521](BATCH521_CONVERTED_INLINE_QUERY.md)：补独立converted inline RayQuery的不可变PSO→roots/offset/header/output声明、typed AS-ID/VA闭包、slot2调度与usage/初态/EID0；没有伪造IR TraceRay packet/SBT。backend/bundlee72514c6、GUI3ba30e36；root0/8两份native→capture→API/CLI、四结果1000/1000/0/0、32事件/EID0/强制VA和AS-ID变化/保护字通过；39坏组78 API/CLI拒绝且无GPU wait，未声明控制拒绝。旧50纹理/view/heap API/CLI、旧view四份native capture replay、四个Private/frame/multi/local/heap IR、fresh default TraceRay、官方两scene/270事件/10查询/六能力/CPU预算通过；588最终日志无严格诊断。初始fixture崩溃及编译/检查器失败保留，AS标签未捕获、同CB BLAS→TLAS仍拒绝。当前仅Shared静态普通TLAS≤64、1D直接query，UE Private/GPU header/typed producer/indirect TLAS/frame更新/低工作集仍待补；原UE CPU总预算拒绝，未跑UE GPU/完整78IR/75RT/308/旧84反例/Qt/ARC，两能力false。下一先复用现有typed间接TLAS初态供query，再补实际UE header和producer；持续active、未提交推送。
+
 # Metal Replay 决策记录
+
+## D061：AS 尺寸查询按原生描述符转发，与实际构建存储限制分开
+
+- 2026-10-05，参照 DX12 GetRaytracingAccelerationStructurePrebuildInfo 和 Vulkan vkGetAccelerationStructureBuildSizesKHR。
+- B476 的 AS sizes/heap layout 查询解包实例描述符，允许 Managed/Private 输入；不读取 CPU 实例字节，也不序列化查询 chunk。实际分配/构建/初态恢复保留现有校验。
+- 官方 sample 与独立 5 组查询测试驱动修复；固定源码/ZIP 哈希，native/capture/replay 分项记录。sample 捕获仍失败和生命周期断言不能计为通过，能力门槛见 RAYTRACING_ENABLEMENT.md。
 
 ## D057：描述符生命周期沿用明确shadow元数据，UE私有执行点用隔离模块
 
@@ -797,3 +849,90 @@
   间接 dispatch、跨 queue、heap 或 compute ICB。非法 slot/offset/resource/grid 稳定拒绝。
 - 验证：T28/T29 native/capture/XML/Replay API、10 类异常 RDC、联合定向、CLI、
   11×10 lifecycle 与 DDS/raw 内容自动通过；合并 GUI L4 见 `QA_BATCH29-30.md`。
+
+## D058：按 Vulkan/DX12 的实际支持边界补齐 Metal
+
+- 2026-10-05，用户再次明确，采用。每项图形/光追能力先查对应后端实现，
+  支持的优先复用 RenderDoc 捕获、资源依赖、提交、事件与恢复模型；
+  对应后端不支持的功能不在 Metal 独自扩展。Metal 独有功能先证明必要性。
+- `docs/behind_scenes/raytracing.rst` 确认光追为黑盒：保存并正确执行 GPU 工作，
+  输出供后续普通图形调试使用，不提供光追内部调试。AS marker 使用统一
+  ActionFlags 和事件树；IFT 空槽更新只为重建必要执行状态，不增新 viewer。
+- 受控射线样例不等于任意应用支持；在执行期实例数据、帧前 AS 初态和函数表
+  提交快照等缺口闭环前，保持两项 raytracing 能力查询为 false。
+- 实施与后续门槛见 [PHASE54](PHASE54.md)。
+
+## D059：AS 初态保存不可变构建输入，按已证明的提交与依赖重建
+
+- 2026-10-05，采用。参照 Vulkan `vk_acceleration_structure.cpp`、DX12
+  `d3d12_initstate.cpp`，保存输入与资源身份，在回放设备重建，不复制 Metal
+  opaque AS 存储，也不扩展光追内部查看/调试。
+- 描述符参数在调用时固定；顶点、索引和实例字节在 commit 前固定。Shared
+  可读性不代表 producer 已完成；需要提交完成、无其它 reservation、构建 CB
+  无输入写入。保留原生提交读 status，不在捕获切换锁内等待应用完成回调。
+- TLAS 保留子 build-record 身份。底层结构被重新构建后，不能拿新输入替换旧
+  TLAS 的依赖而宣称恢复正确。每轮先验证子初态完整，再先 BLAS、后 TLAS。
+- 尺寸查询和实际重建均使用冻结输入。完整 vertex stride 的尾 padding 补零；
+  padding 不属于几何输入。源缓冲区后来改写时保留其当前初态，AS 仍使用旧输入。
+- System InitialContents 的 schema1/2 可读，schema3 增加索引输入；旧 buffer/
+  texture 字段和 driver chunk ID 不变。未证明的输入明确拒绝，设备能力仍 false。
+- 结果与接续见 [PHASE55](PHASE55.md)。
+
+## D060：refit/copy初态保留输入版本，compact先重建再验证容量
+
+- 2026-10-05，采用。按Vulkan/DX12的AS输入记录和重建方法恢复refit/copy；
+  Metal nil目标归一到源ID，沿用现有refit chunk，不新增内部调试能力。
+- copy持有独立不可变recipe；commit检验编码时源版本未被其它提交替换。
+  原地refit的占位记录不能参与此版本比较；先固定提交前源版本集合。
+- 完整回放清除全部AS的逻辑构建状态，再应用初态，避免异地refit目标沿用
+  上轮执行状态。静态索引和refittable索引沿用不同的既有count元数据约定。
+- compact初态在全尺寸临时AS中重建，查询本机实际压缩尺寸，完成且容量足够
+  才copy到原分配；恢复初态尺寸查询producer身份，保留公共尺寸缓冲帧首字节。
+- schema4补compact和尺寸查询证明，保持schema1/2/3读取；未证明执行点的输入
+  明确拒绝，设备能力仍false。结果和接续见 [PHASE56](PHASE56.md)。
+
+## B486–B487：执行点输入冻结与实例编号格式
+
+AS encoder结束后隐藏blit只扩独立Tracked Private多indexed输入，拒绝Shared/NoCopy别名和heap/untracked等未经证明路径；延续kind8/schema5。直接UserID实例使用kind5/schema6并严格schema/type配对，按原始offset/stride提取68-byte规范化输入，完整uint32编号保留；默认实例schema1–4与multi-indexed schema5不改。间接GPU ID只能经typed资源关联重定位，不能把buffer中任意整数猜成地址。此批未扩Private/Indirect实例或公开能力。
+
+## B488：间接实例 typed AS 标识
+
+kind9/schema7保存72-byte公开Indirect实例与typed child ResourceIds；GPU标识只取自AS getter记录的关联。重放规范化为68-byte UserID实例和live child handles，避免原始捕获ID提交或任意整数扫描，保留完整userID/flags/mask/IFT。帧内先限定Shared CPU静态输入与此前提交的1–4个primitive子AS；Private/GPU输入另行验收。身份metadata跨活AS占有冲突必须拒绝。
+
+## 2026-10-07 用户执行准则：重放恢复与访问展示分离（优先于历史 guard 策略）
+
+不能把不断扩充 CPU 上的 shader 表达式分析当作通用 API 适配的全部。按仓库 DX12/Vulkan 的实现，分别推进以下四层：
+
+| 层次 | 应完成的机制 | 是否可以阻止重放 |
+|---|---|---|
+| 资源恢复 | 捕获真实初态/创建数据；恢复 AS recipe、Private/GPU 输入、帧内创建及生命周期；按原生 API 重做生产者 | 缺资源、失效/遗漏初态或 AS 恢复失败必须修复并拒绝错误重放 |
+| 地址重定位 | 通过已知对象和真实 ABI/typed factory 来源，重建 root、descriptor、AS Header、GPU 生成指针及复制的地址字段 | 未恢复的 GPU 指针、错误来源/类型/范围必须修复；禁止猜测地址位型或简单忽略错误 |
+| 提交依赖 | 保留原生队列、encoder、生产者→消费者和物理别名顺序，正确恢复事件前后及 EID0 | 缺生产者、未提交依赖或生命周期错误必须修复 |
+| shader 访问展示 | 静态访问和可获得的动态反馈只用于报告真实/部分访问；声明的绑定/驻留资源不是实际访问列表 | 动态索引/条件/循环/数值表达式没有被 CPU 分析完整，不能仅因此永久拒绝已可正确重放的 API 调用 |
+
+资源恢复证明与访问展示结果必须使用独立状态，不能继续用同一个 `UniformResourceAccess` 报告同时决定“能否重放”和“能否精确展示”。CPU 分析可以作为可选诊断/已知访问证据，不是必须执行所有 shader 表达式的 CPU 模拟器。不存在完整展示证据时，明确报告部分/未知展示，不把整个 heap 伪装成 shader 实际访问。GPU 生产者仍由真实 Native shader/API 重做；未恢复的地址字段要补真实重定位机制，不能用旧初态或 CPU 算出的输出替代。
+
+本地参照：`renderdoc/driver/d3d12/d3d12_command_list_wrap.cpp::Serialise_Dispatch`、`renderdoc/driver/vulkan/wrappers/vk_draw_funcs.cpp::Serialise_vkCmdDispatch` 重放原生调度；两者 `GetDescriptorAccess` 使用静态访问与可用的 shader feedback 展示。DX12 在 `d3d12_replay.cpp:1995` 仅追加 valid 的动态反馈，不把 CPU 数值分析作为普通 Dispatch 的必要条件；Vulkan 对应 `vk_replay.cpp:2990` 和 `vk_shader_feedback.cpp::FetchShaderFeedback`。资源、地址及 descriptor 支持范围继续优先参考 VK/DX12；Metal 独有且必要的地址语义才补机制。RT 保持黑盒，Lumen 只作实际应用验收。
+
+历史文档中“unknownBuffer/unknownCall 一律拒绝”及只以扩充表达式语法解决所有新 feature 的下一步，均被本准则取代。历史失败/通过日志仍保留，不更改已经发生的结果。每个新拒绝必须区分资源恢复、地址重定位、提交依赖、非法 API/capture 和纯展示不足，记录具体依据；纯展示不足不作为新支持范围的永久否决条件。坏 capture 验收继续覆盖缺失资源/来源、错误身份和地址字段、生命周期与提交破坏；只修改普通 shader 索引/数值的旧“拒绝 oracle”要审查其真实语义，不能为了维持旧预期重新绑定展示与重放。
+
+下一项仍为同一 B544/PHASE59 大批次：先拆 `metal_descriptor_tables.cpp::validateRuntimeDispatch` 的恢复/重定位/提交资格与 `metal_shader_inspect.cpp`/`GetDescriptorAccess` 展示路径。用 Native 正确但静态分析不完整的 GPU 索引/分支 sample 验证“重放通过、展示部分”，再验证未恢复 GPU 指针/缺生产者等确实失败的控制。恢复机制完成并独立验证后，移除仅由展示不足造成的 hard gate；不能直接把所有 unknown 放行。随后回当前 UE 实际 capture，检查整体输出、真正 RT 调度、事件、EID0 和绑定，再集中验收生产能力开关。
+
+2026-10-07 实现进展：B544 已验证首段“已知对象/恢复指针 + 动态偏移或分支候选范围 → Native 重放通过、展示部分”。下一处理独立 pointer provenance/namespace资格；当前 UE pointer select 丢失身份不能自动归类成实际地址缺失，不以继续扩充 CPU 分支/数值表达式作为主要修复。完整证据见 BATCH544 当前 continuation。
+
+2026-10-07 B544当前进展：指针分支、结构投影与Native原子/调用资源效果保留已有恢复来源，数值展示不完整可Native重放/展示部分；嵌入原捕获VA独立拒绝并要求实际重定位。真实UE预检已越过旧首commit557952与六MRT；下一核实draw3330304的fragment阶段可选性/身份，不继续按数值表达式或引擎名字逐个准入。scope、失败和当前2133a76f验证见BATCH544；完整UE/最终能力开关仍未验，目标active。
+
+2026-10-07 B544推进到f9718c71：可选Native阶段与barrier/fence资源效果独立，空shader阶段不产生访问列表，GPU共享内容保持未知但原生执行。UE越过fragment旧guard，下一1624的known-buffer/null选择后动态GEP来源资格；当前四unknown不证明实际地址恢复失败，先核实来源/字段语义，不将模拟共享数组或数值表达式作为主修复。当前scope/FAIL/未验在BATCH544，任务active、生产flagsfalse。
+
+2026-10-07 B544当前529d0a7b：分支来源/相对索引、固定shader地址重定位与对象metadata/像素初态独立；GPU执行原shader，CPU展示partial不永久拒绝。已知predicate也不省略literal捕获VA/span校验，pixel读保留初态/producer。下一实际3836是Native SIMD效果与texture atomic读写/初态/提交闭包，再runtime AS/Header，不模拟lane算法、不只删unknownCall。standalone frame texture仍未实现，不能以placement fixture替代。PASS/FAIL/未跑在BATCH544，目标active/flags false。
+
+2026-10-07 B544当前8d6ec636：Native SIMD/atomic返回保持unknown；恢复source/null phi与动态offset可原GPU重放/展示partial，texture store/load/RMW、初态/producer和提交独立。Native与帧factory共用texture→buffer布局/overflow/生命周期/alias/预算，真实写不恢复CPU旧事实。两同/跨提交fresh全输出/各72事件通过，UE越过3836，下一3853 frame buffer-texture对象/写资格拒绝待诊断，不以扩CPU数值表达式代替恢复。PASS/FAIL/未跑见B544/PHASE59，flagsfalse、目标active，用户四层规则持续有效。
+
+2026-10-07 B544当前4163d391：frame buffer-texture对象/逻辑范围、当前copy字节有效性、像素restoration intervals独立CPU数值展示；root与texel backing合法不重叠可Native重放，缺像素恢复/真实overlap仍GPU前拒绝。UE越过3853，下一3854 background GPU descriptor初态/namespace与Private producer链；已有gpuExpected/opaque历史标记不能直接等于当前恢复失败，不以新增CPU数值表达式代替资源/地址/提交恢复。PASS/FAIL/未跑见B544/PHASE59，flagsfalse/目标active，用户四层准则持续有效。
+
+2026-10-07 B544通用资源恢复首组：已实际移除frame纹理/view组合许可、coverage容量与command/dispatch数量许可，统一布局/投影/预算；Native stride/metadata/真实producer恢复和JIT无AIR展示unknown已由独立sample变体及相关回归验证。后续按通用资源/地址/提交机制继续清理剩余coverage族与未知namespace/call，不按UE feature/pass/name/hash/EID准入；不将supervised预检完成当UE成功。当前UE仍API4无GPU，整帧/最终启用未验，flagsfalse。详见GENERIC_API_RECOVERY/B544最新段与根AGENTS，覆盖历史场景逐项许可策略。
+
+2026-10-07 B544 Native register API effect compatibility与按resource索引的依赖恢复：不计算CPU bit值、不按shader/EID/hash准入；完整prototype只提供资源效果，typed来源/初态/生命周期/提交校验独立。短CPU sample定位全局descriptor逐resource扫描，lower_bound保留本resource全部live字段/来源/依赖。UE同45s/3GiB限制内约25s到真实API4，下一同dispatch scalar事实/读写资源交叠；不拿监督exit0当UE PASS，不直接删除检查或用失效CPU数据选GPU资源。详见B544/PHASE59/GENERIC最新段，flagsfalse/目标active。
+
+
+2026-10-08：f1ba1862对应compute RT门槛在公开能力路径、官方/UE完整Native输出、事件/reset、独立合法组合与同候选固定矩阵完成后通过；supportsRaytracing直接Native委托，FromRender独立未验保持false。按DX12 OPTIONS5原生tier边界与VK物理RT/capture-replay恢复条件区分能力和恢复，不按UE名称/PSO/EID授予资格。最终范围/未跑/历史FAIL见HEAP_BACKING_RECOVERY最终节；NaN等旧实现拒绝不反推Native非法。持续任务此目标达成后停止。

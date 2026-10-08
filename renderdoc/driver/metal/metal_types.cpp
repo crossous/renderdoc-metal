@@ -75,6 +75,13 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
     {                                                                                             \
       RDCFATAL("'%s' objc != m_ObjcBridge %p != %p", className, objc, &wrappedCPP->m_ObjcBridge); \
     }                                                                                             \
+    if(WrappedMTL##CPPTYPE::TypeEnum != eResDevice && wrappedCPP->m_Device &&                    \
+       wrappedCPP->m_Device->m_ObjcBridge)                                                     \
+    {                                                                                         \
+      /* Native children retain their device; the proxy needs the same owner lifetime. */      \
+      ((NS::Object *)wrappedCPP->m_Device)->retain();                                           \
+      wrappedCPP->m_RetainsDeviceBridge = true;                                                \
+    }                                                                                         \
     MTL::CPPTYPE *real = (MTL::CPPTYPE *)wrappedCPP->m_Real;                                      \
     if(real && (WrappedMTL##CPPTYPE::TypeEnum == eResBuffer ||                                 \
                 WrappedMTL##CPPTYPE::TypeEnum == eResTexture ||                                \
@@ -121,6 +128,8 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
   }                                                                                               \
   void DeallocateObjCBridge(WrappedMTL##CPPTYPE *wrappedCPP)                                      \
   {                                                                                               \
+    NS::Object *owner = wrappedCPP->m_RetainsDeviceBridge ?                                     \
+        (NS::Object *)wrappedCPP->m_Device : NULL;                                              \
     NS::Object *ownedReal = wrappedCPP->m_OwnsReal ? (NS::Object *)wrappedCPP->m_Real : NULL;    \
     if(ownedReal && (WrappedMTL##CPPTYPE::TypeEnum == eResVisibleFunctionTable ||              \
                      WrappedMTL##CPPTYPE::TypeEnum == eResIntersectionFunctionTable ||           \
@@ -133,6 +142,8 @@ RDCCOMPILE_ASSERT(sizeof(NS::UInteger) == sizeof(std::uintptr_t),
     wrappedCPP->GetResourceManager()->ReleaseWrappedResource(wrappedCPP);                         \
     if(ownedReal)                                                                             \
       ownedReal->release();                                                                   \
+    /* Release the manager owner only after both proxy bookkeeping and native destruction. */ \
+    if(owner) owner->release();                                                               \
   }
 
 METALCPP_WRAPPED_PROTOCOLS(DEFINE_OBJC_HELPERS)

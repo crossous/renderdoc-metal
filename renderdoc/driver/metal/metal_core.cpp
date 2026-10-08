@@ -159,6 +159,9 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       return Serialise_newHeap(ser, NULL, 0, MTL::StorageModePrivate,
                                 MTL::CPUCacheModeDefaultCache,
                                 MTL::HazardTrackingModeDefault, MTL::HeapTypeAutomatic);
+    case MetalChunk::MTLBuffer_CaptureHeapBirthUnspecified:
+    case MetalChunk::MTLBuffer_CaptureHeapBirthContents:
+      return Serialise_CaptureHeapBirthContents(ser,ResourceId(),ResourceId(),0,bytebuf(),false);
     case MetalChunk::MTLDevice_newBufferWithLength:
     case MetalChunk::MTLDevice_newBufferWithBytes:
       return Serialise_newBufferWithBytes(ser, NULL, NULL, 0, MTL::ResourceOptionCPUCacheModeDefault);
@@ -460,6 +463,16 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLAccelerationStructureCommandEncoder_writeCompactedAccelerationStructureSize:
       return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_writeCompactedSize(
           ser, NULL, NULL, 0, MTL::DataTypeULong);
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_insertDebugSignpost:
+      return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_insertDebugSignpost(ser, NULL);
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_pushDebugGroup:
+      return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_pushDebugGroup(ser, NULL);
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_popDebugGroup:
+      return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_popDebugGroup(ser);
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_updateFence:
+      return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_updateFence(ser, NULL);
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_waitForFence:
+      return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_waitForFence(ser, NULL);
     case MetalChunk::MTLAccelerationStructureCommandEncoder_endEncoding:
       return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_endEncoding(ser);
     case MetalChunk::MTLComputeCommandEncoder_setAccelerationStructure:
@@ -540,6 +553,10 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
           ser, {}, NS::Range::Make(0, 0));
     case MetalChunk::MTLArgumentEncoder_setVisibleFunctionTable:
       return m_DummyReplayArgumentEncoder->Serialise_setVisibleFunctionTable(ser, NULL, 0);
+    case MetalChunk::MTLArgumentEncoder_setIntersectionFunctionTable:
+      return m_DummyReplayArgumentEncoder->Serialise_setIntersectionFunctionTable(ser, NULL, 0);
+    case MetalChunk::MTLArgumentEncoder_setAccelerationStructure:
+      return m_DummyReplayArgumentEncoder->Serialise_setAccelerationStructure(ser, NULL, 0);
     case MetalChunk::MTLComputePipelineState_functionHandleWithFunction:
       return m_DummyReplayComputePipelineState->Serialise_functionHandle(ser, NULL, NULL);
     case MetalChunk::MTLComputePipelineState_newVisibleFunctionTableWithDescriptor:
@@ -577,6 +594,20 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLAccelerationStructureCommandEncoder_buildTriangleNoDuplicate:
       return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_buildTriangleNoDuplicate(
           ser, NULL, NULL, 0, NULL, MTL::IndexTypeUInt16, 0, 0, NULL, 0, 0, false);
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_buildMultiIndexed:
+      return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_buildMultiIndexed(
+          ser, NULL, NULL, NULL, {}, NULL, 0);
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_buildUserIDInstances:
+      return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_buildUserIDInstances(
+          ser, NULL, {}, NULL, NULL, {}, {});
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_buildFrozenMultiIndexed:
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_buildFrozenTriangles:
+      return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_buildFrozenTriangles(
+          ser, NULL, NULL, NULL, 1, {}, NULL, 0, {}, {});
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_buildIndirectInstancesWithScratchOffset:
+    case MetalChunk::MTLAccelerationStructureCommandEncoder_buildIndirectInstances:
+      return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_buildIndirectInstances(
+          ser, NULL, {}, NULL, NULL, {}, {});
     case MetalChunk::MTLAccelerationStructureCommandEncoder_buildRefittableTriangleNoDuplicate:
       return m_DummyReplayAccelerationStructureCommandEncoder->Serialise_buildRefittableTriangleNoDuplicate(
           ser, NULL, NULL, 0, NULL);
@@ -980,8 +1011,36 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
       return m_DummyBuffer->Serialise_setPurgeableState(ser, MTL::PurgeableStateKeepCurrent);
     case MetalChunk::MTLResource_CaptureGPUIdentity:
       return Serialise_CaptureGPUIdentity(ser, ResourceId(), 0, 0);
+    case MetalChunk::MTLAccelerationStructure_CaptureGPUIdentity:
+      return Serialise_CaptureAccelerationStructureGPUIdentity(ser, ResourceId(), 0);
+    case MetalChunk::MTLFunctionTable_CaptureGPUIdentity:
+      return Serialise_CaptureFunctionTableGPUIdentity(ser, ResourceId(), 0, 0);
     case MetalChunk::MTLBuffer_DeclareDescriptorTable:
       return Serialise_DeclareDescriptorTable(ser, ResourceId(), 0, 0, 0, 0);
+    case MetalChunk::MTLComputePipelineState_DeclareRayIRHeapEntry:
+      return Serialise_DeclareRayIRHeapEntry(ser, ResourceId(), 0, 0, 0, 0);
+    case MetalChunk::MTLComputePipelineState_DeclareRayIRGlobalRoot:
+      return Serialise_DeclareRayIRGlobalRoot(ser, ResourceId(), 0, 0, 0, 0);
+    case MetalChunk::MTLFunctionHandle_DeclareRayIRLocalRoot:
+      return Serialise_DeclareRayIRLocalRoot(ser, ResourceId(), 0, 0, 0, 0);
+    case MetalChunk::MTLFunctionHandle_DeclareRayIRShaderRole:
+      return Serialise_DeclareRayIRShaderRole(ser, ResourceId(), 0);
+    case MetalChunk::MTLComputePipelineState_DeclareRayIRDispatch:
+      return Serialise_DeclareRayIRDispatch(ser, ResourceId(), ResourceId(), 0, 0);
+    case MetalChunk::MTLBuffer_DeclareRayASHeader:
+      return Serialise_DeclareRayASHeader(ser, ResourceId(), 0, ResourceId(), ResourceId(), 0, bytebuf());
+    case MetalChunk::MTLComputePipelineState_DeclareRayQueryDispatch:
+      return Serialise_DeclareRayQueryDispatch(ser, ResourceId(), ResourceId(), 0, ResourceId(), ResourceId());
+    case MetalChunk::MTLComputePipelineState_DeclareIRComputeRoot:
+      return Serialise_DeclareIRComputeRoot(ser, ResourceId(), 0, 0, 0, 0);
+    case MetalChunk::MTLComputePipelineState_DeclareIRComputeHeapEntry:
+      return Serialise_DeclareIRComputeHeapEntry(ser, ResourceId(), 0, 0, 0, 0);
+    case MetalChunk::MTLComputePipelineState_CaptureIRComputeReflection:
+      return Serialise_CaptureIRComputeReflection(ser, ResourceId(), rdcstr());
+    case MetalChunk::MTLComputePipelineState_DeclareRayQueryHeapCBVRoot:
+      return Serialise_DeclareRayQueryHeapCBVRoot(ser, ResourceId(), 0, 0, 0, 0);
+    case MetalChunk::MTLComputePipelineState_DeclareRayQueryHeapDispatch:
+      return Serialise_DeclareRayQueryHeapDispatch(ser, ResourceId(), ResourceId(), 0, ResourceId());
     case MetalChunk::MTLDevice_DeclareDescriptorCoverage:
       return Serialise_DeclareDescriptorCoverage(ser, 0);
     case MetalChunk::MTLBuffer_DeclareDescriptorGPUWrites:
@@ -1035,6 +1094,8 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     case MetalChunk::MTLHeap_newBuffer:
       return m_DummyReplayHeap->Serialise_newBuffer(
           ser, NULL, 0, MTL::ResourceStorageModePrivate);
+    case MetalChunk::MTLHeap_newAccelerationStructure:
+      return m_DummyReplayHeap->Serialise_newAccelerationStructure(ser, NULL, 0, 0, false);
     case MetalChunk::MTLHeap_newBufferWithOffset:
       return m_DummyReplayHeap->Serialise_newBufferWithOffset(
           ser, NULL, 0, MTL::ResourceStorageModePrivate, 0);
@@ -1263,8 +1324,11 @@ bool WrappedMTLDevice::ProcessChunk(ReadSerialiser &ser, MetalChunk chunk)
     }
     else if(system == SystemChunk::InitialContentsList)
     {
-      // TODO: Create initial contents
-      RDCERR("SystemChunk::InitialContentsList not handled");
+      // Decode the same metadata as D3D12/Vulkan CreateInitialContents. Metal's
+      // verified typed initial state is registered/restored separately; generic
+      // Create_InitialState is not implemented and must not be invoked here.
+      rdcarray<ResourceManagerInternal::WrittenRecord> NeededInitials;
+      SERIALISE_ELEMENT(NeededInitials);
 
       SERIALISE_CHECK_READ_ERRORS();
     }
@@ -1376,6 +1440,139 @@ void WrappedMTLDevice::CaptureGPUIdentity(WrappedMTLObject *object, uint32_t kin
     AddFrameCaptureRecordChunk(chunk->Duplicate());
     GetResourceManager()->MarkResourceFrameReferenced(GetResID(object), eFrameRef_Read);
   }
+}
+
+template <typename SerialiserType>
+bool WrappedMTLDevice::Serialise_CaptureAccelerationStructureGPUIdentity(
+    SerialiserType &ser, ResourceId resource, uint64_t value)
+{
+  SERIALISE_ELEMENT(resource).Important();
+  SERIALISE_ELEMENT(value).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(ser.IsReading() && !IsStructuredExporting(m_State))
+  {
+    auto object = GetResourceManager()->GetResource(resource, true);
+    if(!object || object->m_Type != eResAccelerationStructure || !object->m_Real ||
+       object->m_Device != this || !value)
+    {
+      RDCERR("Invalid Metal acceleration-structure GPU identity resource");
+      return false;
+    }
+    auto structure = (WrappedMTLAccelerationStructure *)object;
+    if(structure->m_CapturedGPUResourceID && structure->m_CapturedGPUResourceID != value)
+    {
+      RDCERR("Conflicting Metal acceleration-structure GPU identity metadata");
+      return false;
+    }
+    for(auto other : GetResourceManager()->GetAccelerationStructures())
+      if(other != object && !Atomic::CmpExch32(&other->m_CapturedAliasable, 0, 0) &&
+         ((WrappedMTLAccelerationStructure *)other)->m_CapturedGPUResourceID == value)
+      {
+        RDCERR("Conflicting Metal acceleration-structure GPU identity ownership");
+        return false;
+      }
+    structure->m_CapturedGPUResourceID = value;
+  }
+  return true;
+}
+
+template bool WrappedMTLDevice::Serialise_CaptureAccelerationStructureGPUIdentity(
+    ReadSerialiser &, ResourceId, uint64_t);
+template bool WrappedMTLDevice::Serialise_CaptureAccelerationStructureGPUIdentity(
+    WriteSerialiser &, ResourceId, uint64_t);
+
+void WrappedMTLDevice::CaptureAccelerationStructureGPUIdentity(WrappedMTLObject *object,
+                                                              uint64_t value)
+{
+  if(!IsCaptureMode(m_State) || !object || object->m_Type != eResAccelerationStructure ||
+     !value || !GetRecord(object))
+    return;
+  // Vulkan forwards the native AS address; DX12 tracks addresses by ResourceId.
+  // Record the queried AS dependency and its capture identity. This does not
+  // reinterpret arbitrary buffer integers or relax raw-address consumer guards.
+  if(IsActiveCapturing(m_State))
+    GetResourceManager()->MarkResourceFrameReferenced(GetResID(object), eFrameRef_Read);
+  ((WrappedMTLAccelerationStructure *)object)->m_CapturedGPUResourceID = value;
+  if(Atomic::CmpExch32(&object->m_CapturedGPUIdentity, 0, 1) != 0)
+    return;
+  CACHE_THREAD_SERIALISER();
+  SCOPED_SERIALISE_CHUNK(MetalChunk::MTLAccelerationStructure_CaptureGPUIdentity);
+  Serialise_CaptureAccelerationStructureGPUIdentity(ser, GetResID(object), value);
+  Chunk *chunk = scope.Get();
+  GetRecord(object)->AddChunk(chunk);
+  if(IsActiveCapturing(m_State))
+    AddFrameCaptureRecordChunk(chunk->Duplicate());
+}
+
+template <typename SerialiserType>
+bool WrappedMTLDevice::Serialise_CaptureFunctionTableGPUIdentity(
+    SerialiserType &ser, ResourceId resource, uint32_t kind, uint64_t value)
+{
+  SERIALISE_ELEMENT(resource).Important();
+  SERIALISE_ELEMENT(kind).Important();
+  SERIALISE_ELEMENT(value).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(ser.IsReading() && !IsStructuredExporting(m_State))
+  {
+    const MetalResourceType type = kind == 0 ? eResVisibleFunctionTable : eResIntersectionFunctionTable;
+    auto object = GetResourceManager()->GetResource(resource, true);
+    if(kind > 1 || !value || !object || object->m_Type != type || !object->m_Real ||
+       object->m_Device != this)
+    {
+      RDCERR("Invalid Metal function-table GPU identity resource/kind");
+      return false;
+    }
+    auto identity = [](WrappedMTLObject *table) -> uint64_t & {
+      if(table->m_Type == eResVisibleFunctionTable)
+        return ((WrappedMTLVisibleFunctionTable *)table)->m_CapturedGPUResourceID;
+      return ((WrappedMTLIntersectionFunctionTable *)table)->m_CapturedGPUResourceID;
+    };
+    if(identity(object) && identity(object) != value)
+    {
+      RDCERR("Conflicting Metal function-table GPU identity metadata");
+      return false;
+    }
+    // The typed table field, not an arbitrary integer, selects the namespace.
+    for(auto other : GetResourceManager()->GetFunctionTables(type))
+      if(other != object && identity(other) == value)
+      {
+        RDCERR("Conflicting Metal function-table GPU identity ownership");
+        return false;
+      }
+    identity(object) = value;
+  }
+  return true;
+}
+
+template bool WrappedMTLDevice::Serialise_CaptureFunctionTableGPUIdentity(
+    ReadSerialiser &, ResourceId, uint32_t, uint64_t);
+template bool WrappedMTLDevice::Serialise_CaptureFunctionTableGPUIdentity(
+    WriteSerialiser &, ResourceId, uint32_t, uint64_t);
+
+void WrappedMTLDevice::CaptureFunctionTableGPUIdentity(WrappedMTLObject *object, uint64_t value)
+{
+  if(!IsCaptureMode(m_State) || !object || !value || !GetRecord(object) ||
+     (object->m_Type != eResVisibleFunctionTable && object->m_Type != eResIntersectionFunctionTable))
+    return;
+  if(IsActiveCapturing(m_State))
+    GetResourceManager()->MarkResourceFrameReferenced(GetResID(object), eFrameRef_Read);
+  const uint32_t kind = object->m_Type == eResVisibleFunctionTable ? 0 : 1;
+  if(kind == 0)
+    ((WrappedMTLVisibleFunctionTable *)object)->m_CapturedGPUResourceID = value;
+  else
+    ((WrappedMTLIntersectionFunctionTable *)object)->m_CapturedGPUResourceID = value;
+  if(Atomic::CmpExch32(&object->m_CapturedGPUIdentity, 0, 1) != 0)
+    return;
+  // DX12 associates queried shader identifiers with their state object/export;
+  // Vulkan forwards native group handles. Retain this queried typed dependency,
+  // without claiming raw dispatch-packet relocation is implemented.
+  CACHE_THREAD_SERIALISER();
+  SCOPED_SERIALISE_CHUNK(MetalChunk::MTLFunctionTable_CaptureGPUIdentity);
+  Serialise_CaptureFunctionTableGPUIdentity(ser, GetResID(object), kind, value);
+  Chunk *chunk = scope.Get();
+  GetRecord(object)->AddChunk(chunk);
+  if(IsActiveCapturing(m_State))
+    AddFrameCaptureRecordChunk(chunk->Duplicate());
 }
 
 static bool FindMetalFrameDiagnosticBoundary(StreamReader *reader, uint64_t version,
@@ -1660,7 +1857,8 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
       for(const auto &initial : m_ReplayBufferInitialContents)
       {
         WrappedMTLBuffer *buffer = (WrappedMTLBuffer *)GetResourceManager()->GetResource(initial.first);
-        if(Unwrap(buffer)->storageMode() == MTL::StorageModeShared)
+        if(Unwrap(buffer)->storageMode() == MTL::StorageModeShared ||
+           Unwrap(buffer)->storageMode() == MTL::StorageModeManaged)
           m_ReplayCPUUpdatedBuffers.insert(initial.first);
       }
       {
@@ -1681,11 +1879,16 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
         if(scan.IsErrored())
           return RDResult(ResultCode::APIDataCorrupted, scan.GetError().message);
       }
-      if(!ResetReplayCPUUpdatedBuffers() || !RestoreReplayPrivateBufferInitialContents() ||
-         !RestoreReplayTextureInitialContents() ||
-         !GetReplay()->SnapshotTextureViewSources() ||
-         !GetReplay()->ResetTextureViewSources())
+      if(!ResetReplayCPUUpdatedBuffers())
         RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal initial CPU buffer data");
+      if(!RestoreReplayPrivateBufferInitialContents())
+        RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal initial Private buffer data");
+      if(!RestoreReplayTextureInitialContents())
+        RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal initial texture data");
+      if(!RestoreReplayASInitialContents())
+        RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal initial acceleration structure data");
+      if(!GetReplay()->SnapshotTextureViewSources() || !GetReplay()->ResetTextureViewSources())
+        RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal initial texture view data");
       if(initialUploadCoverage)
         RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
             "Metal initial upload diagnostic accepted candidate coverage65; initial GPU uploads completed and frame replay was not executed");
@@ -1731,7 +1934,7 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
                               "Invalid Metal replay completion before indirect action resolve");
         if(!GetReplay()->ResolvePendingComputeIndirectActions())
           RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
-                              "Metal compute indirect execution-point arguments do not match capture");
+                              "Invalid Metal compute indirect per-use execution state");
         if(!GetReplay()->ResolvePendingRenderIndirectActions())
           RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
                               "Metal render indirect execution-point arguments do not match capture");
@@ -1857,7 +2060,10 @@ RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endE
 
   m_State = readType;
   if(replayType != eReplay_OnlyDraw)
+  {
     ++m_ReplayEpoch;
+    GetReplay()->ResetComputeIndirectTracking();
+  }
   m_FrameReader->SetOffset(0);
 
   ReadSerialiser ser(m_FrameReader, Ownership::Nothing);
@@ -2420,6 +2626,21 @@ bool WrappedMTLDevice::DeferTerminalBufferPurge(ResourceId id)
   return true;
 }
 
+bool WrappedMTLDevice::CanReplayFrozenASInputAlias(ResourceId before, ResourceId after) const
+{
+  if(!m_ReplayFrozenASInputs.count(before) || GetReplayEpoch() == 0) return false;
+  // Descriptor backing has a separate, proven ABI and alias closure.
+  for(const DescriptorTable &table : m_DescriptorTables)
+    if(table.buffer == before || table.buffer == after) return false;
+  for(const auto &entry : m_ReplayCommandBuffers)
+  {
+    const auto &state = entry.second;
+    if(!state.buffer || !Unwrap(state.buffer) || state.acceleration ||
+       Unwrap(state.buffer)->status() == MTL::CommandBufferStatusError) return false;
+  }
+  return true;
+}
+
 bool WrappedMTLDevice::CanReplayImplicitBufferAlias(ResourceId before, ResourceId after) const
 {
   if(m_DescriptorCoverage < 17 ||
@@ -2511,6 +2732,8 @@ RDResult WrappedMTLDevice::ReplayLog(uint32_t endEventID, ReplayLogType replayTy
   {
     if(!FinishReplayCommands())
       RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal replay completion");
+    if(!GetReplay()->ResolvePendingComputeIndirectActions())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,"Invalid Metal compute indirect per-use execution state");
     GetReplay()->ResetMetalFXTemporal();
     if(!RestoreReplayPurgedBuffers())
       RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal purgeable buffer restore");
@@ -2540,6 +2763,8 @@ RDResult WrappedMTLDevice::ReplayLog(uint32_t endEventID, ReplayLogType replayTy
       RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal Private buffer reset");
     if(!RestoreReplayTextureInitialContents())
       RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal texture reset");
+    if(!RestoreReplayASInitialContents())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal acceleration structure reset");
     if(!GetReplay()->ResetTextureViewSources())
       RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal texture view reset");
   }
@@ -2549,6 +2774,8 @@ RDResult WrappedMTLDevice::ReplayLog(uint32_t endEventID, ReplayLogType replayTy
   {
     if(!FinishReplayCommands())
       RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal replay completion");
+    if(!GetReplay()->ResolvePendingComputeIndirectActions())
+      RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,"Invalid Metal compute indirect per-use execution state");
   }
   return result;
 }
@@ -3075,6 +3302,8 @@ bool WrappedMTLDevice::ReplayCPUBufferUpdate(WrappedMTLBuffer *wrapped, uint64_t
 
 bool WrappedMTLDevice::ResetReplayCPUUpdatedBuffers()
 {
+  m_RayASHeaderCurrent=m_RayASHeaders;
+  m_RayASHeaderFrameCursor=0;
   if(m_DescriptorCoverage >= 4)
   {
     m_DescriptorSlotShadow = m_DescriptorSlotInitial;
@@ -3100,7 +3329,9 @@ bool WrappedMTLDevice::ResetReplayCPUUpdatedBuffers()
     }
     MTL::Buffer *buffer = Unwrap((WrappedMTLBuffer *)object);
     auto it = m_ReplayBufferInitialContents.find(id);
-    if(it == m_ReplayBufferInitialContents.end() || buffer->storageMode() != MTL::StorageModeShared ||
+    if(it == m_ReplayBufferInitialContents.end() ||
+       (buffer->storageMode() != MTL::StorageModeShared &&
+        buffer->storageMode() != MTL::StorageModeManaged) ||
        !buffer->contents() || it->second.size() != buffer->length())
     {
       RDCERR("Metal Shared reset invalid buffer %s (snapshot=%llu mode=%u contents=%p length=%llu)",
@@ -3125,6 +3356,9 @@ bool WrappedMTLDevice::ResetReplayCPUUpdatedBuffers()
       RDCERR("Metal Shared reset argument buffer relocation failed for %s", ToStr(id).c_str());
       return false;
     }
+    // Publish both restored bytes and relocated argument resources to the Managed GPU copy.
+    if(buffer->storageMode() == MTL::StorageModeManaged)
+      buffer->didModifyRange(NS::Range::Make(0, buffer->length()));
   }
   return true;
 }
@@ -3277,6 +3511,8 @@ void WrappedMTLDevice::StartFrameCapture(DeviceOwnedWindow devWnd)
       return;
     }
 
+    m_CaptureHeapBirthBytes=0;
+    m_CaptureHeapBirthWaitMS=0.0;
     GetResourceManager()->PrepareInitialContents();
 
     RDCDEBUG("Attempting capture");
@@ -3284,6 +3520,10 @@ void WrappedMTLDevice::StartFrameCapture(DeviceOwnedWindow devWnd)
     SnapshotDescriptorHistory();
     m_CapturedBackbuffer.store(NULL);
     m_State = CaptureState::ActiveCapturing;
+    // ResourceManager ignores frame references in background capture mode.
+    // Publish Header recipe dependencies after entering the active frame so
+    // unused heap bindings still retain all required AS initial contents.
+    SnapshotRayASHeaders();
     ++m_CaptureEpoch;
   }
 
@@ -3304,6 +3544,14 @@ void WrappedMTLDevice::StartFrameCapture(DeviceOwnedWindow devWnd)
   }
 
   // TODO: are there other resources that need to be marked as frame referenced
+}
+
+ResourceId WrappedMTLDevice::GetBufferTextureParent(ResourceId texture) const
+{
+  if(!IsCaptureMode(m_State))return m_Replay->GetBufferTextureSource(texture);
+  SCOPED_LOCK(m_BufferTextureParentsLock);
+  const auto parent=m_BufferTextureParentByView.find(texture);
+  return parent==m_BufferTextureParentByView.end()?ResourceId():parent->second;
 }
 
 void WrappedMTLDevice::RegisterBufferTextureParent(ResourceId texture, ResourceId id)
@@ -3341,6 +3589,7 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
   ResourceId bbId;
   WrappedMTLTexture *backBuffer = NULL;
   bool pendingReservation = false;
+  bool persistDescriptorProtocol = false;
   {
     SCOPED_WRITELOCK(m_CapTransitionLock);
     {
@@ -3358,11 +3607,20 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
     {
       bbId = GetResID(backBuffer);
       GetResourceManager()->MarkResourceFrameReferenced(bbId, eFrameRef_Read);
+    }
+    // Explicit headless captures can contain only compute/blit/AS work, as in
+    // Vulkan/D3D12. A requested window still needs its captured backbuffer.
+    if(!pendingReservation && (backBuffer || !devWnd.windowHandle))
+    {
+      {
+        SCOPED_LOCK(m_DescriptorMetadataLock);
+        persistDescriptorProtocol = !m_DescriptorCoverage && !m_DescriptorTables.empty();
+      }
       EndCaptureFrame(bbId);
       m_State = CaptureState::BackgroundCapturing;
     }
   }
-  if(bbId == ResourceId())
+  if(pendingReservation || (!backBuffer && devWnd.windowHandle))
   {
     fprintf(stderr, "Metal controlled capture ended without a backbuffer (pending queue reservation=%d)\n", pendingReservation ? 1 : 0);
     if(pendingReservation)
@@ -3395,11 +3653,11 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
 
   RenderDoc::FramePixels fp;
 
-  MTL::Texture *mtlBackBuffer = Unwrap(backBuffer);
+  MTL::Texture *mtlBackBuffer = backBuffer ? Unwrap(backBuffer) : NULL;
 
   // The backbuffer has to be a non-framebufferOnly texture
   // to be able to copy the pixels for the thumbnail
-  if(!mtlBackBuffer->framebufferOnly())
+  if(mtlBackBuffer && !mtlBackBuffer->framebufferOnly())
   {
     const uint32_t maxSize = 2048;
 
@@ -3477,6 +3735,18 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
       m_InitParams.Set(Unwrap(this), m_ID);
       SCOPED_SERIALISE_CHUNK(SystemChunk::DriverInit, m_InitParams.GetSerialiseSize());
       SERIALISE_ELEMENT(m_InitParams);
+    }
+
+    // Raw typed-table metadata has a capture protocol, not an application
+    // permission level. Persist the current protocol before resource records
+    // when the application supplied table facts but no legacy declaration.
+    // Replay still validates every object, address, publication and dependency;
+    // this header neither enables RT nor certifies shader access.
+    // Preserve explicitly declared older protocols for compatibility.
+    if(persistDescriptorProtocol)
+    {
+      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLDevice_DeclareDescriptorCoverage, 32);
+      Serialise_DeclareDescriptorCoverage(ser, 65);
     }
 
     RDCDEBUG("Inserting Resource Serialisers");
@@ -3594,11 +3864,17 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
       float num = float(recordlist.size());
       float idx = 0.0f;
 
+      std::map<Chunk *, const MetalASFrameBuild *> frameASBuilds;
+      for(MetalResourceRecord *record : m_CaptureCommandBuffersSubmitted)
+        for(const auto &evidence : record->cmdInfo->frameASBuilds)
+          frameASBuilds[evidence.chunk] = &evidence;
       for(auto it = recordlist.begin(); it != recordlist.end(); ++it)
       {
         RenderDoc::Inst().SetProgress(CaptureProgress::SerialiseFrameContents, idx / num);
         idx += 1.0f;
-        it->second->Write(ser);
+        auto snapshot = frameASBuilds.find(it->second);
+        if(snapshot != frameASBuilds.end()) WriteMetalASFrameBuild(ser, *snapshot->second);
+        else it->second->Write(ser);
       }
     }
     captureSectionSize = captureWriter->GetOffset();
@@ -3868,6 +4144,11 @@ void WrappedMTLDevice::CaptureCmdBufEnqueue(MetalResourceRecord *cbRecord)
 
 void WrappedMTLDevice::AdvanceFrame()
 {
+  // Metal permits drawable presentation from independent scheduled handlers.
+  // Tick updates RenderDoc's shared frame timer, so serialize Metal presenters
+  // across devices while leaving the Native presentation itself asynchronous.
+  static Threading::CriticalSection frameTickLock;
+  SCOPED_LOCK(frameTickLock);
   if(IsBackgroundCapturing(m_State))
     RenderDoc::Inst().Tick();
 

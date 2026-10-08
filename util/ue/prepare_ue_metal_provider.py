@@ -9,7 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--engine', type=Path, required=True)
     parser.add_argument('--source', type=Path, required=True)
-    parser.add_argument('--placement-heap-size-mib', type=int, choices=(32,64,128,256,512),
+    parser.add_argument('--placement-heap-size-mib', type=int, choices=(16,32,64,128,256,512),
                         help='Optional diagnostic Mac placement block size in the isolated source only')
     args = parser.parse_args()
     engine, source = args.engine.resolve(), args.source.resolve()
@@ -48,6 +48,8 @@ def main():
     content = content.replace('RenderDocMetalDescriptorProvider::CPUWrite(this, DescriptorHandle);',
         'RenderDocMetalDescriptorProvider::CPUWrite(this, DescriptorHandle, DescriptorData);')
     source_hooks = [
+        ('IRDescriptorTableSetAccelerationStructure(&DescriptorData, AccelerationStructure->GetIndirectArgumentBuffer()->GetGPUAddress());',
+         'RenderDocMetalDescriptorProvider::Created(DescriptorData, AccelerationStructure->GetIndirectArgumentBuffer()->GetMTLBuffer(), 3, AccelerationStructure->GetIndirectArgumentBuffer()->GetOffset());'),
         ('IRDescriptorTableSetSampler(&DescriptorData, SamplerState, 0.0f);',
          'RenderDocMetalDescriptorProvider::Created(DescriptorData, SamplerState, 2);'),
         ('IRDescriptorTableSetTexture(&DescriptorData, Texture, 0.0f, 0u);',
@@ -97,6 +99,11 @@ def main():
                 parser.error(f'Missing exact source hook in {relative}: {before[:80]}')
             text = text.replace(before, after)
         return text
+    ray = patch_file('Private/MetalRayTracing.cpp', [
+        ('#include "MetalStaticSamplers.h"', '#include "MetalStaticSamplers.h"\n#include "RenderDocMetalDescriptorProvider.h"', 1),
+        ('check(Header->addressOfInstanceContributions);',
+         'check(Header->addressOfInstanceContributions);\n\tRenderDocMetalDescriptorProvider::ASHeader(Device, IndirectArgs, NativeAS.get(), HitGroupContributionsBuffer, HitGroupContributionsBufferOffset);', 1),
+    ])
     static = patch_file('Private/MetalStaticSamplers.cpp', [
         ('#include "MetalDynamicRHI.h"', '#include "MetalDynamicRHI.h"\n#include "MetalBindlessDescriptors.h"\n#include "RenderDocMetalDescriptorProvider.h"', 1),
         ('memcpy(StaticSamplersTable->Contents(), SamplerTableContent, TableSize);',
@@ -122,6 +129,13 @@ def main():
         before = f'Encoder->set{name}Bytes(VertexBufferVAs, sizeof(VertexBufferVAs), kIRVertexBufferBindPoint);'
         hook = f'RenderDocMetalDescriptorProvider::Inline(Device, this, 0xffffffffu, Encoder, {stage}, kIRVertexBufferBindPoint, VertexBufferVAs, UE_ARRAY_COUNT(VertexBufferVAs), sizeof(IRRuntimeVertexBuffer));\n\t\t'
         cache_hooks.append((before, hook + before, 1))
+    compute = patch_file('Private/Shaders/Types/MetalComputeShader.cpp', [
+        ('#include "MetalProfiler.h"', '#include "MetalProfiler.h"\n#include "RenderDocMetalDescriptorProvider.h"', 1),
+        ('\t\tPipeline->ComputePipelineState = Kernel;',
+         '\t\tPipeline->ComputePipelineState = Kernel;\n#if METAL_USE_METAL_SHADER_CONVERTER\n'
+         '\t\tif(EnumHasAnyFlags(Bindings.Flags, EMetalBindingsFlags::UseMetalShaderConverter))\n'
+         '\t\t\tRenderDocMetalDescriptorProvider::ComputeReflection(Device, Kernel.get(), Bindings.IRConverterReflectionJSON, Bindings.RSNumCBVs, kIRArgumentBufferBindPoint, kIRStandardHeapBindPoint, kIRSamplerHeapBindPoint, UE_ARRAY_COUNT(StaticSamplerDescs), NumThreadsX, NumThreadsY, NumThreadsZ);\n#endif', 1),
+    ])
     cache = patch_file('Private/MetalStateCache.cpp', cache_hooks)
     before = '\n}\n\nvoid FMetalStateCache::CommitComputeResources(FMetalCommandEncoder* Compute)'
     if cache.count(before) != 1:
@@ -174,7 +188,9 @@ def main():
     (source / 'Private/MetalBindlessDescriptors.cpp').write_text(content)
     (source / 'Private/MetalStaticSamplers.cpp').write_text(static)
     (source / 'Private/MetalStateCache.cpp').write_text(cache)
+    (source / 'Private/Shaders/Types/MetalComputeShader.cpp').write_text(compute)
     (source / 'Private/MetalCommands.cpp').write_text(commands)
+    (source / 'Private/MetalRayTracing.cpp').write_text(ray)
     if placement is not None:
         (source / 'Private/MetalBuffer.cpp').write_text(placement)
     shutil.copyfile(repo / 'util/ue/metal_provider/RenderDocMetalDescriptorProvider.h',

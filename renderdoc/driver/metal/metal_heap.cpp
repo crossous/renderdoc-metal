@@ -6,6 +6,7 @@
 #include "metal_manager.h"
 #include "metal_replay.h"
 #include "metal_texture.h"
+#include "metal_acceleration_structure.h"
 
 template <typename SerialiserType>
 bool WrappedMTLDevice::Serialise_newHeap(SerialiserType &ser, WrappedMTLHeap *heap,
@@ -27,7 +28,7 @@ bool WrappedMTLDevice::Serialise_newHeap(SerialiserType &ser, WrappedMTLHeap *he
     // Placement heaps preserve captured offsets. Overlaps are validated at each child birth.
     // Sparse mappings and implicit texture aliases still require separate lifetime models.
     if(Heap == ResourceId() || GetResourceManager()->HasResource(Heap) ||
-       size < 4096 || size > 576ULL * 1024 * 1024 ||
+       !size || size > 576ULL * 1024 * 1024 ||
        (storageMode != MTL::StorageModePrivate &&
         !(storageMode == MTL::StorageModeShared && type == MTL::HeapTypePlacement)) ||
        cacheMode != MTL::CPUCacheModeDefaultCache ||
@@ -96,6 +97,149 @@ WrappedMTLHeap::WrappedMTLHeap(MTL::Heap *real, ResourceId id, WrappedMTLDevice 
   }
 }
 
+template <typename SerialiserType>
+bool WrappedMTLHeap::Serialise_newAccelerationStructure(SerialiserType &ser,
+    WrappedMTLAccelerationStructure *structure, NS::UInteger size,
+    NS::UInteger offset, bool placement)
+{
+  SERIALISE_ELEMENT_LOCAL(Heap, this).Important();
+  SERIALISE_ELEMENT_LOCAL(Structure, GetResID(structure))
+      .TypedAs("MTLAccelerationStructure"_lit).Important();
+  SERIALISE_ELEMENT(size).Important();
+  SERIALISE_ELEMENT(offset).Important();
+  SERIALISE_ELEMENT(placement).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    WrappedMTLObject *existing = Structure == ResourceId() ? NULL :
+        GetResourceManager()->GetResource(Structure, true);
+    const bool frameResource = m_Device->GetReplayEpoch() != 0;
+    if(!Heap || Heap->m_Type != eResHeap || !Heap->m_Real ||
+       Heap->m_Device != m_Device || Unwrap(Heap)->storageMode() != MTL::StorageModePrivate ||
+       Unwrap(Heap)->type() != (placement ? MTL::HeapTypePlacement : MTL::HeapTypeAutomatic) ||
+       Structure == ResourceId() || !size || size > 1024ULL*1024*1024 ||
+       (!placement && offset) ||
+       (existing && !(IsActiveReplaying(m_State) && frameResource &&
+          m_Device->IsFramePlacementResource(Structure) && !existing->m_Real &&
+          existing->m_Type == eResAccelerationStructure)))
+    {
+      RDCERR("Invalid Metal heap acceleration structure identity/type/size");
+      return false;
+    }
+    const MTL::SizeAndAlign layout = Unwrap(m_Device)->heapAccelerationStructureSizeAndAlign(size);
+    if(!layout.size || !layout.align || layout.size > Unwrap(Heap)->size() ||
+       (placement && (offset % layout.align || offset > Unwrap(Heap)->size() ||
+                     layout.size > Unwrap(Heap)->size()-offset)))
+    {
+      RDCERR("Invalid Metal heap acceleration structure placement range");
+      return false;
+    }
+    if(placement && Heap->HasPlacementOverlap(offset, offset+layout.size))
+    {
+      RDCERR("Overlapping Metal heap AS allocations need separate alias lifetime proof");
+      return false;
+    }
+    MTL::AccelerationStructure *real = placement ?
+        Unwrap(Heap)->newAccelerationStructure(size, offset) :
+        Unwrap(Heap)->newAccelerationStructure(size);
+    if(!real || real->size() != size || real->heap() != Unwrap(Heap) ||
+       (placement && real->heapOffset() != offset))
+    {
+      if(real) real->release();
+      RDCERR("Metal failed to recreate captured heap acceleration structure");
+      return false;
+    }
+    WrappedMTLAccelerationStructure *wrapped = (WrappedMTLAccelerationStructure *)existing;
+    if(existing)
+      GetResourceManager()->ReplaceRealResource(wrapped, real, true);
+    else
+    {
+      GetResourceManager()->WrapResource(Structure, real, wrapped, true);
+      m_Device->AddResource(Structure, ResourceType::AccelerationStructure,
+                            "Heap Acceleration Structure");
+      m_Device->DerivedResource(Heap, Structure);
+    }
+    wrapped->m_Size = size;
+    wrapped->m_LastBuildKind = 0;
+    wrapped->m_LastTriangleCount = 0;
+    wrapped->m_LastBuildCommandBuffer = ResourceId();
+    wrapped->m_LastCompactedSizeBuffer = ResourceId();
+    wrapped->m_LastCompactedSizeOffset = 0;
+    wrapped->m_LastCompactedSizeType = MTL::DataTypeNone;
+    wrapped->m_LastCompactedWriteCommandBuffer = ResourceId();
+    wrapped->m_LastInitialCompactedSize = 0;
+    if(placement)
+      Heap->m_PlacementRanges.push_back({uint64_t(offset), uint64_t(offset)+layout.size,
+                                         Structure, frameResource});
+    if(frameResource && IsLoading(m_State))
+      m_Device->RegisterFramePlacementResource(Structure, Heap);
+  }
+  return true;
+}
+
+WrappedMTLAccelerationStructure *WrappedMTLHeap::newAccelerationStructure(
+    NS::UInteger size, NS::UInteger offset, bool placement)
+{
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  SCOPED_LOCK(m_CaptureAllocationLock);
+  MTL::AccelerationStructure *real = NULL;
+  SERIALISE_TIME_CALL(real = placement ? Unwrap(this)->newAccelerationStructure(size, offset) :
+                                        Unwrap(this)->newAccelerationStructure(size));
+  if(!real) return NULL;
+  WrappedMTLAccelerationStructure *wrapped = NULL;
+  const ResourceId id = GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
+  wrapped->m_Size = size;
+  if(IsCaptureMode(m_State))
+  {
+    if(Unwrap(this)->type() == MTL::HeapTypePlacement)
+      RecordCaptureAllocation(real->heapOffset(), Unwrap(m_Device)->heapAccelerationStructureSizeAndAlign(size).size);
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLHeap_newAccelerationStructure);
+    Serialise_newAccelerationStructure(ser, wrapped, size, offset, placement);
+    MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
+    record->AddParent(GetRecord(this));
+    Chunk *creation = scope.Get();
+    record->AddChunk(creation);
+    if(IsActiveCapturing(m_State))
+    {
+      m_Device->AddFrameCaptureRecordChunk(creation->Duplicate());
+      m_Device->RegisterCapturedFrameResource(id);
+      GetResourceManager()->MarkResourceFrameReferenced(GetResID(this), eFrameRef_Read);
+    }
+  }
+  return wrapped;
+}
+
+template bool WrappedMTLHeap::Serialise_newAccelerationStructure(ReadSerialiser &,
+    WrappedMTLAccelerationStructure *, NS::UInteger, NS::UInteger, bool);
+template bool WrappedMTLHeap::Serialise_newAccelerationStructure(WriteSerialiser &,
+    WrappedMTLAccelerationStructure *, NS::UInteger, NS::UInteger, bool);
+
+bool WrappedMTLHeap::RecordCaptureAllocation(uint64_t offset, uint64_t size)
+{
+  if(!size || offset > Unwrap(this)->size() || size > Unwrap(this)->size() - offset)
+  {
+    m_CaptureAllocationHistoryComplete = false;
+    return false;
+  }
+  uint64_t begin = offset, end = offset + size;
+  bool fresh = m_CaptureAllocationHistoryComplete;
+  auto it = m_CaptureAllocatedRanges.lower_bound(begin);
+  if(it != m_CaptureAllocatedRanges.begin())
+  {
+    auto previous = it; --previous;
+    if(previous->second >= begin) it = previous;
+  }
+  while(it != m_CaptureAllocatedRanges.end() && it->first <= end)
+  {
+    fresh &= !(offset < it->second && it->first < offset + size);
+    begin = RDCMIN(begin, it->first); end = RDCMAX(end, it->second);
+    it = m_CaptureAllocatedRanges.erase(it);
+  }
+  m_CaptureAllocatedRanges[begin] = end;
+  return fresh;
+}
+
 bool WrappedMTLHeap::CanImplicitlyAliasBuffers(uint64_t begin, uint64_t end, ResourceId after)
 {
   if(!m_Real || (Unwrap(this)->storageMode() != MTL::StorageModeShared &&
@@ -107,7 +251,7 @@ bool WrappedMTLHeap::CanImplicitlyAliasBuffers(uint64_t begin, uint64_t end, Res
       WrappedMTLObject *old = GetResourceManager()->GetResource(range.resource, true);
       if(!old || !old->m_Real) return false;
       const bool buffer = old->m_Type == eResBuffer &&
-          Unwrap((WrappedMTLBuffer *)old)->length() <= m_Device->DescriptorPlacementAliasLimit() &&
+          Unwrap((WrappedMTLBuffer *)old)->length() <= m_Device->DescriptorPlacementBufferAliasLimit() &&
           Unwrap((WrappedMTLBuffer *)old)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
           m_Device->CanReplayImplicitBufferAlias(range.resource, after);
       const bool texture = old->m_Type == eResTexture &&
@@ -163,6 +307,8 @@ bool WrappedMTLHeap::Serialise_newBuffer(SerialiserType &ser, WrappedMTLBuffer *
 
 WrappedMTLBuffer *WrappedMTLHeap::newBuffer(NS::UInteger length, MTL::ResourceOptions options)
 {
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  SCOPED_LOCK(m_CaptureAllocationLock);
   MTL::Buffer *real = NULL;
   SERIALISE_TIME_CALL(real = Unwrap(this)->newBuffer(length, options));
   if(!real) return NULL;
@@ -170,6 +316,8 @@ WrappedMTLBuffer *WrappedMTLHeap::newBuffer(NS::UInteger length, MTL::ResourceOp
   ResourceId id = GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
   if(IsCaptureMode(m_State))
   {
+    if(Unwrap(this)->type() == MTL::HeapTypePlacement)
+      RecordCaptureAllocation(real->heapOffset(), Unwrap(m_Device)->heapBufferSizeAndAlign(length, options).size);
     CACHE_THREAD_SERIALISER();
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLHeap_newBuffer);
     Serialise_newBuffer(ser, wrapped, length, options);
@@ -264,17 +412,27 @@ bool WrappedMTLHeap::Serialise_newBufferWithOffset(SerialiserType &ser,
             (Unwrap(Heap)->storageMode() == MTL::StorageModeShared ||
              (m_Device->SupportsPrivateDescriptorSources() && Unwrap(Heap)->storageMode() == MTL::StorageModePrivate)) &&
             Unwrap(Heap)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
-            length <= m_Device->DescriptorPlacementAliasLimit() &&
-            Unwrap((WrappedMTLBuffer *)previous)->length() <= m_Device->DescriptorPlacementAliasLimit() &&
+            length <= m_Device->DescriptorPlacementBufferAliasLimit() &&
+            Unwrap((WrappedMTLBuffer *)previous)->length() <= m_Device->DescriptorPlacementBufferAliasLimit() &&
             m_Device->CanReplayImplicitBufferAlias(range.resource, Buffer);
+        // A validated frame AS packet owns independent staging. A later exact
+        // tracked alias cannot change this build input; both native objects stay
+        // live and the heap orders later GPU writes across their shared range.
+        const bool frozenASInput = previous && previous->m_Type == eResBuffer && previous->m_Real &&
+            uint64_t(offset) == range.begin && end == range.end &&
+            Unwrap(Heap)->storageMode() == MTL::StorageModePrivate &&
+            Unwrap(Heap)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
+            Unwrap((WrappedMTLBuffer *)previous)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
+            length <= 64*1024*1024 && Unwrap((WrappedMTLBuffer *)previous)->length() <= 64*1024*1024 &&
+            m_Device->CanReplayFrozenASInputAlias(range.resource, Buffer);
         const bool retiredTexture = previous && previous->m_Type == eResTexture && previous->m_Real &&
             Unwrap(Heap)->storageMode() == MTL::StorageModePrivate &&
             Unwrap(Heap)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
             Unwrap((WrappedMTLTexture *)previous)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
-            length <= m_Device->DescriptorPlacementAliasLimit() &&
+            length <= m_Device->DescriptorPlacementBufferAliasLimit() &&
             range.end - range.begin <= m_Device->DescriptorPlacementAliasLimit() &&
             m_Device->CanReplayRetiredTextureAlias(range.resource, Buffer);
-        if(!aliasable && !implicit && !retiredTexture)
+        if(!aliasable && !implicit && !retiredTexture && !frozenASInput)
         {
           RDCERR("Overlapping Metal placement heap resource lacks supported aliasing/completion");
           fprintf(stderr, "Metal placement buffer overlap: offset=%llu end=%llu existing=%llu..%llu resource=%s\n",
@@ -314,6 +472,8 @@ WrappedMTLBuffer *WrappedMTLHeap::newBufferWithOffset(NS::UInteger length,
                                                       MTL::ResourceOptions options,
                                                       NS::UInteger offset)
 {
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  SCOPED_LOCK(m_CaptureAllocationLock);
   MTL::Buffer *real = NULL;
   SERIALISE_TIME_CALL(real = Unwrap(this)->newBuffer(length, options, offset));
   if(!real) return NULL;
@@ -321,6 +481,8 @@ WrappedMTLBuffer *WrappedMTLHeap::newBufferWithOffset(NS::UInteger length,
   ResourceId id = GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
   if(IsCaptureMode(m_State))
   {
+    const auto layout = Unwrap(m_Device)->heapBufferSizeAndAlign(length, options);
+    const bool fresh = RecordCaptureAllocation(real->heapOffset(), layout.size);
     CACHE_THREAD_SERIALISER();
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLHeap_newBufferWithOffset);
     Serialise_newBufferWithOffset(ser, wrapped, length, options, offset);
@@ -343,6 +505,7 @@ WrappedMTLBuffer *WrappedMTLHeap::newBufferWithOffset(NS::UInteger length,
     }
     else if(mode == MTL::StorageModePrivate)
       GetResourceManager()->MarkDirtyResource(id);
+    m_Device->CaptureHeapBufferBirth(wrapped,this,fresh);
   }
   return wrapped;
 }
@@ -411,6 +574,8 @@ bool WrappedMTLHeap::Serialise_newTexture(SerialiserType &ser, WrappedMTLTexture
 
 WrappedMTLTexture *WrappedMTLHeap::newTexture(RDMTL::TextureDescriptor &descriptor)
 {
+  SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  SCOPED_LOCK(m_CaptureAllocationLock);
   MTL::TextureDescriptor *native(descriptor);
   MTL::Texture *real = NULL;
   SERIALISE_TIME_CALL(real = Unwrap(this)->newTexture(native));
@@ -420,6 +585,12 @@ WrappedMTLTexture *WrappedMTLHeap::newTexture(RDMTL::TextureDescriptor &descript
   GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
   if(IsCaptureMode(m_State))
   {
+    if(Unwrap(this)->type() == MTL::HeapTypePlacement)
+    {
+      MTL::TextureDescriptor *historyDescriptor(descriptor);
+      RecordCaptureAllocation(real->heapOffset(), Unwrap(m_Device)->heapTextureSizeAndAlign(historyDescriptor).size);
+      historyDescriptor->release();
+    }
     CACHE_THREAD_SERIALISER();
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLHeap_newTexture);
     Serialise_newTexture(ser, wrapped, descriptor);
@@ -479,6 +650,12 @@ static bool ValidPlacementTextureFormat(MTL::PixelFormat format)
 
 static bool ValidPlacementTextureShape(const RDMTL::TextureDescriptor &descriptor)
 {
+  if(descriptor.sampleCount == 1)
+  {
+    uint64_t logicalBytes = 0;
+    return MetalTextureReplayLayout(descriptor, logicalBytes);
+  }
+
   if(descriptor.textureType != MTL::TextureType2D &&
      descriptor.textureType != MTL::TextureType2DArray &&
      descriptor.textureType != MTL::TextureTypeCube &&
@@ -554,13 +731,16 @@ bool WrappedMTLHeap::Serialise_newTextureWithOffset(SerialiserType &ser,
        descriptor.cpuCacheMode != MTL::CPUCacheModeDefaultCache ||
        (uint64_t(descriptor.usage) & ~uint64_t(55)) != 0 ||
        descriptor.hazardTrackingMode > MTL::HazardTrackingModeTracked ||
-       !descriptor.allowGPUOptimizedContents ||
-       descriptor.swizzle.red != MTL::TextureSwizzleRed ||
-       descriptor.swizzle.green != MTL::TextureSwizzleGreen ||
-       descriptor.swizzle.blue != MTL::TextureSwizzleBlue ||
-       descriptor.swizzle.alpha != MTL::TextureSwizzleAlpha)
+       descriptor.swizzle.red > MTL::TextureSwizzleAlpha ||
+       descriptor.swizzle.green > MTL::TextureSwizzleAlpha ||
+       descriptor.swizzle.blue > MTL::TextureSwizzleAlpha ||
+       descriptor.swizzle.alpha > MTL::TextureSwizzleAlpha)
     {
       RDCERR("Invalid or unsupported Metal placement heap texture identity or descriptor");
+      fprintf(stderr, "Metal placement texture checks: shape=%d format=%d heapStorage=%llu\n",
+              ValidPlacementTextureShape(descriptor) ? 1 : 0,
+              ValidPlacementTextureFormat(descriptor.pixelFormat) ? 1 : 0,
+              Heap && Heap->m_Real ? (uint64_t)Unwrap(Heap)->storageMode() : 0);
       fprintf(stderr,
               "Metal placement texture descriptor rejected: heap=%d heapType=%llu textureNull=%d exists=%d "
               "storage=%llu type=%llu format=%llu size=%llux%llux%llu mips=%llu array=%llu samples=%llu "
@@ -642,6 +822,7 @@ WrappedMTLTexture *WrappedMTLHeap::newTextureWithOffset(RDMTL::TextureDescriptor
                                                         NS::UInteger offset)
 {
   SCOPED_READLOCK(m_Device->GetCaptureTransitionLock());
+  SCOPED_LOCK(m_CaptureAllocationLock);
   MTL::TextureDescriptor *native(descriptor);
   MTL::Texture *real = NULL;
   SERIALISE_TIME_CALL(real = Unwrap(this)->newTexture(native, offset));
@@ -651,6 +832,10 @@ WrappedMTLTexture *WrappedMTLHeap::newTextureWithOffset(RDMTL::TextureDescriptor
   GetResourceManager()->WrapResource(ResourceId(), real, wrapped);
   if(IsCaptureMode(m_State))
   {
+    MTL::TextureDescriptor *historyDescriptor(descriptor);
+    const auto layout = Unwrap(m_Device)->heapTextureSizeAndAlign(historyDescriptor);
+    historyDescriptor->release();
+    RecordCaptureAllocation(real->heapOffset(), layout.size);
     CACHE_THREAD_SERIALISER();
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLHeap_newTextureWithOffset);
     Serialise_newTextureWithOffset(ser, wrapped, descriptor, offset);

@@ -13,6 +13,8 @@ int main()
     const bool sourced=getenv("RENDERDOC_METAL_ATTACHMENTLESS_SOURCED")!=nullptr;
     const bool parallel=getenv("RENDERDOC_METAL_ATTACHMENTLESS_PARALLEL")!=nullptr;
     const bool unretained=getenv("RENDERDOC_METAL_ATTACHMENTLESS_UNRETAINED")!=nullptr;
+    const bool direct=getenv("RENDERDOC_METAL_ATTACHMENTLESS_DIRECT")!=nullptr;
+    const bool zeroDraw=getenv("RENDERDOC_METAL_ATTACHMENTLESS_ZERO_DRAW")!=nullptr;
     const NSUInteger width=getenv("RENDERDOC_METAL_ATTACHMENTLESS_WIDTH")?strtoul(getenv("RENDERDOC_METAL_ATTACHMENTLESS_WIDTH"),nullptr,10):2;
     const NSUInteger height=getenv("RENDERDOC_METAL_ATTACHMENTLESS_HEIGHT")?strtoul(getenv("RENDERDOC_METAL_ATTACHMENTLESS_HEIGHT"),nullptr,10):2;
     id<MTLDevice> device=MTLCreateSystemDefaultDevice();NSError *error=nil;
@@ -88,7 +90,16 @@ fragment void empty(){}
     [render useResource:output usage:MTLResourceUsageRead|MTLResourceUsageWrite stages:MTLRenderStageVertex];
     if(api){RENDERDOC_AnnotationValue declared={};declared.uint32=1;
       if(api->SetObjectAnnotation((__bridge void *)device,(__bridge void *)render,"metal.renderWritesDeclared",eRENDERDOC_UInt32,0,&declared)){[render endEncoding];return 5;}}
-    for(NSUInteger offset:{NSUInteger(16),NSUInteger(64)})[render drawPrimitives:MTLPrimitiveTypeTriangle indirectBuffer:arguments indirectBufferOffset:offset];
+    if(zeroDraw)
+    {
+      if(direct) [render drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:0 instanceCount:1 baseInstance:2];
+      else [render drawPrimitives:MTLPrimitiveTypeTriangle indirectBuffer:arguments indirectBufferOffset:0];
+    }
+    for(NSUInteger offset:{NSUInteger(16),NSUInteger(64)})
+    {
+      if(direct) [render drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:offset==16?3:6 instanceCount:1 baseInstance:2];
+      else [render drawPrimitives:MTLPrimitiveTypeTriangle indirectBuffer:arguments indirectBufferOffset:offset];
+    }
     [render endEncoding];if(parent)[parent endEncoding];copy=[command blitCommandEncoder];[copy copyFromBuffer:zeros sourceOffset:0 toBuffer:arguments destinationOffset:0 size:sizeof(words)];[copy endEncoding];
     id<CAMetalDrawable> drawable=[layer nextDrawable];if(!drawable)return 6;
     auto present=[MTLRenderPassDescriptor renderPassDescriptor];present.colorAttachments[0].texture=drawable.texture;

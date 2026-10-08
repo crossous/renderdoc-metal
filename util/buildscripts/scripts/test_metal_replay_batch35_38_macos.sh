@@ -1385,6 +1385,9 @@ if (( LAST_TEST >= 147 )); then invalid_count=$((invalid_count - 2)); fi
 if (( LAST_TEST >= 143 )); then invalid_count=$((invalid_count + 1)); fi
 # The T36 post-draw texture-barrier rejection was added after the cumulative ledger above.
 invalid_count=$(( invalid_count + 1 ))
+# Device argument scalar arrayLength0 is legal; the two former T60 zero-count rejections
+# are now covered positively by the official ray sample's native scalar descriptors.
+if (( LAST_TEST >= 60 )); then invalid_count=$((invalid_count - 2)); fi
 echo "Metal combined replay regression passed: ${#captures[@]} captures, ${invalid_count} malformed cases, $(( ${#captures[@]} * 10 )) lifecycle opens."
 
 shasum -a 256 "${BUILD_DIR}/lib/librenderdoc.dylib" >"${BUILD_DIR}/end-hash.log"

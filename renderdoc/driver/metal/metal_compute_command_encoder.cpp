@@ -47,6 +47,20 @@ WrappedMTLComputeCommandEncoder::WrappedMTLComputeCommandEncoder(MTL::ComputeCom
     AllocateObjCBridge(this);
 }
 
+bool WrappedMTLComputeCommandEncoder::ValidateFunctionTableBindings() const
+{
+  // Like descriptor sets/root tables in VK/DX12, binding may precede pipeline selection.
+  // Prove the final pipeline association before executing any dispatch.
+  for(size_t i = 0; i < ARRAY_COUNT(m_VisibleTables); i++)
+    if((m_VisibleTables[i] && m_VisibleTables[i]->m_Pipeline != m_Pipeline) ||
+       (m_IntersectionTables[i] && m_IntersectionTables[i]->m_Pipeline != m_Pipeline))
+    {
+      RDCERR("Metal compute dispatch function table belongs to a different pipeline");
+      return false;
+    }
+  return true;
+}
+
 template <typename SerialiserType>
 bool WrappedMTLComputeCommandEncoder::Serialise_declareHeaps(
     SerialiserType &ser, rdcarray<WrappedMTLHeap *> heaps, bool arrayVariant)
@@ -533,7 +547,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setComputePipelineState(
     if(!pipeline)
       return false;
     Unwrap(ComputeCommandEncoder)->setComputePipelineState(Unwrap(pipeline));
-    m_Pipeline = pipeline;
+    ComputeCommandEncoder->m_Pipeline = pipeline;
     m_Device->GetReplay()->SetComputePipeline(GetResID(pipeline));
   }
   return true;
@@ -544,21 +558,26 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTable(
     SerialiserType &ser, WrappedMTLVisibleFunctionTable *table, uint32_t index)
 {
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this).Important();
-  SERIALISE_ELEMENT(table).Important();
+  SERIALISE_ELEMENT_LOCAL(tableId, GetResID(table)).Named("table"_lit)
+      .TypedAs("MTLVisibleFunctionTable"_lit).Important();
   SERIALISE_ELEMENT(index).Important();
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(tableId != ResourceId() && !GetResourceManager()->HasResource(tableId)) return false;
+    table = tableId == ResourceId() ? NULL :
+        (WrappedMTLVisibleFunctionTable *)GetResourceManager()->GetResource(tableId);
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real ||
        ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) || index >= 31 ||
        (table && (table->m_Type != eResVisibleFunctionTable || !table->m_Real ||
-                  table->m_Pipeline != m_Pipeline || table->m_Stage != (MTL::RenderStages)0)))
+                  !table->m_Pipeline || table->m_Stage != (MTL::RenderStages)0)))
     {
       RDCERR("Invalid Metal compute visible-function-table binding");
       return false;
     }
     Unwrap(ComputeCommandEncoder)->setVisibleFunctionTable(Unwrap(table), index);
+    ComputeCommandEncoder->m_VisibleTables[index] = table;
   }
   return true;
 }
@@ -589,11 +608,21 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTables(
     SerialiserType &ser, rdcarray<WrappedMTLVisibleFunctionTable *> tables, NS::Range range)
 {
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this).Important();
-  SERIALISE_ELEMENT(tables).Important();
+  rdcarray<ResourceId> tableIds;
+  if(ser.IsWriting())
+    for(WrappedMTLVisibleFunctionTable *table : tables) tableIds.push_back(GetResID(table));
+  SERIALISE_ELEMENT(tableIds).Named("tables"_lit).TypedAs("MTLVisibleFunctionTable"_lit).Important();
   SERIALISE_ELEMENT(range).Important();
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    tables.clear();
+    for(ResourceId id : tableIds)
+    {
+      if(id != ResourceId() && !GetResourceManager()->HasResource(id)) return false;
+      tables.push_back(id == ResourceId() ? NULL :
+          (WrappedMTLVisibleFunctionTable *)GetResourceManager()->GetResource(id));
+    }
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real ||
        ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) ||
@@ -609,7 +638,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTables(
     {
       if(table && (table->m_Type != eResVisibleFunctionTable || !table->m_Real ||
                    table->m_Stage != (MTL::RenderStages)0 ||
-                   table->m_Pipeline != m_Pipeline))
+                   !table->m_Pipeline))
       {
         RDCERR("Invalid Metal compute visible-function-table member");
         return false;
@@ -617,6 +646,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setVisibleFunctionTables(
       native.push_back(Unwrap(table));
     }
     Unwrap(ComputeCommandEncoder)->setVisibleFunctionTables(native.data(), range);
+    for(size_t i = 0; i < tables.size(); i++)
+      ComputeCommandEncoder->m_VisibleTables[range.location + i] = tables[i];
   }
   return true;
 }
@@ -658,21 +689,26 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTable(
     SerialiserType &ser, WrappedMTLIntersectionFunctionTable *table, uint32_t index)
 {
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this).Important();
-  SERIALISE_ELEMENT(table).Important();
+  SERIALISE_ELEMENT_LOCAL(tableId, GetResID(table)).Named("table"_lit)
+      .TypedAs("MTLIntersectionFunctionTable"_lit).Important();
   SERIALISE_ELEMENT(index).Important();
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(tableId != ResourceId() && !GetResourceManager()->HasResource(tableId)) return false;
+    table = tableId == ResourceId() ? NULL :
+        (WrappedMTLIntersectionFunctionTable *)GetResourceManager()->GetResource(tableId);
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real ||
        ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) || index >= 31 ||
        (table && (table->m_Type != eResIntersectionFunctionTable || !table->m_Real ||
-                  table->m_Pipeline != m_Pipeline || table->m_Stage != (MTL::RenderStages)0)))
+                  !table->m_Pipeline || table->m_Stage != (MTL::RenderStages)0)))
     {
       RDCERR("Invalid Metal compute intersection-function-table binding");
       return false;
     }
     Unwrap(ComputeCommandEncoder)->setIntersectionFunctionTable(Unwrap(table), index);
+    ComputeCommandEncoder->m_IntersectionTables[index] = table;
   }
   return true;
 }
@@ -703,11 +739,21 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTables(
     SerialiserType &ser, rdcarray<WrappedMTLIntersectionFunctionTable *> tables, NS::Range range)
 {
   SERIALISE_ELEMENT_LOCAL(ComputeCommandEncoder, this).Important();
-  SERIALISE_ELEMENT(tables).Important();
+  rdcarray<ResourceId> tableIds;
+  if(ser.IsWriting())
+    for(WrappedMTLIntersectionFunctionTable *table : tables) tableIds.push_back(GetResID(table));
+  SERIALISE_ELEMENT(tableIds).Named("tables"_lit).TypedAs("MTLIntersectionFunctionTable"_lit).Important();
   SERIALISE_ELEMENT(range).Important();
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    tables.clear();
+    for(ResourceId id : tableIds)
+    {
+      if(id != ResourceId() && !GetResourceManager()->HasResource(id)) return false;
+      tables.push_back(id == ResourceId() ? NULL :
+          (WrappedMTLIntersectionFunctionTable *)GetResourceManager()->GetResource(id));
+    }
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder ||
        !ComputeCommandEncoder->m_Real ||
        ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder) ||
@@ -723,7 +769,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTables(
     {
       if(table && (table->m_Type != eResIntersectionFunctionTable || !table->m_Real ||
                    table->m_Stage != (MTL::RenderStages)0 ||
-                   table->m_Pipeline != m_Pipeline))
+                   !table->m_Pipeline))
       {
         RDCERR("Invalid Metal compute intersection-function-table member");
         return false;
@@ -731,6 +777,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setIntersectionFunctionTables(
       native.push_back(Unwrap(table));
     }
     Unwrap(ComputeCommandEncoder)->setIntersectionFunctionTables(native.data(), range);
+    for(size_t i = 0; i < tables.size(); i++)
+      ComputeCommandEncoder->m_IntersectionTables[range.location + i] = tables[i];
   }
   return true;
 }
@@ -1088,7 +1136,11 @@ void WrappedMTLComputeCommandEncoder::setAccelerationStructure(
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLComputeCommandEncoder_setAccelerationStructure);
     Serialise_setAccelerationStructure(ser, structure, index);
     MetalResourceRecord *record = GetRecord(m_CommandBuffer);
-    if(structure) record->AddParent(GetRecord(structure));
+    if(structure)
+    {
+      record->AddParent(GetRecord(structure));
+      record->MarkASInitialReferences(structure);
+    }
     record->AddChunk(scope.Get());
   }
 }
@@ -1311,6 +1363,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
   if(IsReplayingAndReading())
   {
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       !ComputeCommandEncoder->ValidateFunctionTableBindings() ||
+       !m_Device->GetReplay()->ValidateComputeArgumentRayBindings() ||
        ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
       return false;
 
@@ -1322,7 +1376,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
     const MetalPipe::BufferBinding output = replay->GetComputeBufferForAccess(true);
     const bool bufferOnly = destination.resourceId == ResourceId() &&
                             output.resourceId != ResourceId();
-    // UE's precompiled compute shader may have no resource reflection. It can still use a
+    // A precompiled Native compute shader may have no resource reflection. It can still use a
     // valid slot-0 buffer with no texture bindings (e.g. a GPU indirect-argument writer).
     const MetalPipe::BufferBinding slot0 = replay->GetComputeBuffer(0);
     const bool slot0BufferOnly = source.resourceId == ResourceId() &&
@@ -1332,12 +1386,31 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
     // D3D12/Vulkan dispatches do not require a writable buffer or a 2D copy pair.
     // A sourced capture already proves the inline layouts, resource lifetimes,
     // pipeline buffer snapshot and tiny grid before any GPU submission.
-    const bool sourcedInlineOnly = source.resourceId == ResourceId() &&
-        destination.resourceId == ResourceId() && slot0.resourceId == ResourceId() &&
-        slot0.byteSize > 0 && m_Device->HasValidatedSourcedComputeDispatch(GetResID(ComputeCommandEncoder)) &&
+    const bool hasIR = m_Device->HasRayIRPipeline(replay->GetComputePipeline());
+    const bool hasQuery = m_Device->HasRayQueryPipeline(replay->GetComputePipeline());
+    const auto packet = replay->GetComputeBuffer(3);
+    const auto roots = replay->GetComputeBuffer(2);
+    const bool hasHeapQuery=m_Device->HasRayQueryHeapPipeline(replay->GetComputePipeline());
+    const auto heap=replay->GetComputeBuffer(0);
+    const bool heapQuery=hasHeapQuery && replay->ValidateComputeBufferBindings() &&
+        m_Device->ValidateRayQueryHeapDispatch(replay->GetComputePipeline(),heap.resourceId,
+            heap.byteOffset,replay->SaveEncoderState().computeInlineData[2],groups,threadsPerGroup);
+    const bool queryRay = heapQuery || (hasQuery && replay->ValidateComputeBufferBindings() &&
+        m_Device->ValidateRayQueryDispatch(replay->GetComputePipeline(), roots.resourceId,
+                                          roots.byteOffset, groups, threadsPerGroup));
+    const bool irRay = queryRay || (hasIR && replay->ValidateComputeBufferBindings() &&
+        m_Device->ValidateRayIRDispatch(replay->GetComputePipeline(), packet.resourceId,
+                                       packet.byteOffset, groups, threadsPerGroup));
+    if((hasIR || hasQuery || hasHeapQuery) && !irRay) { RDCERR("Invalid Metal converted ray dispatch closure"); return false; }
+    const bool rayDispatch = irRay || replay->ValidateComputeRayBindings();
+    // A proved Native dispatch follows its actual reflected bindings, at any
+    // API slot. Slot 0 and a matching 2D copy pair are historical sample shapes,
+    // not dispatch requirements. The whole-frame resource/producer closure,
+    // required bindings and Native pipeline/device threadgroup checks remain.
+    const bool sourcedDispatch = m_Device->HasValidatedSourcedComputeDispatch(GetResID(ComputeCommandEncoder)) &&
         replay->ValidateComputeBufferBindings();
     if(!ComputeCommandEncoder || !replay->ValidateComputeThreadgroup(threadsPerGroup) ||
-       (!bufferOnly && !slot0BufferOnly && !sourcedInlineOnly &&
+       (!bufferOnly && !slot0BufferOnly && !sourcedDispatch && !rayDispatch &&
         (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
          source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
          source.width != destination.width || source.height != destination.height ||
@@ -1350,7 +1423,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
        threadsPerGroup.depth > UINT32_MAX ||
        threadsPerGroup.width > 1024 / threadsPerGroup.height ||
        threadsPerGroup.width * threadsPerGroup.height > 1024 / threadsPerGroup.depth ||
-       (!bufferOnly && !slot0BufferOnly && !sourcedInlineOnly &&
+       (!bufferOnly && !slot0BufferOnly && !sourcedDispatch && !rayDispatch &&
         (groups.width < (destination.width + threadsPerGroup.width - 1) / threadsPerGroup.width ||
          groups.height < (destination.height + threadsPerGroup.height - 1) / threadsPerGroup.height)))
     {
@@ -1374,7 +1447,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       RDCERR("Invalid Metal compute output buffer range");
       return false;
     }
-    if(!bufferOnly && !slot0BufferOnly && !sourcedInlineOnly &&
+    if(!bufferOnly && !slot0BufferOnly && !sourcedDispatch && !rayDispatch &&
        (input.resourceId != ResourceId() || output.resourceId != ResourceId()) &&
        (input.resourceId == ResourceId() || output.resourceId == ResourceId() ||
         input.byteSize < (uint64_t)destination.width * destination.height * 4 ||
@@ -1407,21 +1480,22 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       action.dispatchThreadsDimension[1] = (uint32_t)threadsPerGroup.height;
       action.dispatchThreadsDimension[2] = (uint32_t)threadsPerGroup.depth;
       AddAction(action);
+      if(irRay) m_Device->NoteRayIRUsage();
       // Sourced closure validates residency/lifetime, not shader access. AddAction
       // records reflection and proven bindless usage; never turn the closure into UAVs.
-      if(!sourcedInlineOnly && slot0BufferOnly)
+      if(!irRay && !sourcedDispatch && slot0BufferOnly)
       {
         // With no shader resource reflection, report all bound buffers conservatively.
         for(uint32_t slot = 0; slot < 31; slot++)
           replay->AddUsage(replay->GetComputeBuffer(slot).resourceId,
                            ResourceUsage::CS_RWResource);
       }
-      else if(!sourcedInlineOnly && !bufferOnly)
+      else if(!irRay && !sourcedDispatch && !bufferOnly)
       {
         replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
         replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);
       }
-      else if(!sourcedInlineOnly)
+      else if(!irRay && !sourcedDispatch)
       {
         if(source.resourceId != ResourceId())
           replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
@@ -1464,6 +1538,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
   if(IsReplayingAndReading())
   {
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       !ComputeCommandEncoder->ValidateFunctionTableBindings() ||
+       !m_Device->GetReplay()->ValidateComputeArgumentRayBindings() ||
        ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
       return false;
 
@@ -1490,11 +1566,41 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
                                  destination.resourceId == ResourceId() &&
                                  slot0.resourceId != ResourceId() && slot0.byteSize > 0 &&
                                  replay->ValidateComputeBufferBindings(true);
-    const bool sourcedInlineOnly = source.resourceId == ResourceId() &&
-        destination.resourceId == ResourceId() && slot0.resourceId == ResourceId() &&
-        slot0.byteSize > 0 && m_Device->HasValidatedSourcedComputeDispatch(GetResID(ComputeCommandEncoder)) &&
+    const bool hasHeapQuery=m_Device->HasRayQueryHeapPipeline(replay->GetComputePipeline());
+    bool heapQuery=false;
+    if(ComputeCommandEncoder->m_IndirectReplayEpoch!=m_Device->GetReplayEpoch())
+    {
+      ComputeCommandEncoder->m_IndirectReplayEpoch=m_Device->GetReplayEpoch();
+      ComputeCommandEncoder->m_IndirectReplayOrdinal=0;
+    }
+    const uint32_t ordinal=ComputeCommandEncoder->m_IndirectReplayOrdinal++;
+    if(hasHeapQuery)
+    {
+      // VK FetchIndirectData and DX12 ExecuteIndirect preserve each use, not the
+      // argument buffer's final contents. Require this exact sourced use before
+      // querying its typed AS closure; loading also verifies the native GPU words.
+      auto proof=m_Device->m_CapturedComputeIndirectArguments.find(
+          make_rdcpair(GetResID(ComputeCommandEncoder),ordinal));
+      if(!m_Device->m_HasCapturedComputeIndirectArguments ||
+         proof==m_Device->m_CapturedComputeIndirectArguments.end() ||
+         proof->second.command!=GetResID(ComputeCommandEncoder->m_CommandBuffer) ||
+         proof->second.buffer!=GetResID(indirectBuffer) || proof->second.offset!=indirectBufferOffset ||
+         proof->second.groups.size()!=3 || !replay->ValidateComputeBufferBindings()) return false;
+      MTL::Size groups(proof->second.groups[0],proof->second.groups[1],proof->second.groups[2]);
+      heapQuery=m_Device->ValidateRayQueryHeapDispatch(replay->GetComputePipeline(),slot0.resourceId,
+          slot0.byteOffset,replay->SaveEncoderState().computeInlineData[2],groups,threadsPerGroup,true);
+      if(!heapQuery || m_Device->m_IRComputeWriteResources.count(GetResID(indirectBuffer)) ||
+         m_Device->m_RayIRReadResources.count(GetResID(indirectBuffer)))
+      { RDCERR("Invalid Metal converted indirect heap-query closure"); return false; }
+    }
+    const bool rayDispatch = heapQuery || replay->ValidateComputeRayBindings();
+    // A proved Native dispatch follows its actual reflected bindings, at any
+    // API slot. Slot 0 and a matching 2D copy pair are historical sample shapes,
+    // not dispatch requirements. The whole-frame resource/producer closure,
+    // required bindings and Native pipeline/device threadgroup checks remain.
+    const bool sourcedDispatch = m_Device->HasValidatedSourcedComputeDispatch(GetResID(ComputeCommandEncoder)) &&
         replay->ValidateComputeBufferBindings();
-    if(!slot0BufferOnly && !sourcedInlineOnly &&
+    if(!slot0BufferOnly && !sourcedDispatch && !rayDispatch &&
        (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
         source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
         source.width != destination.width || source.height != destination.height ||
@@ -1506,7 +1612,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
 
     const MetalPipe::BufferBinding input = replay->GetComputeBufferForAccess(false);
     const MetalPipe::BufferBinding output = replay->GetComputeBufferForAccess(true);
-    if(!slot0BufferOnly && !sourcedInlineOnly &&
+    if(!slot0BufferOnly && !sourcedDispatch && !rayDispatch &&
        (input.resourceId != ResourceId() || output.resourceId != ResourceId()) &&
        (input.resourceId == ResourceId() || output.resourceId == ResourceId() ||
         input.byteSize < (uint64_t)destination.width * destination.height * 4 ||
@@ -1516,16 +1622,18 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
       return false;
     }
 
-    if(IsLoading(m_State) && !replay->RegisterComputeIndirectAction(replay->GetNextEventID(),
+    MTL::Buffer *executionArguments=NULL;
+    if(!replay->RegisterComputeIndirectAction(IsLoading(m_State)?replay->GetNextEventID():0,
         GetResID(indirectBuffer), indirectBufferOffset, Unwrap(ComputeCommandEncoder),
-        GetResID(ComputeCommandEncoder)))
+        GetResID(ComputeCommandEncoder),&executionArguments,
+        uint32_t(threadsPerGroup.width*threadsPerGroup.height*threadsPerGroup.depth)))
     {
       RDCERR("Could not preserve Metal per-use compute indirect arguments");
       return false;
     }
     replay->SetIndirectBuffer(GetResID(indirectBuffer), indirectBufferOffset, argumentSize);
     Unwrap(ComputeCommandEncoder)
-        ->dispatchThreadgroups(realBuffer, indirectBufferOffset, threadsPerGroup);
+        ->dispatchThreadgroups(executionArguments, 16, threadsPerGroup);
     m_Device->NoteDescriptorDispatch(GetResID(ComputeCommandEncoder));
 
     if(IsLoading(m_State))
@@ -1539,14 +1647,15 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
       action.dispatchThreadsDimension[2] = (uint32_t)threadsPerGroup.depth;
       AddAction(action);
       replay->AddUsage(GetResID(indirectBuffer), ResourceUsage::Indirect);
+      if(heapQuery) m_Device->NoteRayIRUsage();
       // The safety closure is not evidence of shader reads or writes.
-      if(!sourcedInlineOnly && slot0BufferOnly)
+      if(!heapQuery && !sourcedDispatch && slot0BufferOnly)
       {
         for(uint32_t slot = 0; slot < 31; slot++)
           replay->AddUsage(replay->GetComputeBuffer(slot).resourceId,
                            ResourceUsage::CS_RWResource);
       }
-      else if(!sourcedInlineOnly)
+      else if(!heapQuery && !sourcedDispatch)
       {
         replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
         replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);
@@ -1619,6 +1728,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreads(SerialiserType &
   if(IsReplayingAndReading())
   {
     if(!ComputeCommandEncoder || ComputeCommandEncoder->m_Type != eResComputeCommandEncoder || !ComputeCommandEncoder->m_Real ||
+       !ComputeCommandEncoder->ValidateFunctionTableBindings() ||
+       !m_Device->GetReplay()->ValidateComputeArgumentRayBindings() ||
        ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
       return false;
 
@@ -1627,9 +1738,19 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreads(SerialiserType &
     const TextureDescription destination = replay->GetTexture(replay->GetComputeTextureForAccess(true));
     const MetalPipe::BufferBinding output = replay->GetComputeBufferForAccess(true);
     const bool bufferOutput = destination.resourceId == ResourceId() && output.resourceId != ResourceId();
+    // Like a Vulkan storage texel buffer / D3D12 typed buffer UAV, a reflected
+    // write-only TextureBuffer needs no source image or buffer output. Creation
+    // already validates the Private parent's exact range, format and alignment.
+    const bool bufferTextureWrite = replay->HasComputeShaderReflection() && source.resourceId == ResourceId() &&
+        output.resourceId == ResourceId() && destination.resourceId != ResourceId() &&
+        destination.type == TextureType::Buffer && destination.format.compType == CompType::UInt &&
+        destination.format.compCount == 4 && destination.format.compByteWidth == 2 &&
+        (destination.creationFlags & TextureCategory::ShaderReadWrite) != TextureCategory::NoFlags &&
+        replay->GetBufferTextureSource(destination.resourceId) != ResourceId() &&
+        grid.height == 1 && grid.width <= destination.width && replay->ValidateComputeBufferBindings();
     if(!ComputeCommandEncoder || !replay->ValidateComputeThreadgroup(threadsPerGroup, &grid) ||
        (bufferOutput && !replay->ValidateComputeBufferBindings()) ||
-       (!bufferOutput && (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
+       (!bufferOutput && !bufferTextureWrite && (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
        source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
        source.width != destination.width || source.height != destination.height ||
        source.format != destination.format || grid.width > destination.width || grid.height > destination.height)) ||

@@ -121,6 +121,7 @@ public:
   void SetComputeTexture(uint32_t index, ResourceId id);
   void BindComputeSampler(uint32_t index, ResourceId id);
   bool ValidateComputeBufferBindings(bool allowMissingBufferReflection = false) const;
+  bool ValidateComputeRayBindings() const;
   bool ValidateComputeBufferSnapshot(ResourceId pipeline,
       const std::map<uint32_t, MetalPipe::BufferBinding> &buffers,
       const std::map<uint32_t, uint64_t> &bytes) const;
@@ -143,6 +144,11 @@ public:
   ResourceId GetComputeTexture(uint32_t index) const;
   ResourceId GetComputeTextureForAccess(bool write) const;
   void BindComputeBuffer(uint32_t index, ResourceId id, uint64_t offset);
+  bool HasComputeShaderReflection() const { return m_CurrentPipelineState.computeShader.reflection != NULL; }
+  ResourceId GetComputePipeline() const { return m_CurrentPipelineState.computePipelineResourceId; }
+  rdcstr GetComputeAIR(ResourceId pipeline, rdcstr &entry);
+  bool GetGraphicsAIR(ResourceId pipeline, uint32_t stage, rdcstr &entry, rdcstr &air,
+      std::map<rdcstr, rdcpair<rdcstr, rdcstr>> &linked);
   MetalPipe::BufferBinding GetComputeBuffer(uint32_t index) const;
   MetalPipe::BufferBinding GetComputeBufferForAccess(bool write) const;
   void AddDepthStencilState(ResourceId id, const RDMTL::DepthStencilDescriptor &descriptor);
@@ -187,6 +193,9 @@ public:
   rdcarray<ResourceId> GetArgumentBuffers() const;
   bool RestoreArgumentBufferResources(ResourceId id);
   bool ValidateArgumentBufferBindings() const;
+  void SetArgumentBufferRayResource(ResourceId buffer, uint64_t offset, uint32_t index,
+                                    ResourceId resource, MTL::DataType type);
+  bool ValidateComputeArgumentRayBindings() const;
   bool IsComputeBufferReadOnly(ResourceId pipeline, uint32_t slot) const;
   bool IsComputeBufferActive(ResourceId pipeline, uint32_t slot) const;
   void BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType indexType,
@@ -256,7 +265,10 @@ public:
   void AddDebugGroup(const NS::String *label, ActionFlags flag);
   bool RegisterComputeIndirectAction(uint32_t eventId, ResourceId buffer, uint64_t offset,
                                      MTL::ComputeCommandEncoder *encoder,
-                                     ResourceId encoderID = ResourceId());
+                                     ResourceId encoderID = ResourceId(),
+                                     MTL::Buffer **executionArguments = NULL,
+                                     uint32_t threadsPerGroup = 1);
+  void ResetComputeIndirectTracking();
   bool TraceComputeArgumentProducers(uint32_t eventId, ResourceId command,
                                     MTL::ComputeCommandEncoder *encoder);
   bool HasPendingComputeIndirectActions() const { return !m_PendingComputeIndirectActions.empty(); }
@@ -450,10 +462,12 @@ private:
     uint64_t offset;
     MTL::Buffer *snapshot;
     bool diagnostic = false;
+    bool guarded = false, frozenArguments = false;
     ResourceId pipeline;
     rdcarray<uint32_t> expected;
   };
   MTL::ComputePipelineState *m_IndirectReadbackPipeline = NULL;
+  MTL::ComputePipelineState *m_IndirectReplayPipeline = NULL;
   void ClearPendingComputeIndirectActions();
   rdcarray<PendingComputeIndirectAction> m_PendingComputeIndirectActions;
   std::map<ResourceId,uint32_t> m_LoadComputeIndirectOrdinals;
@@ -472,6 +486,7 @@ private:
   bool BakeSubmissionEvents();
   std::map<uint32_t, ResourceId> m_ActionEncoderContexts;
   std::map<ResourceId, rdcarray<uint32_t>> m_SubmissionBindlessEvents;
+  uint64_t m_UniformInspectionOffset = UINT64_MAX;
   std::set<uint64_t> m_FrameChunkOffsets;
   rdcarray<APIEvent> m_PendingEvents;
   rdcarray<APIEvent> m_Events;
@@ -563,6 +578,7 @@ private:
   std::map<ResourceId, std::set<uint32_t>> m_ComputeReadOnlyBuffers;
   std::map<ResourceId, std::map<uint32_t, rdcpair<uint64_t, uint64_t>>> m_ComputeBufferMinimums;
   std::map<ResourceId, rdcarray<uint32_t>> m_ComputeRequiredTextures, m_ComputeRequiredSamplers;
+  std::map<ResourceId, std::map<uint32_t, MTL::ArgumentType>> m_ComputeRequiredAS;
   std::map<ResourceId, std::map<uint32_t, uint64_t>> m_ComputeThreadgroupMinimums;
   // Static threadgroup memory and maximum total threads for each native pipeline.
   std::map<ResourceId, rdcpair<uint64_t, uint64_t>> m_ComputeThreadgroupLimits;
@@ -576,6 +592,7 @@ private:
     WrappedMTLArgumentEncoder *encoder = NULL;
     MetalPipe::ArgumentBuffer binding;
     rdcarray<MetalPipe::BufferBinding> buffers;
+    std::map<uint32_t, ResourceId> rayResources;
   };
   std::map<rdcpair<ResourceId, uint64_t>, ArgumentPacket> m_ArgumentBuffers;
   // Resource id in an argument struct is not a direct shader binding slot.

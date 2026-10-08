@@ -46,7 +46,7 @@ def main():
             else:args[-1].text='4294967295'
         elif label in ('width-zero','height-zero','width-over-limit','height-over-limit','sample-zero','sample-two','array-two'):
             call=next(c for c in nodes if c.get('name') in ('MTLCommandBuffer::renderCommandEncoderWithDescriptor','MTLCommandBuffer::parallelRenderCommandEncoderWithDescriptor'))
-            name,value={'width-zero':('renderTargetWidth','0'),'height-zero':('renderTargetHeight','0'),'width-over-limit':('renderTargetWidth','513'),'height-over-limit':('renderTargetHeight','513'),'sample-zero':('defaultRasterSampleCount','0'),'sample-two':('defaultRasterSampleCount','2'),'array-two':('renderTargetArrayLength','2')}[label]
+            name,value={'width-zero':('renderTargetWidth','0'),'height-zero':('renderTargetHeight','0'),'width-over-limit':('renderTargetWidth','16385'),'height-over-limit':('renderTargetHeight','16385'),'sample-zero':('defaultRasterSampleCount','0'),'sample-two':('defaultRasterSampleCount','2'),'array-two':('renderTargetArrayLength','2')}[label]
             field(field(call,'descriptor'),name).text=value
         elif label in ('rasterization-disabled','fragment-missing'):
             call=next(c for c in nodes if c.get('name','').startswith('MTLDevice::newRenderPipelineState'))
@@ -61,7 +61,10 @@ def main():
         else:
             name,value={'command-zero':('command','0'),'command-other':('command','999999'),'encoder-zero':('encoder','0'),'encoder-other':('encoder','999999'),'pass-zero':('pass','0'),'pass-other':('pass','999999'),'buffer-zero':('buffer','0'),'buffer-other':('buffer','999999'),'offset-unaligned':('offset','17'),'offset-other':('offset','20'),'ordinal-over-limit':('ordinal','512'),'ordinal-duplicate':('ordinal','1'),'kind-wrong':('wordCount','5' if kind==4 else '4'),'writes-undeclared':('writesDeclared','false')}[label]
             field(first,name).text=value
-        for c in nodes:c.set('length','0')
+        # Preserve a nonzero chunk estimate. The zero-length scratch writer
+        # asserts on its inherited chunkID; that is a converter fault, not a
+        # malformed Metal/API contract. 32 bytes also cover the longer record.
+        for c in nodes:c.set('length',str(int(c.get('length','0'))+32))
         target=folder/(label+'.zip.xml');tree.write(target,encoding='utf-8',xml_declaration=True)
         with zipfile.ZipFile(target.with_suffix(''),'w',compression=zipfile.ZIP_DEFLATED) as z:
             for n,data in blobs.items():z.writestr(n,data)

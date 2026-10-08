@@ -29,6 +29,7 @@
 #include "metal_indirect_readback.h"
 #include "metal_render_indirect_readback.h"
 #include "metal_types.h"
+#include <memory>
 
 struct MetalResourceRecord;
 class WrappedMTLDevice;
@@ -96,6 +97,7 @@ struct WrappedMTLObject
   ResourceId m_ID;
   MetalResourceType m_Type = eResUnknown;
   bool m_OwnsReal = false;
+  bool m_RetainsDeviceBridge = false;
   // A native GPU identity is stable for this object's lifetime. Retain its diagnostic
   // record for future captures, without adding a chunk on every descriptor update.
   int32_t m_CapturedAliasable = 0;
@@ -177,6 +179,92 @@ struct MetalCapturedRenderIndirectArguments
   MetalIndirectReadback readback;
 };
 
+// Immutable AS rebuild input and the native submission whose status proves completion.
+// No callback captures this snapshot or retains the AS wrapper.
+struct MetalASInitialBuild
+{
+  uint32_t kind = 1; // 1=triangle, 2=indexed, 3=boxes, 5=direct TLAS, 8=multi-indexed, 9=indirect TLAS
+  bool compacted = false;
+  ResourceId sizeSource;
+  rdcarray<uint64_t> sizeParameters;
+  ResourceId source;
+  ResourceId indexSource;
+  bytebuf indices;
+  rdcarray<ResourceId> children;
+  rdcarray<std::shared_ptr<MetalASInitialBuild>> childBuilds;
+  // Queried AS identities, associated with the typed children, never guessed
+  // from untyped buffer words. Capture-only; replay derives them from metadata.
+  rdcarray<uint64_t> childGPUIdentities;
+  rdcarray<uint64_t> parameters;
+  bytebuf vertices;
+  NS::SharedPtr<MTL::CommandBuffer> submission;
+  // Internal GPU copies at an AS-only submission boundary. Materialise only
+  // after the submission and copied-source dependencies have completed.
+  NS::SharedPtr<MTL::Buffer> inputReadback;
+  NS::SharedPtr<MTL::Buffer> indexReadback;
+  rdcarray<NS::SharedPtr<MTL::CommandBuffer>> dependencies;
+};
+
+static constexpr size_t MetalMaxIndirectASChildren = 1024;
+bool ValidMetalASInitialInstances(const bytebuf &bytes, uint64_t count, size_t children,
+    uint64_t descriptorType = uint64_t(MTL::AccelerationStructureInstanceDescriptorTypeDefault),
+    size_t childLimit = 4);
+bool MetalASInitialInstanceSpan(const rdcarray<uint64_t> &parameters,
+    uint64_t length, uint64_t &packedBytes);
+bool PackMetalASInitialInstances(const byte *data, uint64_t length,
+    const rdcarray<uint64_t> &parameters, size_t children, bytebuf &packed);
+bool ValidMetalASPrivateInstanceInput(WrappedMTLBuffer *input);
+bool ValidMetalASInactiveInstances(const bytebuf &raw, uint64_t count);
+bool PackMetalASInactiveInstances(const byte *data, uint64_t length,
+    const rdcarray<uint64_t> &parameters, bytebuf &raw);
+bool ValidMetalASEmptyIndirectParameters(const rdcarray<uint64_t> &parameters, uint64_t length);
+bool MetalASIndirectInstanceSpan(const rdcarray<uint64_t> &parameters,
+    uint64_t length, uint64_t &packedBytes);
+bool ConvertMetalASIndirectInstances(const bytebuf &raw, uint64_t count,
+    const rdcarray<uint64_t> &identities, bytebuf &userIDInstances);
+bool PackMetalASIndirectInstances(const byte *data, uint64_t length,
+    const rdcarray<uint64_t> &parameters, const rdcarray<uint64_t> &identities, bytebuf &packed);
+bool MetalASInitialBoxSpan(const rdcarray<uint64_t> &parameters, uint64_t &bytes);
+bool ValidMetalASInitialBoxes(const rdcarray<uint64_t> &parameters, const bytebuf &boxes);
+bool ValidMetalASInstance(const MTL::AccelerationStructureInstanceDescriptor &data, size_t children);
+bool MaterialiseMetalASInitialBuild(const std::shared_ptr<MetalASInitialBuild> &build);
+bool MetalASInitialIndexedSpan(const rdcarray<uint64_t> &parameters,
+    const bytebuf &indices, uint64_t &vertexBytes);
+// Ten values per indexed geometry, preserving order and shared input buffer offsets.
+bool ValidMetalASMultiIndexedParameters(const rdcarray<uint64_t> &parameters,
+    uint64_t vertexLength, uint64_t indexLength);
+bool ValidMetalASMultiIndexedInputs(const rdcarray<uint64_t> &parameters,
+    const bytebuf &vertices, const bytebuf &indices);
+MTL::PrimitiveAccelerationStructureDescriptor *MetalASMultiIndexedDescriptor(
+    MTL::Buffer *vertices, MTL::Buffer *indices, const rdcarray<uint64_t> &parameters);
+
+struct MetalASInitialCandidate
+{
+  ResourceId target;
+  ResourceId encoder;
+  ResourceId copySource;
+  bool compactCopy = false;
+  ResourceId refitSource;
+  std::shared_ptr<MetalASInitialBuild> priorBuild;
+  NS::SharedPtr<MTL::Buffer> input;
+  NS::SharedPtr<MTL::Buffer> indexInput;
+  std::shared_ptr<MetalASInitialBuild> build;
+};
+
+// Frame builds keep their original stream position and API metadata. Their GPU
+// input is frozen at encoder end and serialised only after native completion.
+struct MetalASFrameBuild
+{
+  Chunk *chunk = NULL;
+  SDChunkMetaData metadata;
+  uint32_t metadataFlags = 0;
+  ResourceId encoder, target, source, scratch;
+  uint64_t scratchOffset = 0;
+  std::shared_ptr<MetalASInitialBuild> build;
+};
+void WriteMetalASFrameBuild(WriteSerialiser &ser, const MetalASFrameBuild &evidence);
+
+
 struct MetalCmdBufferRecordingInfo
 {
   MetalCmdBufferRecordingInfo(WrappedMTLCommandQueue *parentQueue) : queue(parentQueue) {}
@@ -205,6 +293,8 @@ struct MetalCmdBufferRecordingInfo
   MetalCmdBufferStatus status = MetalCmdBufferStatus::Unknown;
   uint64_t captureCommitEpoch = 0;
   bool presented = false;
+  rdcarray<MetalASInitialCandidate> initialASBuilds;
+  rdcarray<MetalASFrameBuild> frameASBuilds;
   rdcarray<MetalCapturedComputeIndirectArguments> indirectArguments;
   Threading::CriticalSection renderIndirectLock;
   std::map<ResourceId,rdcarray<MetalIndirectWriteFootprint>> renderIndirectWrites;
@@ -236,8 +326,12 @@ public:
   ~MetalResourceRecord();
   bool MarkResourceFrameReferenced(ResourceId id, FrameRefType type);
   void DiscardBackgroundBufferMarkers();
+  bool HasOnlyASInitialCommands();
+  void MarkASInitialReferences(WrappedMTLAccelerationStructure *structure);
   WrappedMTLObject *m_Resource;
   MetalResourceType m_Type;
+  // Capture-side API identity; a Native parent pointer is not a proxy address.
+  ResourceId textureParent;
 
   // Each entry is only used by specific record types
   union

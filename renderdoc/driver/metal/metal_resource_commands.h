@@ -3,6 +3,7 @@
 #pragma once
 
 #include "metal_replay.h"
+#include "metal_acceleration_structure.h"
 
 // Residency declarations and barriers share the same directly wrapped resource subset.
 // Check the replay registry before invoking MTLResource methods on an untrusted capture ID.
@@ -15,7 +16,7 @@ inline bool ValidMetalCommandResource(WrappedMTLDevice *device, WrappedMTLResour
          device->GetReplay()->GetTexture(id).resourceId != ResourceId();
 }
 
-// Function tables are MTLResources and may be declared resident before a draw/dispatch.
+// Function tables and acceleration structures are MTLResources and may be declared resident.
 // Barriers keep the smaller buffer/texture subset above; validate table identity against
 // the replay resource manager before passing an untrusted capture object to Metal.
 inline bool ValidMetalResidencyResource(WrappedMTLDevice *device, WrappedMTLResource *resource)
@@ -24,7 +25,8 @@ inline bool ValidMetalResidencyResource(WrappedMTLDevice *device, WrappedMTLReso
   if(!resource) return false;
   WrappedMTLObject *obj = (WrappedMTLObject *)resource;
   if((obj->m_Type != eResVisibleFunctionTable &&
-      obj->m_Type != eResIntersectionFunctionTable) ||
+      obj->m_Type != eResIntersectionFunctionTable &&
+      obj->m_Type != eResAccelerationStructure) ||
      !obj->m_Real || obj->m_Device != device)
     return false;
   MetalResourceManager *manager = device->GetResourceManager();
@@ -76,6 +78,13 @@ inline void ReferenceMetalCommandResources(MetalResourceRecord *record,
                                             bool write)
 {
   for(WrappedMTLResource *resource : resources)
+  {
     record->MarkResourceFrameReferenced(GetResID(resource),
                                         write ? eFrameRef_ReadBeforeWrite : eFrameRef_Read);
+    // A resident TLAS can be consumed through converted IR pointers without an
+    // explicit setAccelerationStructure. Preserve its primitive initial builds
+    // exactly as for direct AS bindings, not only the root creation record.
+    if(resource && ((WrappedMTLObject *)resource)->m_Type == eResAccelerationStructure)
+      record->MarkASInitialReferences((WrappedMTLAccelerationStructure *)resource);
+  }
 }

@@ -66,6 +66,56 @@ inline RENDERDOC_API_1_7_0 *API()
   return Result;
 }
 
+// Preserve the compiler payload when present. Compute JSON can be stripped by
+// the shader compiler; in that case record only the surviving binding ABI and
+// threadgroup header facts, explicitly without a shader access/query claim.
+inline void ComputeReflection(FMetalDevice &Device, MTL::ComputePipelineState *Pipeline,
+                               const FString &JSON, uint32 CBVs, uint32 RootBindPoint,
+                               uint32 ResourceBindPoint, uint32 SamplerBindPoint,
+                               uint32 Samplers, uint32 ThreadsX, uint32 ThreadsY, uint32 ThreadsZ)
+{
+  if(!API() || !Pipeline) return;
+  FString Payload = JSON;
+  if(Payload.IsEmpty())
+  {
+    if(CBVs > 32 || !Samplers) return;
+    Payload = FString::Printf(TEXT("{\"Origin\":\"MetalIRRuntimeBindings\",\"ShaderType\":\"Compute\",\"RootBindPoint\":%u,\"ResourceHeapBindPoint\":%u,\"SamplerHeapBindPoint\":%u,\"StaticSamplerCount\":%u,\"TopLevelArgumentBuffer\":["),
+        RootBindPoint, ResourceBindPoint, SamplerBindPoint, Samplers);
+    for(uint32 Index = 0; Index < CBVs; Index++)
+      Payload += FString::Printf(TEXT("{\"EltOffset\":%u,\"Size\":8,\"Slot\":%u,\"Space\":0,\"Type\":\"CBV\"},"), Index * 8, Index);
+    Payload += FString::Printf(TEXT("{\"EltOffset\":%u,\"Size\":8,\"Type\":\"Table\"}],\"state\":{\"tg_size\":[%u,%u,%u]}}"),
+        CBVs * 8, ThreadsX, ThreadsY, ThreadsZ);
+  }
+  const FTCHARToUTF8 UTF8(*Payload);
+  RENDERDOC_AnnotationValue Value = {};
+  Value.string = UTF8.Get();
+  const uint32 Result = API()->SetObjectAnnotation(Device.GetDevice(), Pipeline,
+      "metal.irComputeReflection", eRENDERDOC_String, 0, &Value);
+  if(Result)
+    UE_LOG(LogMetal, Warning, TEXT("RenderDoc immutable compute reflection rejected: %u"), Result);
+}
+
+// An AS descriptor points to a 64-byte IR header, not a plain buffer payload.
+// Record identities at the actual header write, independently of factory timing.
+inline void ASHeader(FMetalDevice &Device, const FMetalBufferPtr &Header,
+                     MTL::AccelerationStructure *Structure,
+                     const FMetalBufferPtr &Contributions, uint64 ExtraOffset)
+{
+  if(!API() || !Header || !Structure || !Contributions)
+    return;
+  if(ExtraOffset > UINT64_MAX - Contributions->GetOffset())
+    return;
+  RENDERDOC_AnnotationValue Value = {};
+  Value.vector.uint64[0] = Header->GetOffset();
+  Value.vector.uint64[1] = reinterpret_cast<uintptr_t>(Structure);
+  Value.vector.uint64[2] = reinterpret_cast<uintptr_t>(Contributions->GetMTLBuffer());
+  Value.vector.uint64[3] = Contributions->GetOffset() + ExtraOffset;
+  const uint32 Result = API()->SetObjectAnnotation(Device.GetDevice(), Header->GetMTLBuffer(),
+      "metal.rayASHeader", eRENDERDOC_UInt64, 4, &Value);
+  if(Result)
+    UE_LOG(LogMetal, Warning, TEXT("RenderDoc typed AS header rejected (%u); coverage remains incomplete"), Result);
+}
+
 inline void Created(const IRDescriptorTableEntry &Value, void *Object, uint32 Kind,
                     uint64 Offset = 0, void *Texture = nullptr)
 {

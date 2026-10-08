@@ -1287,6 +1287,7 @@ void WrappedMTLCommandBuffer::commit()
       info->retainedNative = mtlCommandBuffer;
       // Snapshot before native commit can invoke callbacks or mutate shared memory on the GPU.
       device->CaptureCmdBufCPUWrites(GetRecord(this));
+      device->CaptureASInitialBuilds(GetRecord(this));
     }
     SERIALISE_TIME_CALL(mtlCommandBuffer->commit());
     if(isCapture)

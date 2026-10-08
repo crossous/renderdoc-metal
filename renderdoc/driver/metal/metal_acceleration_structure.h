@@ -9,10 +9,19 @@ public:
                                   WrappedMTLDevice *device);
   enum { TypeEnum = eResAccelerationStructure };
   NS::UInteger m_Size = 0;
+  // Capture-time identity only. Consumers must relocate a typed AS reference;
+  // this value is never submitted as a live replay GPU resource ID.
+  uint64_t m_CapturedGPUResourceID = 0;
+  std::shared_ptr<MetalASInitialBuild> m_CapturedInitialBuild;
   ResourceId m_LastCompactedSizeBuffer;
   NS::UInteger m_LastCompactedSizeOffset = 0;
   MTL::DataType m_LastCompactedSizeType = MTL::DataTypeNone;
   ResourceId m_LastCompactedWriteCommandBuffer;
+  ResourceId m_CompactedSizeBuildCommandBuffer;
+  uint64_t m_LastInitialCompactedSize = 0;
+  // Capture-only encoder-point query value; never use mutable Private CPU contents.
+  NS::SharedPtr<MTL::Buffer> m_CapturedCompactedSizeReadback;
+  NS::SharedPtr<MTL::CommandBuffer> m_CapturedCompactedSizeSubmission;
   uint32_t m_LastBuildKind = 0; // 1=triangle, 2=indexed, 3=box, 4=refittable triangle, 5=instance, 6=refittable box, 7=refittable indexed triangle
   bool m_LastAllowDuplicateIntersectionFunctionInvocation = true;
   NS::UInteger m_LastVertexStride = 3 * sizeof(float);

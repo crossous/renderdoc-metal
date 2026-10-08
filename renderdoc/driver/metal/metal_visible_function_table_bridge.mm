@@ -1,4 +1,5 @@
 #include "metal_visible_function_table.h"
+#include "metal_device.h"
 #include "metal_types_bridge.h"
 
 @implementation ObjCBridgeMTLFunctionHandle
@@ -44,10 +45,16 @@
     [super forwardInvocation:invocation];
 }
 - (id<MTLDevice>)device { return id<MTLDevice>(GetWrapped(self)->GetDevice()); }
+- (MTLResourceID)gpuResourceID API_AVAILABLE(macos(13.0), ios(16.0))
+{
+  MTLResourceID identity = self.real.gpuResourceID;
+  GetWrapped(self)->m_Device->CaptureFunctionTableGPUIdentity(GetWrapped(self), identity._impl);
+  return identity;
+}
 - (void)setFunction:(id<MTLFunctionHandle>)function atIndex:(NSUInteger)index
 {
-  if(index >= GetWrapped(self)->m_FunctionCount || !function ||
-     ![function isKindOfClass:[ObjCBridgeMTLFunctionHandle class]])
+  if(index >= GetWrapped(self)->m_FunctionCount ||
+     (function && ![function isKindOfClass:[ObjCBridgeMTLFunctionHandle class]]))
   {
     RDCERR("Unsupported or unwrapped Metal intersection function handle");
     return;
@@ -65,7 +72,7 @@
     return;
   }
   for(NSUInteger i = 0; i < range.length; ++i)
-    if(!functions[i] || ![functions[i] isKindOfClass:[ObjCBridgeMTLFunctionHandle class]])
+    if(functions[i] && ![functions[i] isKindOfClass:[ObjCBridgeMTLFunctionHandle class]])
     {
       RDCERR("Unsupported or unwrapped Metal intersection function handle range");
       return;
@@ -189,6 +196,12 @@
     [super forwardInvocation:invocation];
 }
 - (id<MTLDevice>)device { return id<MTLDevice>(GetWrapped(self)->GetDevice()); }
+- (MTLResourceID)gpuResourceID API_AVAILABLE(macos(13.0), ios(16.0))
+{
+  MTLResourceID identity = self.real.gpuResourceID;
+  GetWrapped(self)->m_Device->CaptureFunctionTableGPUIdentity(GetWrapped(self), identity._impl);
+  return identity;
+}
 - (void)setFunction:(id<MTLFunctionHandle>)function atIndex:(NSUInteger)index
 {
   if(index >= GetWrapped(self)->m_FunctionCount ||

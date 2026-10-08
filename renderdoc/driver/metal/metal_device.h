@@ -27,9 +27,18 @@
 #include "metal_common.h"
 #include "metal_core.h"
 #include "metal_manager.h"
+#include "metal_ir_compute_abi.h"
 #include <functional>
 
 bool ValidateMetalPipelineFunction(WrappedMTLFunction *function, MTL::FunctionType type);
+
+struct MetalComputeCompileTrace
+{
+  uint64_t token = 0;
+  uint64_t started = 0;
+};
+void MetalEndComputeCompileTrace(const MetalComputeCompileTrace &trace, bool success);
+void MetalSubmittedComputeCompileTrace(const MetalComputeCompileTrace &trace);
 
 class WrappedMTLDevice;
 class MetalReplay;
@@ -71,6 +80,8 @@ class WrappedMTLDevice : public WrappedMTLObject
 public:
   WrappedMTLDevice(MTL::Device *realMTLDevice, ResourceId objId);
   ~WrappedMTLDevice();
+  MetalComputeCompileTrace BeginComputeCompileTrace(const char *api, MTL::Function *function,
+      MTL::ComputePipelineDescriptor *descriptor, MTL::PipelineOption options);
   template <typename SerialiserType>
   bool Serialise_MTLCreateSystemDefaultDevice(SerialiserType &ser);
   static WrappedMTLDevice *MTLCreateSystemDefaultDevice(MTL::Device *realMTLDevice);
@@ -310,10 +321,26 @@ public:
   template <typename SerialiserType>
   bool Serialise_ResourceLabel(SerialiserType &ser, ResourceId resource, rdcstr label);
   MetalResourceManager *GetResourceManager() { return m_ResourceManager; };
+  void CaptureHeapBufferBirth(WrappedMTLBuffer *buffer, WrappedMTLHeap *parent, bool fresh);
+  template <typename SerialiserType>
+  bool Serialise_CaptureHeapBirthContents(SerialiserType &ser, ResourceId buffer,
+      ResourceId heap, uint64_t offset, const bytebuf &contents, bool apiUnspecified);
   void WaitForGPU();
   Threading::RWLock &GetCaptureTransitionLock() { return m_CapTransitionLock; }
   Threading::CriticalSection &GetCaptureSubmissionLock() { return m_CaptureCommandBuffersLock; }
   void RecordCaptureSubmission(MTL::CommandBuffer *buffer);
+  void CaptureASInitialBuilds(MetalResourceRecord *command);
+  bool RecordReplayASInitialContents(ResourceId id, ResourceId source,
+      const rdcarray<uint64_t> &parameters, const bytebuf &vertices, uint32_t kind,
+      const rdcarray<ResourceId> &children, ResourceId indexSource, const bytebuf &indices,
+      bool compacted, ResourceId sizeSource, const rdcarray<uint64_t> &sizeParameters);
+  bool RestoreReplayASInitialContents();
+  bool RecordRayIRGeometryASBuild(ResourceId structure, ResourceId vertices, ResourceId indices,
+      uint32_t kind, const rdcarray<uint64_t> &parameters, ResourceId scratch, uint64_t scratchOffset,
+      const bytebuf &vertexBytes, const bytebuf &indexBytes);
+  bool RecordRayIRIndirectASBuild(ResourceId structure, const rdcarray<ResourceId> &children,
+      ResourceId instances, ResourceId scratch, const rdcarray<uint64_t> &parameters,
+      const bytebuf &descriptorBytes, uint64_t scratchOffset = 0);
   bool WaitForCaptureSubmittedGPU();
   WriteSerialiser &GetThreadSerialiser();
   static rdcstr GetChunkName(uint32_t idx);
@@ -395,6 +422,14 @@ public:
   template <typename SerialiserType>
   bool Serialise_CaptureGPUIdentity(SerialiserType &ser, ResourceId resource,
                                     uint32_t kind, uint64_t value);
+  void CaptureAccelerationStructureGPUIdentity(WrappedMTLObject *object, uint64_t value);
+  void CaptureFunctionTableGPUIdentity(WrappedMTLObject *object, uint64_t value);
+  template <typename SerialiserType>
+  bool Serialise_CaptureFunctionTableGPUIdentity(SerialiserType &ser, ResourceId resource,
+                                                uint32_t kind, uint64_t value);
+  template <typename SerialiserType>
+  bool Serialise_CaptureAccelerationStructureGPUIdentity(SerialiserType &ser,
+                                                         ResourceId resource, uint64_t value);
   struct ComputeIndirectArgumentsEvidence
   {
     ResourceId command, buffer;
@@ -444,6 +479,175 @@ public:
     uint64_t offset = 0, count = 0, stride = 0;
     uint32_t schema = 0;
   };
+  // IR runtime v1: visible-function shader indices, CPU-authored Shared records.
+  // Every GPU field has a descriptor layout; the dispatch declaration covers the ABI closure.
+  struct RayIRDispatch
+  {
+    ResourceId pipeline, buffer;
+    uint64_t offset = 0, rootCount = 0;
+  };
+  rdcarray<RayIRDispatch> m_RayIRDispatches;
+  // Explicit Apple IR 64-byte header provenance. Offsets address the known
+  // buffers; native AS IDs and contribution VAs remain distinct namespaces.
+  struct RayASHeader
+  {
+    ResourceId buffer, structure, contributions;
+    uint64_t offset = 0, contributionOffset = 0;
+    bytebuf bytes;
+  };
+  std::map<rdcpair<ResourceId, uint64_t>, RayASHeader> m_RayASHeaders;
+  std::map<rdcpair<ResourceId, uint64_t>, RayASHeader> m_RayASHeaderCurrent;
+  rdcarray<RayASHeader> m_RayASHeaderFrameWrites;
+  size_t m_RayASHeaderFrameCursor = 0;
+  bool ApplyRayASHeaderWrite(const RayASHeader &header);
+  bool ValidateRayASHeader(const RayASHeader &header);
+
+  void SnapshotRayASHeaders();
+  uint32_t CaptureRayASHeader(void *object, const RENDERDOC_AnnotationValue *value);
+  template <typename SerialiserType>
+  bool Serialise_DeclareRayASHeader(SerialiserType &ser, ResourceId buffer, uint64_t offset,
+      ResourceId structure, ResourceId contributions, uint64_t contributionOffset, bytebuf bytes);
+  bool PatchRayASHeaders(ResourceId buffer, const bytebuf &raw, bytebuf &patched);
+  struct RayQueryDispatch
+  {
+    ResourceId pipeline, roots, header, output;
+    uint64_t offset = 0;
+  };
+  rdcarray<RayQueryDispatch> m_RayQueryDispatches;
+  struct RayQueryHeapDispatch
+  {
+    ResourceId pipeline, heap, output;
+    uint64_t slotOffset;
+  };
+  rdcarray<RayQueryHeapDispatch> m_RayQueryHeapDispatches;
+  // Converted CBV roots describe read ranges, not raw address bit patterns.
+  struct RayQueryHeapCBVRoot
+  {
+    uint64_t offset, bytes, outputSlot, rootCount;
+  };
+  std::map<ResourceId, rdcarray<RayQueryHeapCBVRoot>> m_RayQueryHeapCBVRoots;
+  bool AddRayQueryHeapCBVRoot(ResourceId pipeline, const RayQueryHeapCBVRoot &root,
+                            bool idempotent);
+  template <typename SerialiserType>
+  bool Serialise_DeclareRayQueryHeapCBVRoot(SerialiserType &ser, ResourceId pipeline,
+      uint64_t offset, uint64_t bytes, uint64_t outputSlot, uint64_t rootCount);
+  template <typename SerialiserType>
+  bool Serialise_DeclareRayQueryHeapDispatch(SerialiserType &ser, ResourceId pipeline,
+      ResourceId heap, uint64_t slotOffset, ResourceId output);
+  bool HasRayQueryHeapPipeline(ResourceId pipeline) const;
+  bool IsRayQueryHeapOutputResource(WrappedMTLObject *object) const;
+  bool IsRayQueryHeapTextureResource(WrappedMTLObject *object, bool write,
+                                    uint64_t maximumBytes = 64 * 1024) const;
+  bool HasRayQueryHeapTextureInitialContents(ResourceId texture) const;
+  bool ValidateRayQueryHeapDispatch(ResourceId pipeline, ResourceId heap, uint64_t heapOffset,
+      const rdcarray<byte> &roots, MTL::Size groups, MTL::Size threads, bool indirect = false,
+      const std::function<bool(ResourceId,uint64_t,uint64_t)> &frameCBVProof = {});
+  bool ValidateRayQueryStructure(uint64_t captured, ResourceId &structure, uint64_t &count);
+  bool PrepareRayASHeaderInitialContents();
+  template <typename SerialiserType>
+  bool Serialise_DeclareRayQueryDispatch(SerialiserType &ser, ResourceId pipeline,
+      ResourceId roots, uint64_t offset, ResourceId header, ResourceId output);
+  bool HasRayQueryPipeline(ResourceId pipeline) const;
+  bool ValidateRayQueryDispatch(ResourceId pipeline, ResourceId roots, uint64_t offset,
+      MTL::Size groups, MTL::Size threads);
+  // DXR export roles are not encoded by native FunctionTypeVisible. Declare on
+  // immutable PSO function handles: raygen, miss, closest-hit, any-hit/intersection.
+  std::map<ResourceId, uint32_t> m_RayIRShaderRoles;
+  struct RayIRLocalRoot
+  {
+    // Offsets include the 32-byte identifier. kind: read buffer VA=0,
+    // constants=1, texture table=2, static sampler table=3, CBV=4.
+    uint64_t offset = 0, kind = 0, count = 0, bytes = 0;
+  };
+  std::map<ResourceId, rdcarray<RayIRLocalRoot>> m_RayIRLocalRoots;
+  // Same typed root shape, with AS header=5 and uint32 UAV=6 for global GRS.
+  std::map<ResourceId, rdcarray<RayIRLocalRoot>> m_RayIRGlobalRoots;
+  struct RayIRHeapEntry
+  {
+    // Resource heap=0, sampler heap=1. kind: raw SRV=0, texture=1, sampler=2, AS header=3.
+    uint64_t heap = 0, index = 0, kind = 0, bytes = 0;
+  };
+  std::map<ResourceId, rdcarray<RayIRHeapEntry>> m_RayIRHeapEntries;
+  // Converted compute uses the same typed ABI shapes as DXR roots/heaps.
+  // Compute heap kind4 is the legacy fixed texture UAV; kind8 resolves a
+  // texture UAV from the current execution-point slot. These kinds do not
+  // extend the separate TraceRay heap contract.
+  std::map<ResourceId, rdcarray<RayIRLocalRoot>> m_IRComputeRoots;
+  std::map<ResourceId, rdcarray<RayIRHeapEntry>> m_IRComputeHeapEntries;
+  // Immutable compiler facts only: these never authorize a consumer or GPU replay.
+  std::map<ResourceId, rdcstr> m_IRComputeReflections;
+  std::map<ResourceId, MetalIRComputeRuntimeABI> m_IRComputeRuntimeABIs;
+  uint64_t m_IRComputeReflectionBytes = 0;
+  template <typename SerialiserType>
+  bool Serialise_CaptureIRComputeReflection(SerialiserType &ser, ResourceId pipeline,
+                                           const rdcstr &reflection);
+  bool AddIRComputeRoot(ResourceId pipeline, const RayIRLocalRoot &root, bool idempotent);
+  bool AddIRComputeHeapEntry(ResourceId pipeline, const RayIRHeapEntry &entry, bool idempotent);
+  template <typename SerialiserType>
+  bool Serialise_DeclareIRComputeRoot(SerialiserType &ser, ResourceId pipeline,
+      uint64_t offset, uint64_t kind, uint64_t count, uint64_t bytes);
+  template <typename SerialiserType>
+  bool Serialise_DeclareIRComputeHeapEntry(SerialiserType &ser, ResourceId pipeline,
+      uint64_t heap, uint64_t index, uint64_t kind, uint64_t bytes);
+  bool AddRayIRHeapEntry(ResourceId pipeline, const RayIRHeapEntry &entry, bool idempotent);
+  template <typename SerialiserType>
+  bool Serialise_DeclareRayIRHeapEntry(SerialiserType &ser, ResourceId pipeline,
+                                     uint64_t heap, uint64_t index, uint64_t kind, uint64_t bytes);
+  bool AddRayIRGlobalRoot(ResourceId pipeline, const RayIRLocalRoot &root, bool idempotent);
+  template <typename SerialiserType>
+  bool Serialise_DeclareRayIRGlobalRoot(SerialiserType &ser, ResourceId pipeline,
+                                      uint64_t offset, uint64_t kind, uint64_t count, uint64_t bytes);
+  bool AddRayIRLocalRoot(ResourceId function, const RayIRLocalRoot &root, bool idempotent);
+  template <typename SerialiserType>
+  bool Serialise_DeclareRayIRLocalRoot(SerialiserType &ser, ResourceId function,
+                                     uint64_t offset, uint64_t kind, uint64_t count, uint64_t bytes);
+  template <typename SerialiserType>
+  bool Serialise_DeclareRayIRShaderRole(SerialiserType &ser, ResourceId function, uint32_t role);
+  template <typename SerialiserType>
+  bool Serialise_DeclareRayIRDispatch(SerialiserType &ser, ResourceId pipeline, ResourceId buffer,
+                                    uint64_t offset, uint64_t rootCount);
+  bool ResolveRayIRIdentity(uint32_t schema, uint64_t captured, ResourceId &resource,
+                            uint64_t &replacement);
+  bool ValidateRayIRDispatch(ResourceId pipeline, ResourceId buffer, uint64_t offset,
+                             MTL::Size groups, MTL::Size threads);
+  bool HasRayIRPipeline(ResourceId pipeline) const;
+  void NoteRayIRUsage();
+  // Persist only ranges proved by the full CPU submission scan. They authorize
+  // opaque frame CBV bindings during replay, never raw pointer interpretation.
+  std::map<rdcpair<ResourceId,uint64_t>,uint64_t> m_IRComputeFrameCBVReadRanges;
+  // Immutable byte values at each validated dispatch, before its GPU work.
+  // File offsets survive event remapping and distinguish copies/reads within
+  // one submission. These prove scalar values, never a pointer namespace.
+  std::map<uint64_t,std::map<rdcpair<ResourceId,uint64_t>,bytebuf>> m_IRComputeUniformReadContents;
+  struct IRRuntimeDescriptorAccess
+  {
+    ResourceId pipeline;
+    uint64_t object=0,offset=0,descriptorObject=0,descriptorOffset=0;
+    uint32_t kind=0;
+    bool write=false,resourceOnly=false;
+  };
+  // Identified Native compute/graphics descriptor accesses, independent of
+  // restoration qualification. A partial display does not prevent Native replay.
+  // Keep event offsets and stage identity, rather than enumerating a bound heap.
+  std::map<rdcpair<uint64_t,uint32_t>,rdcarray<IRRuntimeDescriptorAccess>> m_IRRuntimeDescriptorAccesses;
+  std::map<rdcpair<uint64_t,uint32_t>,bool> m_IRRuntimeDescriptorAccessComplete;
+  bool ReadProvenIRComputeUniformBytes(uint64_t fileOffset, ResourceId buffer,
+                                     uint64_t offset, uint32_t bytes, bytebuf &data) const;
+  bool IsIRDescriptorMetadataAddress(ResourceId buffer,uint64_t offset) const;
+  // Execution certificates retain actual bindings after restoration succeeds;
+  // they are independent of optional descriptor-access display completeness.
+  struct IRRuntimeRestoredBindings
+  {
+    ResourceId pipeline;
+    std::map<uint32_t, MetalPipe::BufferBinding> tables;
+  };
+  std::map<rdcpair<uint64_t,uint32_t>,IRRuntimeRestoredBindings> m_IRRuntimeRestoredBindings;
+  bool HasRestoredRuntimeTableBinding(ResourceId pipeline, uint32_t stage, uint32_t slot,
+                                     ResourceId buffer, uint64_t offset) const;
+  std::set<ResourceId> m_IRComputeFrameCBVResources;
+  std::set<ResourceId> m_RayIRReadResources;
+  std::set<ResourceId> m_IRComputeWriteResources;
+  ResourceId m_RayIROutput;
   template <typename SerialiserType>
   bool Serialise_DeclareDescriptorTable(SerialiserType &ser, ResourceId buffer, uint64_t offset,
                                         uint64_t count, uint64_t stride, uint32_t schema);
@@ -490,6 +694,12 @@ public:
     uint32_t type = 0;
     bool live = false;
     bool gpuExpected = false;
+    // A matched full typed copy is a publication even when every address
+    // field is null and therefore the resource reference map is empty.
+    bool gpuCopyPublished = false;
+    // Granted only after captured initial bytes and every typed identity field
+    // have been validated for initial restoration; frame publications clear it.
+    bool initialRestored = false;
     DescriptorSource gpuCopySource;
     std::map<uint32_t, DescriptorSource> sources, gpuCopySources;
     bytebuf data;
@@ -573,10 +783,18 @@ public:
     m_FramePlacementResources[id] = heap;
   }
   bool CanReplayImplicitBufferAlias(ResourceId before, ResourceId after) const;
+  bool CanReplayFrozenASInputAlias(ResourceId before, ResourceId after) const;
+  void RecordReplayFrozenASInput(ResourceId input) { m_ReplayFrozenASInputs.insert(input); }
   bool CanReplayRetiredTextureAlias(ResourceId before, ResourceId after);
   uint64_t DescriptorPlacementAliasLimit() const
   {
     return m_DescriptorCoverage >= 42 ? 128ULL * 1024 : 64ULL * 1024;
+  }
+  uint64_t DescriptorPlacementBufferAliasLimit() const
+  {
+    // Buffer aliases share the coverage65 frame-allocation budget. Texture
+    // retirement keeps its separate footprint and consumer-lifetime proof.
+    return m_DescriptorCoverage >= 65 ? 1024ULL * 1024 : DescriptorPlacementAliasLimit();
   }
   bool SupportsPrivateDescriptorSources() const { return m_DescriptorCoverage >= 23; }
   bool SupportsTrackedAliasCreationWhileEncoding() const { return m_DescriptorCoverage >= 24; }
@@ -592,6 +810,7 @@ public:
     return m_FrameBufferTextureViews.count(id) != 0;
   }
   void RegisterBufferTextureParent(ResourceId texture, ResourceId buffer);
+  ResourceId GetBufferTextureParent(ResourceId texture) const;
   // From ResourceManager interface
   bool Prepare_InitialState(WrappedMTLObject *res);
   uint64_t GetSize_InitialState(ResourceId id, const MetalInitialContents &initial);
@@ -726,8 +945,6 @@ public:
 
   static uint64_t g_nextDrawableTLSSlot;
   static IMP g_real_CAMetalLayer_nextDrawable;
-  static IMP g_real_CAMetalDrawable_texture;
-  static IMP g_real_CAMetalDrawable_present;
 
 private:
   static void MTLFixupForMetalDriverAssert();
@@ -777,6 +994,7 @@ private:
   };
   std::map<ResourceId, ReplayStandaloneBufferBirth> m_ReplayStandaloneBufferBirths;
   std::set<ResourceId> m_ReplayAliasableResources;
+  std::set<ResourceId> m_ReplayFrozenASInputs;
   std::set<ResourceId> m_FrameBufferTextureViews;
   ResourceId m_LastPresentedImage;
   ResourceId m_ReplayRenderTarget;
@@ -889,6 +1107,10 @@ private:
   rdcarray<CPUBufferUpdate> m_PendingReplayCPUBufferUpdates;
   std::map<ResourceId, bytebuf> m_ReplayBufferInitialContents;
   std::set<ResourceId> m_ReplayBuffersWithCreationContents;
+  std::map<ResourceId,bytebuf> m_ReplayHeapBufferBirthContents;
+  std::set<ResourceId> m_ReplayHeapBufferBirthUnspecified;
+  uint64_t m_CaptureHeapBirthBytes = 0;
+  double m_CaptureHeapBirthWaitMS = 0.0;
   struct GPUIdentity { uint32_t kind; uint64_t value; };
   std::map<ResourceId, GPUIdentity> m_ReplayGPUIdentities;
   rdcarray<DescriptorTable> m_DescriptorTables;
@@ -911,11 +1133,15 @@ private:
     uint64_t offset;
   };
   std::map<ResourceId, DescriptorFrameTexture> m_DescriptorFrameTextures;
+  // Original creation permissions, before replay adds shader-read for inspection.
+  std::map<ResourceId, uint64_t> m_DescriptorTextureUsages;
   std::set<ResourceId> m_DescriptorDrawableTextures;
   std::map<ResourceId,uint64_t> m_DescriptorSubmissionInitialBuffers;
   // View ResourceIds keep their own native GPU identity. Their projected tiny
   // descriptor lives above; this edge establishes creation/lifetime dependency.
   std::map<ResourceId, ResourceId> m_DescriptorFrameTextureViewParents;
+  std::map<ResourceId, uint64_t> m_DescriptorFrameTextureViewMipLevels;
+  std::map<ResourceId, uint64_t> m_DescriptorFrameTextureViewSlices;
   std::set<ResourceId> m_DescriptorPreflightLiveTextures;
   std::map<ResourceId, DescriptorFrameBuffer> m_DescriptorFrameBuffers;
   std::map<ResourceId, ResourceId> m_DescriptorFrameViews;
@@ -933,7 +1159,7 @@ private:
   std::map<ResourceId, ResourceId> m_ReplayTextureViewParents;
   // Includes unchanged Shared initial states as well as buffers with frame CPU writes.
   std::set<ResourceId> m_ReplayCPUUpdatedBuffers;
-  Threading::CriticalSection m_BufferTextureParentsLock;
+  mutable Threading::CriticalSection m_BufferTextureParentsLock;
   std::set<ResourceId> m_BufferTextureParents;
   std::map<ResourceId, ResourceId> m_BufferTextureParentByView;
   bool m_AppControlledCapture = false;
@@ -946,11 +1172,18 @@ private:
   uint64_t m_SectionVersion = 0;
 
   MetalCapturer m_Capturer;
-  uint32_t m_FrameCounter = 0;
+  std::atomic<uint32_t> m_FrameCounter{0};
   rdcarray<FrameDescription> m_CapturedFrames;
   Threading::RWLock m_CapTransitionLock;
   Threading::CriticalSection m_CapturePendingGPULock;
   rdcarray<MTL::CommandBuffer *> m_CapturePendingGPU;
+  std::map<ResourceId, std::shared_ptr<MetalASInitialBuild>> m_ReplayASInitialContents;
+  std::map<ResourceId, std::shared_ptr<MetalASInitialBuild>> m_RayIRASCurrentContents;
+  bool RecordReplayASContents(ResourceId id, ResourceId source,
+      const rdcarray<uint64_t> &parameters, const bytebuf &vertices, uint32_t kind,
+      const rdcarray<ResourceId> &children, ResourceId indexSource, const bytebuf &indices,
+      bool compacted, ResourceId sizeSource, const rdcarray<uint64_t> &sizeParameters,
+      std::map<ResourceId, std::shared_ptr<MetalASInitialBuild>> &contents, ResourceId scratch, uint64_t scratchOffset = 0);
   bool m_FailedCaptureStart = false;
   MetalResourceRecord *m_FrameCaptureRecord = NULL;
 

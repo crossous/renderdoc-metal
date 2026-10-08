@@ -3,6 +3,41 @@
 #include <stdint.h>
 #include <initializer_list>
 
+// Native dispatch extents are execution arguments, not a CPU analysis budget.
+// Keep checked arithmetic; pipeline/device threadgroup limits are validated by
+// ValidateComputeThreadgroupSnapshot before Native execution. A zero grid is
+// a no-op, while a zero threadgroup dimension is invalid.
+inline bool MetalComputeDispatchExtentFits(const uint64_t groups[3], const uint64_t threads[3])
+{
+  uint64_t work = 1;
+  for(unsigned i = 0; i < 3; ++i)
+    if(!threads[i]) return false;
+  if(!groups[0] || !groups[1] || !groups[2]) return true;
+  for(unsigned i = 0; i < 3; ++i)
+    for(uint64_t axis : {groups[i], threads[i]})
+    {
+      if(work > UINT64_MAX / axis) return false;
+      work *= axis;
+    }
+  return true;
+}
+
+// Bound retained preflight bookkeeping for the whole frame, independently of
+// dispatch/command kind and capture protocol. Shader work has a separate budget.
+struct MetalReplayPreflightBudget
+{
+  uint64_t bytes = 0;
+  bool Consume(uint64_t encodedBytes)
+  {
+    const uint64_t limit = 128ULL * 1024 * 1024;
+    const uint64_t recordReserve = 4096;
+    if(bytes > limit - recordReserve || encodedBytes > limit - recordReserve - bytes)
+      return false;
+    bytes += recordReserve + encodedBytes;
+    return true;
+  }
+};
+
 // Count backing allocations once, as D3D12 heaps and Vulkan device memory do.
 // These limits are a replay policy, not a claim that recommended working set
 // represents currently free memory. Reserve uploader/readback/driver headroom.

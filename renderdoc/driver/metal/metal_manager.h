@@ -42,8 +42,25 @@ struct MetalInitialContents
     // Initial buffer bytes are owned by bytebuf. ResourceManager calls Free when
     // replacing or discarding a snapshot; there is no Metal object to release.
     resourceContents.clear();
+    asParameters.clear();
+    asChildren.clear();
+    asIndices.clear();
+    asSource = ResourceId();
+    asIndexSource = ResourceId();
+    asCompacted = false;
+    asSizeSource = ResourceId();
+    asSizeParameters.clear();
   }
   bytebuf resourceContents;
+  ResourceId asSource;
+  ResourceId asIndexSource;
+  bytebuf asIndices;
+  uint32_t asKind = 1;
+  bool asCompacted = false;
+  ResourceId asSizeSource;
+  rdcarray<uint64_t> asSizeParameters;
+  rdcarray<ResourceId> asChildren;
+  rdcarray<uint64_t> asParameters;
 
   // for plain resources, we store the resource type
   MetalResourceType type;
@@ -66,6 +83,24 @@ public:
   }
   void SetState(CaptureState state) { m_State = state; }
   CaptureState GetState() { return m_State; }
+  rdcarray<WrappedMTLObject *> GetAccelerationStructures()
+  {
+    SCOPED_LOCK(m_Lock);
+    rdcarray<WrappedMTLObject *> structures;
+    for(const auto &entry : m_ResourceMap)
+      if(entry.second && entry.second->m_Type == eResAccelerationStructure)
+        structures.push_back(entry.second);
+    return structures;
+  }
+  rdcarray<WrappedMTLObject *> GetFunctionTables(MetalResourceType type)
+  {
+    SCOPED_LOCK(m_Lock);
+    rdcarray<WrappedMTLObject *> tables;
+    for(const auto &entry : m_ResourceMap)
+      if(entry.second && entry.second->m_Type == type)
+        tables.push_back(entry.second);
+    return tables;
+  }
   WrappedMTLObject *FindAnnotationObject(void *object)
   {
     SCOPED_LOCK(m_Lock);

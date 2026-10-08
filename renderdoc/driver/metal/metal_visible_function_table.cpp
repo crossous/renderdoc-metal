@@ -23,11 +23,18 @@ bool WrappedMTLVisibleFunctionTable::Serialise_setFunction(SerialiserType &ser,
     WrappedMTLFunctionHandle *function, uint32_t index)
 {
   SERIALISE_ELEMENT_LOCAL(Table, this).Important();
-  SERIALISE_ELEMENT(function).Important();
+  // Keep the serialized ID so an unknown non-null handle cannot become a legal
+  // empty slot when pointer deserialization fails to find its resource.
+  ResourceId functionId = GetResID(function);
+  ser.Serialise("function"_lit, functionId).TypedAs("MTLFunctionHandle"_lit).Important();
   SERIALISE_ELEMENT(index).Important();
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(functionId != ResourceId() && !GetResourceManager()->HasResource(functionId))
+      return false;
+    function = functionId == ResourceId() ? NULL :
+        (WrappedMTLFunctionHandle *)GetResourceManager()->GetResource(functionId);
     if(!Table || Table->m_Type != eResVisibleFunctionTable || !Table->m_Real ||
        index >= Table->m_FunctionCount ||
        (function && (function->m_Type != eResFunctionHandle || !function->m_Real ||
@@ -40,6 +47,7 @@ bool WrappedMTLVisibleFunctionTable::Serialise_setFunction(SerialiserType &ser,
       return false;
     }
     Unwrap(Table)->setFunction(Unwrap(function), index);
+    Table->m_RayIRFunctions[index] = functionId;
   }
   return true;
 }
@@ -76,22 +84,31 @@ bool WrappedMTLIntersectionFunctionTable::Serialise_setFunction(
     SerialiserType &ser, WrappedMTLFunctionHandle *function, uint32_t index)
 {
   SERIALISE_ELEMENT_LOCAL(Table, this).Important();
-  SERIALISE_ELEMENT(function).Important();
+  // Keep the serialized ID so an unknown non-null handle cannot become a legal
+  // empty slot when pointer deserialization fails to find its resource.
+  ResourceId functionId = GetResID(function);
+  ser.Serialise("function"_lit, functionId).TypedAs("MTLFunctionHandle"_lit).Important();
   SERIALISE_ELEMENT(index).Important();
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
+    if(functionId != ResourceId() && !GetResourceManager()->HasResource(functionId))
+      return false;
+    function = functionId == ResourceId() ? NULL :
+        (WrappedMTLFunctionHandle *)GetResourceManager()->GetResource(functionId);
     if(!Table || Table->m_Type != eResIntersectionFunctionTable || !Table->m_Real ||
        index >= Table->m_FunctionCount ||
-       !function || function->m_Type != eResFunctionHandle || !function->m_Real ||
-       !function->m_Function || !function->m_Function->m_Real ||
-       Unwrap(function->m_Function)->functionType() != MTL::FunctionTypeIntersection ||
-       function->m_Pipeline != Table->m_Pipeline || function->m_Stage != Table->m_Stage)
+       (function && (function->m_Type != eResFunctionHandle || !function->m_Real ||
+                     !function->m_Function || !function->m_Function->m_Real ||
+                     Unwrap(function->m_Function)->functionType() != MTL::FunctionTypeIntersection ||
+                     function->m_Pipeline != Table->m_Pipeline ||
+                     function->m_Stage != Table->m_Stage)))
     {
       RDCERR("Invalid Metal intersection-function-table update");
       return false;
     }
     Unwrap(Table)->setFunction(Unwrap(function), index);
+    Table->m_RayIRFunctions[index] = functionId;
   }
   return true;
 }

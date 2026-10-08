@@ -30,6 +30,8 @@
 #include "serialise/rdcfile.h"
 #include "metal_buffer.h"
 #include "metal_argument_encoder.h"
+#include "metal_acceleration_structure.h"
+#include "metal_visible_function_table.h"
 #include "metal_device.h"
 #include "metal_function.h"
 #include "metal_compute_pipeline_state.h"
@@ -59,6 +61,7 @@ MetalReplay::~MetalReplay()
     entry.second->release();
   ClearPendingComputeIndirectActions();
   if(m_IndirectReadbackPipeline) m_IndirectReadbackPipeline->release();
+  if(m_IndirectReplayPipeline) m_IndirectReplayPipeline->release();
   for(auto &entry : m_TextureViewSourceInitial)
     if(entry.second.privateCopy)
       entry.second.privateCopy->release();
@@ -798,6 +801,7 @@ void MetalReplay::AddComputePipeline(ResourceId id, ResourceId function,
   m_ComputeBufferMinimums.erase(id);
   m_ComputeRequiredTextures.erase(id);
   m_ComputeRequiredSamplers.erase(id);
+  m_ComputeRequiredAS.erase(id);
   m_ComputeThreadgroupMinimums.erase(id);
   m_ComputeThreadgroupLimits[id] = {(uint64_t)pipeline->staticThreadgroupMemoryLength(),
                                    (uint64_t)pipeline->maxTotalThreadsPerThreadgroup()};
@@ -823,11 +827,33 @@ void MetalReplay::AddComputePipeline(ResourceId id, ResourceId function,
         m_ComputeRequiredTextures[id].push_back((uint32_t)argument->index());
       else if(argument->type() == MTL::ArgumentTypeSampler)
         m_ComputeRequiredSamplers[id].push_back((uint32_t)argument->index());
+      else if(argument->type() == MTL::ArgumentTypePrimitiveAccelerationStructure ||
+              argument->type() == MTL::ArgumentTypeInstanceAccelerationStructure)
+        m_ComputeRequiredAS[id][(uint32_t)argument->index()] = argument->type();
       else if(argument->type() == MTL::ArgumentTypeThreadgroupMemory)
         m_ComputeThreadgroupMinimums[id][(uint32_t)argument->index()] =
             RDCMAX(1ULL, (uint64_t)argument->threadgroupMemoryDataSize());
     }
   }
+}
+
+bool MetalReplay::ValidateComputeRayBindings() const
+{
+  auto required = m_ComputeRequiredAS.find(m_CurrentPipelineState.computePipelineResourceId);
+  if(required == m_ComputeRequiredAS.end() || required->second.empty() ||
+     !ValidateComputeBufferBindings()) return false;
+  for(const auto &slot : required->second)
+  {
+    const auto &bindings = m_CurrentPipelineState.computeAccelerationStructures;
+    if(slot.first >= bindings.size() || bindings[slot.first] == ResourceId()) return false;
+    auto object = m_pDriver->GetResourceManager()->GetResource(bindings[slot.first], true);
+    if(!object || object->m_Type != eResAccelerationStructure || !object->m_Real) return false;
+    auto structure = (WrappedMTLAccelerationStructure *)object;
+    if(!structure->m_LastBuildKind ||
+       (slot.second == MTL::ArgumentTypeInstanceAccelerationStructure) !=
+         (structure->m_LastBuildKind == 5)) return false;
+  }
+  return true;
 }
 
 bool MetalReplay::ValidateComputeBufferBindings(bool allowMissingBufferReflection) const
@@ -951,8 +977,11 @@ bool MetalReplay::ValidateGraphicsBufferSnapshot(ResourceId id, uint32_t stage,
                       stage == 4 ? m_MeshPipelines.at(id) :
                       stage == 1 ? pipeline->second.vertexFunction : pipeline->second.fragmentFunction;
   if(stage == 3 && shader == ResourceId()) return buffers.empty() && bytes.empty();
+  // A Native vertex-only pipeline has no fragment resource accesses, even
+  // when valid fragment bindings remain set or colour attachments are present.
+  // The pipeline and bound objects have already been restored independently.
   if(stage == 2 && shader == ResourceId() && allowAbsentFragment)
-    return pipeline->second.vertexFunction != ResourceId() && buffers.empty() && bytes.empty();
+    return pipeline->second.vertexFunction != ResourceId();
   auto required = m_ShaderBufferMinimums.find(shader);
   auto indirect = m_ShaderIndirectReadOnly.find(shader);
   if(required == m_ShaderBufferMinimums.end() || indirect == m_ShaderIndirectReadOnly.end() || !indirect->second)
@@ -982,6 +1011,11 @@ bool MetalReplay::ValidateComputeThreadgroupSnapshot(ResourceId pipeline, const 
 {
   auto limits = m_ComputeThreadgroupLimits.find(pipeline);
   if(limits == m_ComputeThreadgroupLimits.end())
+    return false;
+  const auto abi = m_pDriver->m_IRComputeRuntimeABIs.find(pipeline);
+  if(abi != m_pDriver->m_IRComputeRuntimeABIs.end() &&
+     (threads.width != abi->second.threads[0] || threads.height != abi->second.threads[1] ||
+      threads.depth != abi->second.threads[2]))
     return false;
   const MTL::Size maximum = Unwrap(m_pDriver)->maxThreadsPerThreadgroup();
   if(!threads.width || !threads.height || !threads.depth || threads.width > maximum.width ||
@@ -2041,6 +2075,8 @@ bool MetalReplay::RestoreArgumentBufferResources(ResourceId id)
         resource = packet.binding.samplers[i];
       else if(type == MTL::DataTypePointer && i < packet.buffers.size())
         resource = packet.buffers[i].resourceId;
+      else if(packet.rayResources.count(i))
+        resource = packet.rayResources.at(i);
       else if(type != MTL::DataTypeTexture && type != MTL::DataTypeSampler && type != MTL::DataTypePointer)
         continue;
       object = resource == ResourceId() ? NULL : rm->GetResource(resource, true);
@@ -2050,8 +2086,61 @@ bool MetalReplay::RestoreArgumentBufferResources(ResourceId id)
         encoder->setTexture(Unwrap((WrappedMTLTexture *)object), i);
       else if(type == MTL::DataTypeSampler)
         encoder->setSamplerState(Unwrap((WrappedMTLSamplerState *)object), i);
+      else if(type == MTL::DataTypeVisibleFunctionTable)
+        encoder->setVisibleFunctionTable(Unwrap((WrappedMTLVisibleFunctionTable *)object), i);
+      else if(type == MTL::DataTypeIntersectionFunctionTable)
+        encoder->setIntersectionFunctionTable(Unwrap((WrappedMTLIntersectionFunctionTable *)object), i);
+      else if(type == MTL::DataTypePrimitiveAccelerationStructure ||
+              type == MTL::DataTypeInstanceAccelerationStructure)
+        encoder->setAccelerationStructure(Unwrap((WrappedMTLAccelerationStructure *)object), i);
       else
         encoder->setBuffer(Unwrap((WrappedMTLBuffer *)object), object ? packet.buffers[i].byteOffset : 0, i);
+    }
+  }
+  return true;
+}
+
+void MetalReplay::SetArgumentBufferRayResource(ResourceId buffer, uint64_t offset, uint32_t index,
+                                              ResourceId resource, MTL::DataType type)
+{
+  auto &packet = m_ArgumentBuffers[{buffer, offset}];
+  RDCASSERT(packet.encoder && packet.encoder->GetMemberType(index) == type);
+  packet.rayResources[index] = resource;
+}
+
+bool MetalReplay::ValidateComputeArgumentRayBindings() const
+{
+  auto rm = m_pDriver->GetResourceManager();
+  for(const auto &binding : m_CurrentPipelineState.computeBuffers)
+  {
+    auto found = m_ArgumentBuffers.find({binding.resourceId, binding.byteOffset});
+    if(found == m_ArgumentBuffers.end()) continue;
+    const auto &packet = found->second;
+    for(uint32_t index = 0; index < 32; index++)
+    {
+      const auto type = packet.encoder->GetMemberType(index);
+      if(type != MTL::DataTypeVisibleFunctionTable && type != MTL::DataTypeIntersectionFunctionTable &&
+         type != MTL::DataTypePrimitiveAccelerationStructure && type != MTL::DataTypeInstanceAccelerationStructure)
+        continue;
+      auto field = packet.rayResources.find(index);
+      if(field == packet.rayResources.end()) return false;
+      if(field->second == ResourceId()) continue; // Explicit null, not an undeclared/stale field.
+      auto object = rm->GetResource(field->second, true);
+      if(!object || !object->m_Real) return false;
+      if(type == MTL::DataTypeVisibleFunctionTable || type == MTL::DataTypeIntersectionFunctionTable)
+      {
+        const auto pipeline = type == MTL::DataTypeVisibleFunctionTable ?
+            ((WrappedMTLVisibleFunctionTable *)object)->m_Pipeline :
+            ((WrappedMTLIntersectionFunctionTable *)object)->m_Pipeline;
+        if(GetResID(pipeline) != m_CurrentPipelineState.computePipelineResourceId) return false;
+      }
+      else
+      {
+        auto structure = (WrappedMTLAccelerationStructure *)object;
+        if(!structure->m_LastBuildKind ||
+           (type == MTL::DataTypeInstanceAccelerationStructure) != (structure->m_LastBuildKind == 5))
+          return false;
+      }
     }
   }
   return true;
@@ -2070,7 +2159,13 @@ bool MetalReplay::ValidateArgumentBufferBindings() const
     auto entry = m_ArgumentBuffers.find({binding.resourceId, binding.byteOffset});
     if(entry == m_ArgumentBuffers.end())
     {
-      RDCERR("Missing Metal argument packet at shader buffer slot %u", slot.first);
+      // A raw typed table is restored by descriptor publication/relocation, not
+      // by ArgumentEncoder calls. Match the validated consumer and its actual
+      // pipeline/stage/slot/resource/offset; a declaration alone is no proof.
+      if(m_pDriver->HasRestoredRuntimeTableBinding(m_CurrentPipelineState.pipelineResourceId,
+          2, slot.first, binding.resourceId, binding.byteOffset))
+        continue;
+      RDCERR("Missing Metal argument packet or restored typed table at shader buffer slot %u", slot.first);
       return false;
     }
     const ArgumentPacket &packet = entry->second;
@@ -2547,7 +2642,8 @@ rdcarray<SamplerDescriptor> MetalReplay::GetSamplerDescriptors(ResourceId descri
     count += range.count;
   rdcarray<SamplerDescriptor> ret;
   ret.resize(count);
-  if(descriptorStore != GetResID(m_pDriver) || m_MetalPipelineState == NULL) return ret;
+  if(m_MetalPipelineState == NULL) return ret;
+  const bool tableSampler=descriptorStore!=GetResID(m_pDriver);
 
   size_t dst = 0;
   for(const DescriptorRange &range : ranges)
@@ -2555,11 +2651,18 @@ rdcarray<SamplerDescriptor> MetalReplay::GetSamplerDescriptors(ResourceId descri
     for(uint32_t i = 0; i < range.count; i++, dst++)
     {
       const uint32_t offset = range.offset + i * range.descriptorSize;
-      if(range.type != DescriptorType::Sampler || offset < SamplerOffset)
+      if(range.type != DescriptorType::Sampler || (!tableSampler && offset < SamplerOffset))
         continue;
 
       ResourceId samplerId;
-      if(offset >= 0x10000 && offset < 0x18000)
+      if(tableSampler)
+      {
+        for(const auto &binding:m_SelectedBindlessDescriptors)
+          if(binding.access.type==DescriptorType::Sampler &&
+             binding.access.descriptorStore==descriptorStore && binding.access.byteOffset==offset)
+            samplerId=binding.descriptor.resource;
+      }
+      else if(offset >= 0x10000 && offset < 0x18000)
       {
         const ShaderStage stage = ShaderStage((offset - 0x10000) >> 12);
         const auto &samplers = stage == ShaderStage::Task ? m_MetalPipelineState->taskSamplers : m_MetalPipelineState->meshSamplers;
@@ -2615,7 +2718,7 @@ rdcarray<SamplerDescriptor> MetalReplay::GetSamplerDescriptors(ResourceId descri
       sampler.minLOD = source.lodMinClamp;
       sampler.maxLOD = source.lodMaxClamp;
       auto overrideLOD = m_SelectedSamplerLOD.find(offset);
-      if(overrideLOD != m_SelectedSamplerLOD.end())
+      if(!tableSampler && overrideLOD != m_SelectedSamplerLOD.end())
       {
         sampler.minLOD = overrideLOD->second.first;
         sampler.maxLOD = overrideLOD->second.second;
@@ -3154,9 +3257,23 @@ rdcarray<DescriptorAccess> MetalReplay::GetDescriptorAccess(uint32_t eventId)
     ret.push_back(access);
   }
   AppendExtendedDescriptorAccess(ret);
+  m_UniformInspectionOffset=eventId<m_Events.size()?m_Events[eventId].fileOffset:UINT64_MAX;
   ResolveUniformBindlessAccess();
   for(const auto &binding : m_SelectedBindlessDescriptors)
     ret.push_back(binding.access);
+  // Bindings may remain set on an absent Native shader stage. Those valid API
+  // bindings are not accesses; keep pipeline-state display separate from usage.
+  ret.removeIf([&](const DescriptorAccess &access) {
+    switch(access.stage)
+    {
+      case ShaderStage::Vertex: return state->vertexShader.resourceId == ResourceId();
+      case ShaderStage::Fragment: return state->fragmentShader.resourceId == ResourceId();
+      case ShaderStage::Compute: return state->computeShader.resourceId == ResourceId();
+      case ShaderStage::Task: return state->taskShader.resourceId == ResourceId();
+      case ShaderStage::Mesh: return state->meshShader.resourceId == ResourceId();
+      default: return false;
+    }
+  });
   AddBindlessUsage(eventId);
   return ret;
 }
@@ -3300,14 +3417,17 @@ void MetalReplay::ResolveSubmissionBindlessUsage(ResourceId commandBuffer)
   inlineData.swap(m_SelectedGraphicsInlineData);
   rdcarray<BindlessDescriptor> descriptors;
   descriptors.swap(m_SelectedBindlessDescriptors);
+  const uint64_t inspectionOffset=m_UniformInspectionOffset;
   for(uint32_t eventId : pending->second)
   {
     m_MetalPipelineState = &m_EventPipelineStates[eventId];
     m_SelectedGraphicsInlineData = m_EventGraphicsInlineData[eventId];
+    m_UniformInspectionOffset = m_Events[eventId].fileOffset;
     ResolveUniformBindlessAccess(true);
     AddBindlessUsage(eventId);
   }
   m_SelectedBindlessDescriptors.swap(descriptors);
+  m_UniformInspectionOffset=inspectionOffset;
   m_SelectedGraphicsInlineData.swap(inlineData);
   m_MetalPipelineState = selected;
   m_SubmissionBindlessEvents.erase(pending);
@@ -3399,6 +3519,15 @@ void MetalReplay::AddAction(const ActionDescription &in)
     m_SelectedGraphicsInlineData.swap(inlineData);
     m_MetalPipelineState = selected;
   }
+
+  if(action.flags & ActionFlags::Dispatch)
+    for(const auto &binding : m_CurrentPipelineState.computeBuffers)
+    {
+      auto found = m_ArgumentBuffers.find({binding.resourceId, binding.byteOffset});
+      if(found != m_ArgumentBuffers.end())
+        for(const auto &field : found->second.rayResources)
+          AddUsage(field.second, ResourceUsage::CS_Resource);
+    }
 
   if(action.flags & (ActionFlags::Drawcall | ActionFlags::MeshDispatch))
   {
@@ -3584,9 +3713,18 @@ void MetalReplay::ClearPendingComputeIndirectActions()
   m_PendingComputeIndirectActions.clear();
 }
 
+void MetalReplay::ResetComputeIndirectTracking()
+{
+  // Called only after earlier replay commands have completed. Pending snapshots
+  // own their execution arguments, including unretained command buffers.
+  m_LoadComputeIndirectOrdinals.clear();
+}
+
 bool MetalReplay::RegisterComputeIndirectAction(uint32_t eventId, ResourceId buffer,
                                                 uint64_t offset, MTL::ComputeCommandEncoder *encoder,
-                                                ResourceId encoderID)
+                                                ResourceId encoderID,
+                                                MTL::Buffer **executionArguments,
+                                                uint32_t threadsPerGroup)
 {
   // Vulkan FetchIndirectData/D3D12 ExecuteIndirect patching save each use's arguments,
   // rather than reading the source at frame end. Metal cannot blit within a compute
@@ -3607,22 +3745,45 @@ bool MetalReplay::RegisterComputeIndirectAction(uint32_t eventId, ResourceId buf
     expected = proof->second.groups;
   }
   MTL::Device *device = Unwrap(m_pDriver);
-  if(!m_IndirectReadbackPipeline)
+  const bool guarded=executionArguments!=NULL;
+  const bool frozen=m_pDriver->HasRayQueryHeapPipeline(m_CurrentPipelineState.computePipelineResourceId);
+  if(guarded && frozen && expected.size()!=3) return false;
+  MTL::ComputePipelineState *copy=NULL;
+  if(guarded)
   {
-    m_IndirectReadbackPipeline=CreateMetalIndirectReadbackPipeline(device);
-    if(!m_IndirectReadbackPipeline) return false;
+    if(!threadsPerGroup || threadsPerGroup>1024) return false;
+    if(!m_IndirectReplayPipeline)
+      m_IndirectReplayPipeline=CreateMetalIndirectReplayPipeline(device);
+    if(!m_IndirectReplayPipeline) return false;
+    copy=m_IndirectReplayPipeline;
   }
-  MTL::Buffer *snapshot = device->newBuffer(16, MTL::ResourceStorageModeShared);
-  if(!snapshot) return false;
-  encoder->memoryBarrier(MTL::BarrierScopeBuffers);
-  encoder->setComputePipelineState(m_IndirectReadbackPipeline);
+  else
+  {
+    if(!m_IndirectReadbackPipeline)
+      m_IndirectReadbackPipeline=CreateMetalIndirectReadbackPipeline(device);
+    if(!m_IndirectReadbackPipeline) return false;
+    copy=m_IndirectReadbackPipeline;
+  }
+  MTL::Buffer *snapshot = device->newBuffer(guarded?32:16, MTL::ResourceStorageModeShared);
+  if(!snapshot || !snapshot->contents()) { if(snapshot)snapshot->release();return false; }
+  memset(snapshot->contents(),0,guarded?32:16);
+  encoder->memoryBarrier(MTL::BarrierScope(MTL::BarrierScopeBuffers | MTL::BarrierScopeTextures));
+  encoder->setComputePipelineState(copy);
   encoder->setBuffer(Unwrap((WrappedMTLBuffer *)source), offset, 0);
   encoder->setBuffer(snapshot, 0, 1);
-  encoder->dispatchThreadgroups(MTL::Size(1,1,1), MTL::Size(1,1,1));
-  encoder->memoryBarrier(MTL::BarrierScopeBuffers);
-  encoder->setComputePipelineState(Unwrap((WrappedMTLComputePipelineState *)pipeline));
-  for(uint32_t slot = 0; slot < 2; slot++)
+  if(guarded)
   {
+    const uint32_t limits[6]={threadsPerGroup,0,uint32_t(frozen),
+        expected.empty()?0U:expected[0],expected.empty()?0U:expected[1],expected.empty()?0U:expected[2]};
+    encoder->setBytes(limits,sizeof(limits),3);
+  }
+  encoder->dispatchThreadgroups(MTL::Size(1,1,1), MTL::Size(1,1,1));
+  encoder->memoryBarrier(MTL::BarrierScope(MTL::BarrierScopeBuffers | MTL::BarrierScopeTextures));
+  encoder->setComputePipelineState(Unwrap((WrappedMTLComputePipelineState *)pipeline));
+  for(uint32_t slot = 0; slot < (guarded?4U:2U); slot++)
+  {
+    // BindComputeBytes stores the already relocated Native payload. Restoring
+    // the capture-process bytes here would undo actual root pointer recovery.
     auto bytes = m_CurrentComputeInlineData.find(slot);
     if(bytes != m_CurrentComputeInlineData.end())
       encoder->setBytes(bytes->second.data(), bytes->second.size(), slot);
@@ -3634,7 +3795,12 @@ bool MetalReplay::RegisterComputeIndirectAction(uint32_t eventId, ResourceId buf
     }
   }
   m_PendingComputeIndirectActions.push_back({eventId, buffer, offset, snapshot});
-  m_PendingComputeIndirectActions.back().expected = expected;
+  auto &pending=m_PendingComputeIndirectActions.back();
+  pending.expected=expected; pending.guarded=guarded;
+  // This legacy protocol froze its exact invocation footprint as part of the
+  // AS recipe. Native sourced dispatches instead restore a conservative closure.
+  pending.frozenArguments=m_pDriver->HasRayQueryHeapPipeline(m_CurrentPipelineState.computePipelineResourceId);
+  if(guarded) *executionArguments=snapshot;
   return true;
 }
 
@@ -3700,12 +3866,31 @@ bool MetalReplay::ResolvePendingComputeIndirectActions()
         fprintf(stderr,"Metal compute indirect expected: EID=%u groups=%u,%u,%u\n",
                 pending.eventId,pending.expected[0],pending.expected[1],pending.expected[2]);
     }
-    if(!pending.expected.empty() && memcmp(pending.expected.data(), groups, sizeof(groups)))
+    if(pending.frozenArguments && !pending.expected.empty() &&
+       memcmp(pending.expected.data(),groups,sizeof(groups)))
     {
-      RDCERR("Metal compute indirect per-use replay arguments differ at EID %u", pending.eventId);
-      success = false;
+      RDCERR("Metal frozen indirect invocation contract differs at EID %u",pending.eventId);
+      success=false;
       continue;
     }
+    uint32_t validation=0;
+    memcpy(&validation,(const byte *)pending.snapshot->contents()+12,4);
+    if(validation!=0x52444349U)
+    {
+      RDCERR("Metal compute indirect extent overflows, invocation differs or snapshot failed at EID %u",pending.eventId);
+      success=false;
+      continue;
+    }
+    if(!pending.expected.empty() && memcmp(pending.expected.data(), groups, sizeof(groups)))
+    {
+      // Numerical evidence is useful for output diagnosis, not a substitute for
+      // restored state. VK FetchIndirectData updates actions from replay GPU data;
+      // DX12 patches address arguments, leaving ordinary dispatch counts Native.
+      RDCWARN("Metal compute indirect replay counts differ from capture at EID %u: <%u,%u,%u> vs <%u,%u,%u>",
+              pending.eventId,groups[0],groups[1],groups[2],
+              pending.expected[0],pending.expected[1],pending.expected[2]);
+    }
+    if(!pending.eventId) continue; // Active replay still checks the actual GPU arguments.
     // Debug groups can now contain indirect actions; traverse their children too.
     rdcarray<rdcarray<ActionDescription> *> lists = {&m_FrameRecord.actionList};
     while(!lists.empty())
@@ -5525,11 +5710,15 @@ bool MetalReplay::ReadTextureSubresource(MTL::Texture *texture, const Subresourc
         Unwrap((WrappedMTLTexture *)object) : NULL;
     if(!base || base == texture || texture->parentTexture() != base ||
        base->pixelFormat() != MTL::PixelFormatDepth32Float_Stencil8 ||
-       textureType != MTL::TextureType2D || base->textureType() != MTL::TextureType2D ||
-       texture->width() != base->width() || texture->height() != base->height() ||
-       texture->mipmapLevelCount() != base->mipmapLevelCount()) return false;
+       sub.mip >= texture->mipmapLevelCount()) return false;
+    const uint64_t viewSlices=textureType==MTL::TextureType2DArray?texture->arrayLength():
+        textureType==MTL::TextureTypeCube || textureType==MTL::TextureTypeCubeArray?6*texture->arrayLength():1;
+    if(sub.slice>=viewSlices) return false;
+    Subresource parentSub=sub;
+    parentSub.mip+=uint32_t(texture->parentRelativeLevel());
+    parentSub.slice+=uint32_t(texture->parentRelativeSlice());
     bytebuf merged;
-    if(!ReadTextureSubresource(base, sub, merged, parent) || merged.size() % 8) return false;
+    if(!ReadTextureSubresource(base, parentSub, merged, parent) || merged.size() % 8) return false;
     data.resize(merged.size() / 8);
     for(size_t pixel = 0; pixel < data.size(); pixel++) data[pixel] = merged[pixel * 8 + 4];
     return true;

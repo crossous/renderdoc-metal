@@ -62,6 +62,7 @@ def main():
             ('table-stage', 'table', 'stageValue', '1'),
             ('update-table-wrong-type', 'update', 'Table', handle_id),
             ('update-handle-wrong-type', 'update', 'function', table_id),
+            ('update-handle-missing', 'update', 'function', '99999999'),
             ('update-index', 'update', 'index', '1'),
             ('binding-table-wrong-type', 'binding', 'table', handle_id),
             ('binding-index', 'binding', 'index', '31'),

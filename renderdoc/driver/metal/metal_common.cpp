@@ -704,15 +704,34 @@ static BlockShape GetBlockShape(MTL::PixelFormat mtlFormat, uint32_t plane)
 bool GetTextureDataBlockShape(MTL::PixelFormat format, uint32_t &width,
                                      uint32_t &height, uint32_t &bytes)
 {
+  // A regular color format uses the same native subresource copy and staging
+  // layout for every signedness and component count. Derive that representation
+  // from the format metadata, rather than qualifying previously observed formats.
+  // Packed, compressed and depth/stencil formats retain their separate layouts.
+  const ResourceFormat resourceFormat = MakeResourceFormat(format);
+  if(resourceFormat.type == ResourceFormatType::Regular &&
+     (resourceFormat.compType == CompType::UInt || resourceFormat.compType == CompType::SInt ||
+      resourceFormat.compType == CompType::Float || resourceFormat.compType == CompType::UNorm ||
+      resourceFormat.compType == CompType::UNormSRGB || resourceFormat.compType == CompType::SNorm) &&
+     resourceFormat.compCount >= 1 && resourceFormat.compCount <= 4 &&
+     (resourceFormat.compByteWidth == 1 || resourceFormat.compByteWidth == 2 ||
+      resourceFormat.compByteWidth == 4) &&
+     GetTextureBlockShape(format, width, height, bytes) && width == 1 && height == 1 &&
+     bytes == uint32_t(resourceFormat.compCount) * resourceFormat.compByteWidth)
+    return true;
+
   switch(format)
   {
     case MTL::PixelFormatR8Unorm_sRGB:
+    case MTL::PixelFormatR8Snorm:
+    case MTL::PixelFormatR16Snorm:
     case MTL::PixelFormatR16Unorm:
     case MTL::PixelFormatR16Uint:
     case MTL::PixelFormatRG16Unorm:
     case MTL::PixelFormatRG16Uint:
     case MTL::PixelFormatRG32Uint:
     case MTL::PixelFormatRGBA16Unorm:
+    case MTL::PixelFormatRGBA16Uint:
     case MTL::PixelFormatRGBA8Uint:
     case MTL::PixelFormatRGBA32Uint:
     case MTL::PixelFormatBC2_RGBA:
@@ -1668,3 +1687,102 @@ TEST_CASE("Metal formats", "[format][metal]")
 };
 
 #endif    // ENABLED(ENABLE_UNIT_TESTS)
+
+// Shared logical layout for creation, views and initial-state staging. The
+// Metal3/Mac2 2D API limit is 16384; a wide, short image is not an 8192-square
+// staging allocation. The checked logical-byte budget applies independently of
+// shape, and native footprint/aggregate costs are charged separately.
+bool MetalTextureReplayLayout(const RDMTL::TextureDescriptor &d, uint64_t &size)
+{
+  size = 0;
+  uint32_t bw = 0, bh = 0, bytes = 0;
+  const bool depthStencil = d.pixelFormat == MTL::PixelFormatDepth32Float_Stencil8;
+  const bool stencilView = d.pixelFormat == MTL::PixelFormatX32_Stencil8;
+  const bool depth = depthStencil || d.pixelFormat == MTL::PixelFormatDepth16Unorm ||
+      d.pixelFormat == MTL::PixelFormatDepth32Float;
+  if(!d.width || d.width > 16384 || !d.height || d.height > 16384 ||
+     !d.depth || d.depth > 256 || !d.arrayLength || d.arrayLength > 128 ||
+     d.sampleCount != 1 || !ValidTextureMipCount(d.width, d.height, d.depth, d.mipmapLevelCount) ||
+     (d.storageMode != MTL::StorageModePrivate && d.storageMode != MTL::StorageModeShared &&
+      d.storageMode != MTL::StorageModeManaged) ||
+     (!depthStencil && !stencilView && !GetTextureDataBlockShape(d.pixelFormat, bw, bh, bytes))) return false;
+  if(depthStencil) { bw = bh = 1; bytes = 5; }
+  // A stencil view is a parent-backed aspect, not a raw texel-buffer format.
+  if(stencilView) { bw = bh = 1; bytes = 1; }
+  uint64_t slices = 1;
+  if(d.textureType == MTL::TextureType2DArray) slices = d.arrayLength;
+  else if(d.textureType == MTL::TextureTypeCube || d.textureType == MTL::TextureTypeCubeArray)
+  {
+    if(d.width != d.height) return false;
+    slices = 6 * d.arrayLength;
+  }
+  else if(d.textureType != MTL::TextureType2D && d.textureType != MTL::TextureType3D) return false;
+  if((d.textureType != MTL::TextureType3D && d.depth != 1) ||
+     ((d.textureType == MTL::TextureType2D || d.textureType == MTL::TextureType3D ||
+       d.textureType == MTL::TextureTypeCube) && d.arrayLength != 1) ||
+     ((depth || stencilView) && d.textureType == MTL::TextureType3D)) return false;
+  for(auto channel : {d.swizzle.red, d.swizzle.green, d.swizzle.blue, d.swizzle.alpha})
+    if(channel > MTL::TextureSwizzleAlpha) return false;
+  const uint64_t budget = 128ULL * 1024 * 1024;
+  for(uint64_t mip = 0; mip < d.mipmapLevelCount; mip++)
+  {
+    const uint64_t w = RDCMAX(1ULL, uint64_t(d.width) >> mip);
+    const uint64_t h = RDCMAX(1ULL, uint64_t(d.height) >> mip);
+    const uint64_t z = d.textureType == MTL::TextureType3D ? RDCMAX(1ULL, uint64_t(d.depth) >> mip) : 1;
+    uint64_t subresource = 1;
+    for(uint64_t extent : {(w + bw - 1) / bw, (h + bh - 1) / bh, uint64_t(bytes), z, slices})
+    {
+      if(!extent || subresource > (budget - size) / extent) return false;
+      subresource *= extent;
+    }
+    size += subresource;
+  }
+  return true;
+}
+
+bool ProjectMetalTextureView(const RDMTL::TextureDescriptor &parent, MTL::PixelFormat format,
+                            MTL::TextureType type, NS::Range levels, NS::Range slices,
+                            MTL::TextureSwizzleChannels swizzle, RDMTL::TextureDescriptor &view)
+{
+  uint64_t bytes = 0;
+  const bool stencilAspect = parent.pixelFormat == MTL::PixelFormatDepth32Float_Stencil8 &&
+      format == MTL::PixelFormatX32_Stencil8;
+  const bool linearView = parent.pixelFormat == MTL::PixelFormatBGRA8Unorm_sRGB &&
+      format == MTL::PixelFormatBGRA8Unorm;
+  if(!MetalTextureReplayLayout(parent, bytes) ||
+     (format != parent.pixelFormat && !linearView &&
+      (!(parent.usage & MTL::TextureUsagePixelFormatView) || !stencilAspect)) ||
+     !levels.length || levels.location >= parent.mipmapLevelCount ||
+     levels.length > parent.mipmapLevelCount - levels.location || !slices.length) return false;
+  uint64_t available = 1;
+  switch(parent.textureType)
+  {
+    case MTL::TextureType2D: if(type != MTL::TextureType2D) return false; break;
+    case MTL::TextureType3D: if(type != MTL::TextureType3D) return false; break;
+    case MTL::TextureType2DArray:
+      if(type != MTL::TextureType2D && type != MTL::TextureType2DArray) return false;
+      available = parent.arrayLength; break;
+    case MTL::TextureTypeCube:
+    case MTL::TextureTypeCubeArray:
+      if(type != MTL::TextureType2D && type != MTL::TextureType2DArray &&
+         type != MTL::TextureTypeCube && type != MTL::TextureTypeCubeArray) return false;
+      available = 6 * parent.arrayLength; break;
+    default: return false;
+  }
+  if(slices.location >= available || slices.length > available - slices.location ||
+     ((type == MTL::TextureType2D || type == MTL::TextureType3D) && slices.length != 1) ||
+     ((type == MTL::TextureTypeCube || type == MTL::TextureTypeCubeArray) &&
+      (slices.location % 6 || slices.length % 6 || (type == MTL::TextureTypeCube && slices.length != 6))))
+    return false;
+  view = parent;
+  view.pixelFormat = format;
+  view.textureType = type;
+  view.width = RDCMAX(1ULL, uint64_t(parent.width) >> levels.location);
+  view.height = RDCMAX(1ULL, uint64_t(parent.height) >> levels.location);
+  view.depth = type == MTL::TextureType3D ? RDCMAX(1ULL, uint64_t(parent.depth) >> levels.location) : 1;
+  view.arrayLength = type == MTL::TextureType2DArray ? slices.length :
+      type == MTL::TextureTypeCubeArray ? slices.length / 6 : 1;
+  view.mipmapLevelCount = levels.length;
+  view.swizzle = swizzle;
+  return MetalTextureReplayLayout(view, bytes);
+}

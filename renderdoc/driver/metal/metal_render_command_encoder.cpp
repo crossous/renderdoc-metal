@@ -117,7 +117,11 @@ void WrappedMTLRenderCommandEncoder::setFragmentAccelerationStructure(
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLRenderCommandEncoder_setFragmentAccelerationStructure);
     Serialise_setFragmentAccelerationStructure(ser, structure, index);
     MetalResourceRecord *record = GetRecord(m_CommandBuffer);
-    if(structure) record->AddParent(GetRecord(structure));
+    if(structure)
+    {
+      record->AddParent(GetRecord(structure));
+      record->MarkASInitialReferences(structure);
+    }
     record->AddChunk(scope.Get());
   }
 }
@@ -170,7 +174,11 @@ void WrappedMTLRenderCommandEncoder::setVertexAccelerationStructure(
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLRenderCommandEncoder_setVertexAccelerationStructure);
     Serialise_setVertexAccelerationStructure(ser, structure, index);
     MetalResourceRecord *record = GetRecord(m_CommandBuffer);
-    if(structure) record->AddParent(GetRecord(structure));
+    if(structure)
+    {
+      record->AddParent(GetRecord(structure));
+      record->MarkASInitialReferences(structure);
+    }
     record->AddChunk(scope.Get());
   }
 }
@@ -222,7 +230,11 @@ void WrappedMTLRenderCommandEncoder::setTileAccelerationStructure(
     SCOPED_SERIALISE_CHUNK(MetalChunk::MTLRenderCommandEncoder_setTileAccelerationStructure);
     Serialise_setTileAccelerationStructure(ser, structure, index);
     MetalResourceRecord *record = GetRecord(m_CommandBuffer);
-    if(structure) record->AddParent(GetRecord(structure));
+    if(structure)
+    {
+      record->AddParent(GetRecord(structure));
+      record->MarkASInitialReferences(structure);
+    }
     record->AddChunk(scope.Get());
   }
 }
@@ -4573,8 +4585,8 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawPrimitives(
         RDCERR("Invalid Metal drawPrimitives primitive type %llu", (uint64_t)primitiveType);
         return false;
     }
-    if(vertexStart > UINT32_MAX || vertexCount == 0 || vertexCount > UINT32_MAX ||
-       instanceCount == 0 || instanceCount > UINT32_MAX || baseInstance > UINT32_MAX)
+    if(vertexStart > UINT32_MAX || vertexCount > UINT32_MAX ||
+       instanceCount > UINT32_MAX || baseInstance > UINT32_MAX)
     {
       RDCERR("Invalid Metal drawPrimitives vertex/instance count or 32-bit action range");
       return false;

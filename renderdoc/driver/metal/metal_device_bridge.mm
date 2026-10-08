@@ -154,7 +154,7 @@ static MTLPrimitiveAccelerationStructureDescriptor *NativePrimitiveAccelerationD
 }
 
 static MTLInstanceAccelerationStructureDescriptor *NativeInstanceDescriptor(
-    MTLAccelerationStructureDescriptor *descriptor)
+    MTLAccelerationStructureDescriptor *descriptor, bool queryOnly = false)
 {
   if(![(id)descriptor isKindOfClass:[MTLInstanceAccelerationStructureDescriptor class]])
     return nil;
@@ -162,6 +162,62 @@ static MTLInstanceAccelerationStructureDescriptor *NativeInstanceDescriptor(
       (MTLInstanceAccelerationStructureDescriptor *)descriptor;
   MTLInstanceAccelerationStructureDescriptor *defaults =
       [MTLInstanceAccelerationStructureDescriptor descriptor];
+  if(queryOnly)
+  {
+    // Vulkan/DX12 size queries require counts and formats, not populated inputs.
+    // UE queries TLAS sizes before allocating its instance buffer or child AS.
+    bool indirect = false;
+    const bool userID = instance.instanceDescriptorType == MTLAccelerationStructureInstanceDescriptorTypeUserID;
+    NSUInteger stride = defaults.instanceDescriptorStride;
+    if(userID) stride = sizeof(MTLAccelerationStructureUserIDInstanceDescriptor);
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 140000
+    if(@available(macOS 14.0, iOS 17.0, *))
+    {
+      indirect = instance.instanceDescriptorType == MTLAccelerationStructureInstanceDescriptorTypeIndirect;
+      if(indirect) stride = sizeof(MTLIndirectAccelerationStructureInstanceDescriptor);
+    }
+#endif
+    const bool emptyIndirect = indirect && instance.instanceCount == 0;
+    if((emptyIndirect && (instance.instancedAccelerationStructures.count ||
+        instance.usage != MTLAccelerationStructureUsageNone)) ||
+       (instance.usage != MTLAccelerationStructureUsageNone &&
+        instance.usage != MTLAccelerationStructureUsageRefit) ||
+       (!emptyIndirect && instance.instanceCount < 1) || instance.instanceCount > 65536 ||
+       (instance.instanceDescriptorType != MTLAccelerationStructureInstanceDescriptorTypeDefault &&
+        !indirect && !userID) ||
+       (userID || indirect ? (instance.instanceDescriptorStride < stride ||
+           instance.instanceDescriptorStride > 1024*1024 ||
+           instance.instanceDescriptorStride % (indirect ? 8 : 4) ||
+           instance.instanceDescriptorBufferOffset % (indirect ? 8 : 4) ||
+           (instance.instanceCount &&
+            (instance.instanceCount-1)*instance.instanceDescriptorStride+stride > 64*1024*1024)) :
+           instance.instanceDescriptorStride != stride) ||
+       instance.motionTransformBuffer || instance.motionTransformCount != 0)
+      return nil;
+    id<MTLBuffer> input = nil;
+    if(instance.instanceDescriptorBuffer)
+    {
+      if(![(id)instance.instanceDescriptorBuffer isKindOfClass:[ObjCBridgeMTLBuffer class]])
+        return nil;
+      input = NativeAccelerationBuffer(instance.instanceDescriptorBuffer);
+      const NSUInteger span = emptyIndirect ? 0 : userID || indirect ? (instance.instanceCount-1)*instance.instanceDescriptorStride+stride :
+          instance.instanceCount*stride;
+      if(instance.instanceDescriptorBufferOffset > input.length ||
+         span > input.length - instance.instanceDescriptorBufferOffset)
+        return nil;
+    }
+    NSMutableArray<id<MTLAccelerationStructure>> *children = [NSMutableArray array];
+    for(id child in instance.instancedAccelerationStructures)
+    {
+      if(![child isKindOfClass:[ObjCBridgeMTLAccelerationStructure class]]) return nil;
+      [children addObject:id<MTLAccelerationStructure>(
+          Unwrap(GetWrapped((ObjCBridgeMTLAccelerationStructure *)child)))];
+    }
+    MTLInstanceAccelerationStructureDescriptor *native = [instance copy];
+    native.instanceDescriptorBuffer = input;
+    native.instancedAccelerationStructures = children;
+    return native;
+  }
   if(instance.usage != MTLAccelerationStructureUsageNone ||
      instance.instanceCount < 1 || instance.instanceCount > 65536 ||
      instance.instanceDescriptorBufferOffset != 0 ||
@@ -195,7 +251,7 @@ static MTLInstanceAccelerationStructureDescriptor *NativeInstanceDescriptor(
     [nativeChildren addObject:id<MTLAccelerationStructure>(Unwrap(child))];
   }
   if(!buffer || buffer->m_Type != eResBuffer || !Unwrap(buffer) ||
-     Unwrap(buffer)->storageMode() != MTL::StorageModeShared ||
+     (!queryOnly && Unwrap(buffer)->storageMode() != MTL::StorageModeShared) ||
      Unwrap(buffer)->length() / sizeof(MTL::AccelerationStructureInstanceDescriptor) <
          instance.instanceCount ||
      wrappedChildren.empty())
@@ -790,8 +846,11 @@ bool MetalMeshDescriptorSupported(MTLMeshRenderPipelineDescriptor *descriptor,
 - (void)newComputePipelineStateWithFunction:(id<MTLFunction>)computeFunction
                           completionHandler:(MTLNewComputePipelineStateCompletionHandler)completionHandler
 {
+  const MetalComputeCompileTrace trace = GetWrapped(self)->BeginComputeCompileTrace(
+      "function-async", Unwrap(GetWrapped(computeFunction)), NULL, MTL::PipelineOptionNone);
   [self.real newComputePipelineStateWithFunction:id<MTLFunction>(Unwrap(GetWrapped(computeFunction)))
       completionHandler:^(id<MTLComputePipelineState> pipeline, NSError *error) {
+        MetalEndComputeCompileTrace(trace, pipeline != nil);
         id<MTLComputePipelineState> wrapped = id<MTLComputePipelineState>(
             GetWrapped(self)->CaptureAsyncComputePipeline((MTL::ComputePipelineState *)pipeline,
                 GetWrapped(computeFunction), MTL::PipelineOptionNone,
@@ -799,6 +858,7 @@ bool MetalMeshDescriptorSupported(MTLMeshRenderPipelineDescriptor *descriptor,
         if(completionHandler) completionHandler(wrapped, error);
         [wrapped release];
       }];
+  MetalSubmittedComputeCompileTrace(trace);
 }
 
 - (void)newComputePipelineStateWithFunction:(id<MTLFunction>)computeFunction
@@ -806,9 +866,12 @@ bool MetalMeshDescriptorSupported(MTLMeshRenderPipelineDescriptor *descriptor,
                           completionHandler:
                               (MTLNewComputePipelineStateWithReflectionCompletionHandler)completionHandler
 {
+  const MetalComputeCompileTrace trace = GetWrapped(self)->BeginComputeCompileTrace(
+      "function-options-async", Unwrap(GetWrapped(computeFunction)), NULL, (MTL::PipelineOption)options);
   [self.real newComputePipelineStateWithFunction:id<MTLFunction>(Unwrap(GetWrapped(computeFunction)))
       options:options completionHandler:^(id<MTLComputePipelineState> pipeline,
                                          MTLComputePipelineReflection *reflection, NSError *error) {
+        MetalEndComputeCompileTrace(trace, pipeline != nil);
         id<MTLComputePipelineState> wrapped = id<MTLComputePipelineState>(
             GetWrapped(self)->CaptureAsyncComputePipeline((MTL::ComputePipelineState *)pipeline,
                 GetWrapped(computeFunction), (MTL::PipelineOption)options,
@@ -816,6 +879,7 @@ bool MetalMeshDescriptorSupported(MTLMeshRenderPipelineDescriptor *descriptor,
         if(completionHandler) completionHandler(wrapped, reflection, error);
         [wrapped release];
       }];
+  MetalSubmittedComputeCompileTrace(trace);
 }
 
 - (nullable id<MTLComputePipelineState>)
@@ -838,15 +902,20 @@ bool MetalMeshDescriptorSupported(MTLMeshRenderPipelineDescriptor *descriptor,
 {
   MTLComputePipelineDescriptor *snapshot = [descriptor copy];
   MTLComputePipelineDescriptor *real = AsyncComputeDescriptor(snapshot);
+  const MetalComputeCompileTrace trace = GetWrapped(self)->BeginComputeCompileTrace(
+      "descriptor-async", (MTL::Function *)real.computeFunction,
+      (MTL::ComputePipelineDescriptor *)real, (MTL::PipelineOption)options);
   [self.real newComputePipelineStateWithDescriptor:real options:options
       completionHandler:^(id<MTLComputePipelineState> pipeline,
                            MTLComputePipelineReflection *reflection, NSError *error) {
+        MetalEndComputeCompileTrace(trace, pipeline != nil);
         id<MTLComputePipelineState> wrapped = id<MTLComputePipelineState>(
             GetWrapped(self)->CaptureAsyncComputeDescriptor((MTL::ComputePipelineState *)pipeline,
                 (MTL::ComputePipelineDescriptor *)snapshot, (MTL::PipelineOption)options));
         if(completionHandler) completionHandler(wrapped, reflection, error);
         [wrapped release];
       }];
+  MetalSubmittedComputeCompileTrace(trace);
   [real release]; [snapshot release];
 }
 
@@ -1319,7 +1388,9 @@ bool MetalMeshDescriptorSupported(MTLMeshRenderPipelineDescriptor *descriptor,
     (MTLAccelerationStructureDescriptor *)descriptor API_AVAILABLE(macos(11.0), ios(14.0))
 {
   MTLAccelerationStructureDescriptor *native = NativePrimitiveAccelerationDescriptor(descriptor);
-  if(!native) native = NativeInstanceDescriptor(descriptor);
+  // Like Vulkan/DX12 build-size queries, this only asks the driver for allocation sizes.
+  // Instance bytes are not read here; storage restrictions belong to build/capture validation.
+  if(!native) native = NativeInstanceDescriptor(descriptor, true);
   if(!native) METAL_NOT_HOOKED();
   MTLAccelerationStructureSizes sizes = [self.real accelerationStructureSizesWithDescriptor:native];
   [native release];
@@ -1444,7 +1515,7 @@ bool MetalMeshDescriptorSupported(MTLMeshRenderPipelineDescriptor *descriptor,
     (MTLAccelerationStructureDescriptor *)descriptor API_AVAILABLE(macos(13.0), ios(16.0))
 {
   MTLAccelerationStructureDescriptor *native = NativePrimitiveAccelerationDescriptor(descriptor);
-  if(!native) native = NativeInstanceDescriptor(descriptor);
+  if(!native) native = NativeInstanceDescriptor(descriptor, true);
   if(!native) METAL_NOT_HOOKED();
   MTLSizeAndAlign layout = [self.real heapAccelerationStructureSizeAndAlignWithDescriptor:native];
   [native release];

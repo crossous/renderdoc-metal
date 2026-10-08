@@ -450,6 +450,36 @@ enum class MetalChunk : uint32_t
   MTLResource_setLabel,
   MTLCommandBuffer_encodeMetalFXSpatial,
   MTLCommandBuffer_encodeMetalFXTemporal,
+  MTLAccelerationStructureCommandEncoder_insertDebugSignpost,
+  MTLAccelerationStructureCommandEncoder_pushDebugGroup,
+  MTLAccelerationStructureCommandEncoder_popDebugGroup,
+  MTLAccelerationStructureCommandEncoder_updateFence,
+  MTLAccelerationStructureCommandEncoder_waitForFence,
+  MTLHeap_newAccelerationStructure,
+  MTLAccelerationStructureCommandEncoder_buildMultiIndexed,
+  MTLAccelerationStructure_CaptureGPUIdentity,
+  MTLAccelerationStructureCommandEncoder_buildUserIDInstances,
+  MTLAccelerationStructureCommandEncoder_buildIndirectInstances,
+  MTLFunctionTable_CaptureGPUIdentity,
+  MTLArgumentEncoder_setIntersectionFunctionTable,
+  MTLArgumentEncoder_setAccelerationStructure,
+  MTLComputePipelineState_DeclareRayIRDispatch,
+  MTLFunctionHandle_DeclareRayIRShaderRole,
+  MTLFunctionHandle_DeclareRayIRLocalRoot,
+  MTLComputePipelineState_DeclareRayIRGlobalRoot,
+  MTLComputePipelineState_DeclareRayIRHeapEntry,
+  MTLAccelerationStructureCommandEncoder_buildIndirectInstancesWithScratchOffset,
+  MTLAccelerationStructureCommandEncoder_buildFrozenTriangles,
+  MTLAccelerationStructureCommandEncoder_buildFrozenMultiIndexed,
+  MTLComputePipelineState_DeclareRayQueryDispatch,
+  MTLBuffer_DeclareRayASHeader,
+  MTLComputePipelineState_DeclareRayQueryHeapDispatch,
+  MTLComputePipelineState_DeclareRayQueryHeapCBVRoot,
+  MTLComputePipelineState_DeclareIRComputeRoot,
+  MTLComputePipelineState_DeclareIRComputeHeapEntry,
+  MTLComputePipelineState_CaptureIRComputeReflection,
+  MTLBuffer_CaptureHeapBirthContents,
+  MTLBuffer_CaptureHeapBirthUnspecified,
   Max
 };
 
@@ -533,6 +563,11 @@ uint32_t GetByteSize(uint32_t width, uint32_t height, uint32_t depth, MTL::Pixel
 bool GetTextureDataBlockShape(MTL::PixelFormat format, uint32_t &width,
                                uint32_t &height, uint32_t &bytes);
 bool ValidTextureMipCount(uint64_t width, uint64_t height, uint64_t depth, uint64_t levels);
+// Logical single-sample restoration layout, shared by descriptor qualification and factories.
+bool MetalTextureReplayLayout(const RDMTL::TextureDescriptor &descriptor, uint64_t &bytes);
+bool ProjectMetalTextureView(const RDMTL::TextureDescriptor &parent, MTL::PixelFormat format,
+                            MTL::TextureType type, NS::Range levels, NS::Range slices,
+                            MTL::TextureSwizzleChannels swizzle, RDMTL::TextureDescriptor &view);
 bool GetTextureBlockShape(MTL::PixelFormat format, uint32_t &width, uint32_t &height,
                           uint32_t &bytes);
 
@@ -540,4 +575,17 @@ bool GetTextureBlockShape(MTL::PixelFormat format, uint32_t &width, uint32_t &he
 bool ValidateMetalLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger slice,
     NS::UInteger level, const MTL::Origin &origin, const MTL::Size &size,
     uint64_t bufferLength, NS::UInteger offset, NS::UInteger rowPitch,
-    NS::UInteger imagePitch, MTL::BlitOption options);
+    NS::UInteger imagePitch, MTL::BlitOption options, uint64_t *footprint = NULL);
+
+// Frame objects use validated factory metadata before their Native birth event.
+// Both paths share the same bounds and overflow checks; no resource is created here.
+bool ValidateMetalLinearTextureCopy(const RDMTL::TextureDescriptor &texture, NS::UInteger slice,
+    NS::UInteger level, const MTL::Origin &origin, const MTL::Size &size,
+    uint64_t bufferLength, NS::UInteger offset, NS::UInteger rowPitch,
+    NS::UInteger imagePitch, MTL::BlitOption options, uint64_t *footprint = NULL);
+
+// Shared region contract for preflight metadata and Native texture transfers.
+bool ValidateMetalTextureRegion(const RDMTL::TextureDescriptor &texture, uint64_t slice,
+    uint64_t level, const MTL::Origin &origin, const MTL::Size &size, uint64_t *footprint = NULL);
+bool ValidateMetalCPUTextureRead(WrappedMTLTexture *texture, const MTL::Region &region,
+    uint64_t level, uint64_t slice, uint64_t rowPitch, uint64_t imagePitch);

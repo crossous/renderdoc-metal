@@ -60,7 +60,8 @@ def main():
                         'offset-unaligned':('offset','17'),'offset-other':('offset','20'),
                         'ordinal-over-limit':('ordinal','1024'),'ordinal-duplicate':('ordinal','1')}[label]
             f(first,name).text=value
-        for c in nodes:c.set('length','0')
+        # Keep skippable chunk budgets for forward-only metadata scanning.
+        for c in nodes:c.set('length',str(int(c.get('length','0'))+128))
         target=folder/(label+'.zip.xml');tree.write(target,encoding='utf-8',xml_declaration=True)
         with zipfile.ZipFile(target.with_suffix(''),'w',compression=zipfile.ZIP_DEFLATED) as z:
             for n,data in blobs.items():z.writestr(n,data)

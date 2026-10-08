@@ -1,3 +1,5 @@
+2026-10-06 UE RT诊断监督与重启取证见 [B495](../../docs/metal-replay/BATCH495_UE_RT_FREEZE_DIAGNOSTICS.md)。RT入口使用独立640×480启动INI、12s帧进展检测、bounded sample/owned group收尾；18项CPU失败注入测试通过。重启后未重新启动UE/GPU，具体全机停滞根因未修复；不得把监督器通过当作UE RT验收或直接重跑旧长测试。CPU验证入口：`python3 util/ue/test_ue_metal_capture_supervisor.py`。
+
 2026-10-05 B466：本 fork 的 shader tools 已内置 app 并自动注册，View 提供 AIR/MSL/HLSL/GLSL，Edit/Compiler 接入 Apple AIR/MSL 编译；release 打包检查固定源码、hash、架构与许可证，无用户路径配置/运行时 Homebrew 或 Rust 依赖，仅 Apple 工具依赖 Xcode。高层重建仅预览，Edit 严格限无资源/无特化的简单 FS；当前 UE3928 fptoui、3612 fptosi 尚不能高层反编译，AIR 可用。定向工具/搬迁/超时/打包 PASS；实际 UI AIR Apply/Remove 与三种源码 View PASS（公开 Qt 选择，非鼠标下拉验收）；同一 UE 两 shader 在06ae及随后匹配当前 API 的固定48afd5d3上均两轮写资源字节一致/恢复/fatal0。新头旧库混用追加 probe 失败不计 PASS；另一任务已更新 backend，本轮未重跑全量，06ae全量仅属于B464。详情见 [B466](../../docs/metal-replay/BATCH466_BUNDLED_SHADER_TOOLS.md)，未提交/推送。
 
 2026-10-04 最新 B464：接入公共 Shader Edit/Apply/Remove 与 Shader Processors，补齐 MSL、嵌入 debug MSL、可重编译 AIR/MetalLib，保留 function constants、specializedName/原入口及所有依赖 native PSO 的原 descriptor。AIR 编译保持捕获 Metal/AIR 版本和部署目标，映射发布前等待 GPU，typed release 释放临时 function/PSO。View 可选择内置 AIR、Captured MSL 和匹配的外部 processors。最终06ae2318库与bundle一致：定向 source/AIR/debug/alias/frame-born PASS；首次候选 Tess/Task/Mesh 替换通过；最终固定全量308/7786/3080 PASS、growth1343488B/hash一致/exit0；全量后同一UE3928 FS/3612 CS两轮编辑/恢复、3612/3928/4036 Usage及整帧两轮reset通过，写目标/GBufferA/呈现图保持基线。实际UI通过微型源码Edit/红色Apply/错误展示/Remove恢复、外部View目标切换，同一UE3928 external AIR与3612内置AIR的Edit/Apply/Remove；停在3928 FS原shader。直接键盘源码输入自动化未验收，Save面板未重试；readonly VisBuffer64在无编辑control reset也变化，原因未定位。AIR→MSL候选metal2vulkan→SPIRV-Cross尚未构建或验证；linked function tables编辑明确拒绝。详见 [B464](../../docs/metal-replay/BATCH464_SHADER_EDIT_AND_PROCESSORS.md)，操作见 [Shader Tools](../shader_tools/README.md)。保留旧改动，未提交/推送。
@@ -210,3 +212,92 @@ UE 的 arm64 可执行文件；不可在已经运行的编辑器中补注入。
 
 `qrenderdoc` 的现有目标控制功能可在连接到运行中的目标后请求截帧，但本项目
 尚未在 UE 5.8 上验证该路径。本插件是本轮固定的一按钮入口。
+
+## 有限 Lumen 硬件光追诊断
+
+已知工程可使用隔离配置做一次 Lumen HWRT 截帧：
+
+```bash
+python3 util/ue/run_testproj_metal_ray_macos.py --run --lumen-only \
+  --capture-delay 6 --startup-timeout 120 --work-dir build-macos-debug/ue-lumen-ray
+```
+
+入口记录 UE/provider/backend 哈希，固定320×240视口与640×480未最大化窗口，
+隔离 EditorPerProjectUserSettingsINI 并检查原设置未变。启动覆盖
+r.RayTracing=1、r.Lumen.HardwareRayTracing=1、Inline=1、GI/ReflectionMethod=1；
+`--lumen-only`关闭独立 RT 阴影负载。日志查询实际 CVar，不将请求配置视为调度证据。
+自动截帧 delay 是插件 ticker 延迟，可能跨越初始化；未准备好视口仍会报告失败。
+初始化后12秒没有新帧号或delay+20秒没有成功捕获，监督器保存日志/采样并停止
+其拥有的编辑器进程组；这不能保证防止系统或驱动停滞。
+
+RT probe 是进程内、捕获侧、服从native设备判断的诊断入口，生产能力仍关闭。
+UE 与有限 sample gate 共用互斥锁；先完成其它构建/GPU测试，再启动。
+每轮保留新capture、独立session日志、compile-trace和supervisor结果，CPU导出
+出现断言/overrun即失败，即使命令exit0。真实AS/RT dispatch或inline ray query、
+输出/绑定、完整重放/事件/EID0均需另行核验，不能以普通光栅截帧代替。
+
+B513 的真实 Lumen inline 查询证据可以在编辑器退出后离线生成，不提交 GPU 工作：
+
+```sh
+python3 util/ue/audit_ue_metal_ray_capture.py /absolute/path/original.zip.xml --output /absolute/path/inventory.json
+python3 util/ue/audit_ue_metal_ray_air.py /absolute/path/original.zip.xml --output /absolute/path/AIR-proof
+```
+
+第二个入口按捕获中实际 PSO/function/library 关联提取原始 metallib，只检查 Lumen compute 范围。需本机 `xcrun metal-objdump`；它核验 entry 所属 AIR module 内 allocation/reset/next query 调用，并关联非零直接或 per-use 间接调度参数，不用 label、AS residency 或整数位型作为光追证明。原 ZIP 和 XML 必须配对。`--lumen-only` 截帧入口保存同样的 CPU AIR 证据。shader 分支不保证每个 invocation 查询，输出一致性、GPU 完成和重放仍单独验收。B513 实际捕获证明两条 shader/四次非零硬件查询调度；原捕获没有完整 descriptor coverage，正常重放拒绝，CPU candidate65 进一步拒绝 R16Float 多 mip 纹理，不能用添加 coverage 或放宽 guard 冒充可用。见 [B513](../../docs/metal-replay/BATCH513_UE_LUMEN_QUERY_AND_STREAM_SCAN.md)。
+
+## 隔离小场景（B527）
+
+`prepare_ue_metal_ray_scene.py --work-dir <fresh-dir> --capture-plugin <matching-plugin-dir> --run` 创建独立Blueprint工程与三个BasicShapes mesh/两light关卡。使用有限120秒NullRHI commandlet，不注入RenderDoc，不改原工程；自动配置SM6、Lumen HWRT/Inline、RT所需SkinCache，并禁用无关默认engine plugins。manifest记录地图、配置、脚本及依赖哈希，已有project目录拒绝覆盖。地图保存通过不代表执行光追。
+
+后续将生成的MetalRayScene.uproject传入`run_testproj_metal_ray_macos.py --run --lumen-only --capture-delay 6 --startup-timeout 120 --project <project> --work-dir <capture-dir>`。继续保持生产RT能力false、共享GPU锁、owned进程清理及实际AIR/非零调度证明；当前整帧输出/重放仍需独立验收，cvar请求不计光追通过。
+
+B528可加`--small-shadows`：仅隔离诊断命令限制raster CSM256/1并记录cvar；必须检查capture实际texture尺寸及HW query，不能仅凭配置判断通过。
+
+`run_testproj_metal_ray_macos.py --small-lumen-caches --small-shadows --lumen-only`
+可对隔离小场景施加512² surface atlas、grid4和32² probes/8² ray resolution。
+两个radiance cache的final atlas为320²；实际cvar与capture texture须另行核验，
+请求配置不代表成功调度或重放。HWRT/Inline保持开启，预算及生产能力开关保持。
+
+RT gate的`--rhi /absolute/isolated/libUnrealEditor-MetalRHI.dylib`可选择独立模块，
+manifest记录path及SHA256；不会安装或覆盖Engine。provider准备器支持16MiB
+placement最小block，仅改变隔离allocator粒度；不能把此设置或请求当作预算通过。
+
+
+B537 provider 在 `IRDescriptorTableSetAccelerationStructure` 处记录 `metal.descriptorSlotBinding` kind3：已知 Header MTLBuffer 与其子分配 offset。kind3 表示 64-byte Apple IR AS header，不能当作普通 kind0 buffer 地址重放。`BuildAccelerationStructure` 写完 header 后，`metal.rayASHeader` 显式记录 `[headerOffset, known MTLAccelerationStructure pointer, known contribution MTLBuffer pointer, contributionOffset]`。对象指针只用于捕获端查询已注册 wrapper，capture 中保存 ResourceId、offset 与 64-byte snapshot，不保存进程指针作为重放依据。
+
+捕获端也记录 Shared placement heap header 的显式对象/字节事实；这不授予重放 coverage。B537 的完整重放验证只覆盖独立 Shared ≤16KiB、background 不可变 header/contribution 与已声明 coverage3 query。动态 UE frame header、kind3 descriptor heap consumer 和未声明 query 的调用仍明确拒绝，provider 不声明完整 coverage。安装引擎不修改；隔离模块需重新编译后用 `--rhi` 选择。下一批次需补动态写入版本、producer/consumer 链接与实际 UE query 契约，再检验输出。
+
+
+## 输出因果诊断工具（B544）
+
+`ue_metal_replay_texture_chain.cpp` 接收 capture、输出目录和目标文件，采集原生texture数据；既有四列目标为 `encoder resource mip slice`。`--inputs-after [ranges]` 只在draw后观察，`--compute-inputs-after [ranges]` 按dispatch/API encoder及resource usage定位compute候选。同一轮同一event只选择一次，随后观察多个target，避免重复force选择覆盖输入证据。`--compute-events-after [ranges]` 的目标增加第五列EID，用于同encoder内多个生产步骤的测试定位，并核对实际dispatch/usage；0拒绝。显式ranges为 `encoder buffer offset bytes`，用于原metadata定位的root/count区间。
+
+inputs模式同时观察展示出的readonly纹理首mip/slice和有界buffer区间。候选不等于实际shader访问，padding/无序列表的raw hash不能自动作为输出oracle；实际writer和输入需另核对原API/AIR/typed metadata。readback会等待GPU，before/after、单event与多event实验的时序不同，稳定观察不能宣称整帧已修复。8MiB texture/1MiB candidate buffer等限制仅是诊断预算，不进入生产支持资格。
+
+`ue_metal_resource_usage_probe.cpp capture output.txt resource-ids.txt` 正常打开原文件，导出原action/event/usage和bound pipeline的定位线索。RW usage不证明执行了store，零间接dispatch也可留下候选。两工具只诊断恢复/提交因果链，不按UE功能名、shader/PSO/EID授予支持，也不启用RT能力。构建和运行通过既有共享GPU锁串行监督，唯一capture/失败/固定输入隔离Native fixture保存在外盘当前批次manifest。
+
+Full Native output diagnostics support `UE_METAL_NATIVE_BASELINE_DIR` in the test
+plugin. It refuses RenderDoc injection, observes three complete bounded viewport
+frames after temporal-history/sequence freezing, and exits. These cvars do not
+prove every cache/time input fixed. Frame-end ReadPixels changes inter-frame
+scheduling; this experiment cannot supply a replay tolerance by itself.
+
+`run_testproj_metal_ray_macos.py --native-viewport-output` optionally saves BGRA8
+from the exact full viewport draw being captured (RCM_UNorm, no gamma conversion).
+Use a fresh external work directory and an independently built diagnostic plugin.
+The Native Metal/RHI format conversion must be used for comparison, with no
+implicit PNG sampling or tolerance. This frame-end observer also changes timing.
+Manifests report execution, output comparison, and overall acceptance separately;
+a successful capture/helper exit alone never means output or RT acceptance PASS.
+
+## 正常尺寸 Lumen / Nanite / VSM UI 交付（2026-10-08）
+
+[唯一当前卡](../../docs/metal-replay/UE_UI_CAPTURE_2026-10-08.md)记录独立UE场景、真实6次ray query与Nanite/VSM非零几何调度，以及相关通用API修复。1280×720、High2；在独立工程明确限制Lumen atlas=1024、VSM pages=1024，三个feature均保持开启，不声称默认Epic缓存。
+
+交付RDC在当前1845库完成三个完整GPU重放，完整Native像素比较FAIL，整体INCOMPLETE；此为可打开UI候选。运行：
+
+```sh
+open -n "/Users/crossous/Developer/renderdoc-metal/build-macos-debug/bin/qrenderdoc.app" --args "/Volumes/CauseUseMac/RenderDocMetalArchives/20261008-UE-Lumen-Nanite-VSM-720p/UE-Lumen-Nanite-VSM-1280x720.rdc"
+```
+
+首次Debug loading约3分钟；Texture Viewer选BufferedRT。GUI用户验收未自动计通过。独立捕获命令保存在外盘capture-command-High.json；工具支持--nanite-vsm、--viewport-size1280 720、--window-size1400 950、--camera六个有限值、--scalability-quality2和--native-viewport-after-capture。新同候选capture-final/a877尚有背景placement恢复拒绝，不能代替本交付通过声明。

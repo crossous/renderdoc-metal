@@ -53,7 +53,7 @@ print(f'PASS {count} API+CLI negative groups, no GPU initial uploads/waits')
 coverage=next((c for c in original.find('./chunks') if c.get('name')=='MTLDevice::DeclareDescriptorCoverage'),None)
 if coverage is not None and field(coverage,'version').text=='36':
     cases=('legacy-v35','missing-binding','duplicate-binding','unknown-source','source-offset',
-           'stencil-parent','stencil-level','stencil-format','cube-array-shape','volume-array-shape')
+           'stencil-parent','stencil-level-range','stencil-format','cube-array-shape','volume-array-shape')
     for case in cases:
         tree=copy.deepcopy(original);chunks=tree.find('./chunks')
         binding=next(c for c in chunks if c.get('name')=='MTLBuffer::DescriptorSlotBinding')
@@ -64,7 +64,8 @@ if coverage is not None and field(coverage,'version').text=='36':
         elif case=='unknown-source':field(binding,'resource').text='9999999'
         elif case=='source-offset':field(binding,'memberOffset').text='1'
         elif case=='stencil-parent':field(view,'Source').text='9999999'
-        elif case=='stencil-level':field(field(view,'levels'),'length').text='2'
+        # A shorter stencil mip range is a legal aspect view, not malformed.
+        elif case=='stencil-level-range':field(field(view,'levels'),'length').text='4'
         elif case=='stencil-format':field(view,'format').text='13'
         else:
             kind=6 if case=='cube-array-shape' else 7

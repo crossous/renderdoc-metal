@@ -8,6 +8,51 @@ public:
   WrappedMTLAccelerationStructureCommandEncoder(MTL::AccelerationStructureCommandEncoder *real,
                                                 ResourceId id, WrappedMTLDevice *device);
   enum { TypeEnum = eResAccelerationStructureCommandEncoder };
+  DECLARE_FUNCTION_SERIALISED(void, insertDebugSignpost, NS::String *string);
+  DECLARE_FUNCTION_SERIALISED(void, pushDebugGroup, NS::String *string);
+  DECLARE_FUNCTION_SERIALISED(void, popDebugGroup);
+  DECLARE_FUNCTION_SERIALISED(void, updateFence, WrappedMTLFence *fence);
+  DECLARE_FUNCTION_SERIALISED(void, waitForFence, WrappedMTLFence *fence);
+  DECLARE_FUNCTION_SERIALISED(void, buildMultiIndexed,
+      WrappedMTLAccelerationStructure *structure, WrappedMTLBuffer *vertices,
+      WrappedMTLBuffer *indices, rdcarray<uint64_t> parameters,
+      WrappedMTLBuffer *scratch, NS::UInteger scratchOffset);
+  void buildUserIDInstances(
+      WrappedMTLAccelerationStructure *structure,
+      rdcarray<WrappedMTLAccelerationStructure *> children, WrappedMTLBuffer *instances,
+      WrappedMTLBuffer *scratch, rdcarray<uint64_t> parameters);
+  template <typename SerialiserType>
+  bool Serialise_buildUserIDInstances(SerialiserType &ser,
+      WrappedMTLAccelerationStructure *structure,
+      rdcarray<WrappedMTLAccelerationStructure *> children, WrappedMTLBuffer *instances,
+      WrappedMTLBuffer *scratch, rdcarray<uint64_t> parameters, bytebuf descriptorBytes);
+  void buildIndirectInstances(WrappedMTLAccelerationStructure *structure,
+      rdcarray<WrappedMTLAccelerationStructure *> children, WrappedMTLBuffer *instances,
+      WrappedMTLBuffer *scratch, rdcarray<uint64_t> parameters, NS::UInteger scratchOffset = 0);
+  template <typename SerialiserType>
+  bool Serialise_buildIndirectInstances(SerialiserType &ser,
+      WrappedMTLAccelerationStructure *structure,
+      rdcarray<WrappedMTLAccelerationStructure *> children, WrappedMTLBuffer *instances,
+      WrappedMTLBuffer *scratch, rdcarray<uint64_t> parameters, bytebuf descriptorBytes, NS::UInteger scratchOffset = 0);
+  void buildFrozenTriangles(WrappedMTLAccelerationStructure *structure, WrappedMTLBuffer *vertices,
+      WrappedMTLBuffer *indices, uint32_t kind, rdcarray<uint64_t> parameters,
+      WrappedMTLBuffer *scratch, NS::UInteger scratchOffset);
+  template <typename SerialiserType>
+  bool Serialise_buildFrozenTriangles(SerialiserType &ser, WrappedMTLAccelerationStructure *structure,
+      WrappedMTLBuffer *vertices, WrappedMTLBuffer *indices, uint32_t kind,
+      rdcarray<uint64_t> parameters, WrappedMTLBuffer *scratch, NS::UInteger scratchOffset,
+      bytebuf vertexBytes, bytebuf indexBytes);
+  void TrackInitialBuild(WrappedMTLAccelerationStructure *structure, WrappedMTLBuffer *vertices,
+      rdcarray<uint64_t> parameters, uint32_t kind = 1,
+      const rdcarray<WrappedMTLAccelerationStructure *> &children = {},
+      WrappedMTLBuffer *indices = NULL,
+      WrappedMTLAccelerationStructure *refitSource = NULL);
+  void TrackInitialCopy(WrappedMTLAccelerationStructure *source,
+      WrappedMTLAccelerationStructure *destination, bool compact = false);
+  void TrackInitialBufferWrite(WrappedMTLBuffer *buffer);
+  void SnapshotInitialInputsAtEnd();
+  rdcarray<ResourceId> m_PrivateCompactedSizeQueries;
+  rdcarray<NS::SharedPtr<MTL::Buffer>> m_InitialBufferWrites;
   void SetCommandBuffer(WrappedMTLCommandBuffer *buffer) { m_CommandBuffer = buffer; }
   WrappedMTLCommandBuffer *GetCommandBuffer() const { return m_CommandBuffer; }
   void buildFormattedTriangle(WrappedMTLAccelerationStructure *structure,

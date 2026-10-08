@@ -154,6 +154,7 @@ bool ValidateMetalBufferTexture(MTL::Device *device, const RDMTL::TextureDescrip
     case MTL::PixelFormatRG32Uint:
     case MTL::PixelFormatRG32Float:
     case MTL::PixelFormatRGBA16Snorm:
+    case MTL::PixelFormatRGBA16Uint:
     case MTL::PixelFormatRGBA16Float: pixelBytes = 8; break;
     case MTL::PixelFormatRGBA32Uint:
     case MTL::PixelFormatRGBA32Float: pixelBytes = 16; break;

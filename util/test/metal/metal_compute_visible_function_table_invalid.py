@@ -57,7 +57,7 @@ def main():
             ('table-pipeline-zero', 'table', 'Pipeline', '0'),
             ('table-id-duplicate', 'table', 'Table', handle_id),
             ('table-count-zero', 'table', 'count', '0'),
-            ('table-count-huge', 'table', 'count', '33'),
+            ('table-count-huge', 'table', 'count', '65537'),
             ('update-table-wrong-type', 'update', 'Table', handle_id),
             ('update-handle-wrong-type', 'update', 'function', table_id),
             ('update-index', 'update', 'index', '1'),

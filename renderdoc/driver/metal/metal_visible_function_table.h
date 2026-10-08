@@ -2,6 +2,10 @@
 
 #include "metal_common.h"
 
+// Replay allocation budget, independent of buffer binding-slot counts and
+// geometry intersection-function offsets. Native creation still decides support.
+static constexpr uint32_t MetalMaxComputeVisibleFunctionTableEntries = 65536;
+
 class WrappedMTLFunctionHandle : public WrappedMTLObject
 {
 public:
@@ -21,6 +25,8 @@ public:
   WrappedMTLObject *m_Pipeline = NULL;
   MTL::RenderStages m_Stage = MTL::RenderStageFragment;
   uint32_t m_FunctionCount = 0;
+  uint64_t m_CapturedGPUResourceID = 0;
+  std::map<uint32_t, ResourceId> m_RayIRFunctions;
   void setFunction(WrappedMTLFunctionHandle *function, uint32_t index);
   template <typename SerialiserType>
   bool Serialise_setFunction(SerialiserType &ser, WrappedMTLFunctionHandle *function,
@@ -36,6 +42,8 @@ public:
   WrappedMTLObject *m_Pipeline = NULL;
   MTL::RenderStages m_Stage = MTL::RenderStageFragment;
   uint32_t m_FunctionCount = 0;
+  uint64_t m_CapturedGPUResourceID = 0;
+  std::map<uint32_t, ResourceId> m_RayIRFunctions;
   void setFunction(WrappedMTLFunctionHandle *function, uint32_t index);
   template <typename SerialiserType>
   bool Serialise_setFunction(SerialiserType &ser, WrappedMTLFunctionHandle *function,

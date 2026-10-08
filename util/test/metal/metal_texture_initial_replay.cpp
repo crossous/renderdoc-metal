@@ -16,7 +16,7 @@ int main(int argc,char **argv)
   ICaptureFile *file=RENDERDOC_OpenCaptureFile();auto result=file->OpenFile(argv[1],"rdc",nullptr);IReplayController *controller=nullptr;
   if(!result.OK())return 3;rdctie(result,controller)=file->OpenCapture(ReplayOptions(),nullptr);file->Shutdown();
   if(!result.OK()||!controller){fprintf(stderr,"Open failed: %s\n",result.internal_msg?result.internal_msg->c_str():"unknown");return 4;}
-  const auto specs=InitialTextureSpecs(getenv("RENDERDOC_METAL_SHARED_TEXTURE_INITIAL")!=nullptr);std::vector<ResourceId> images;
+  const auto specs=InitialTextureSpecs(getenv("RENDERDOC_METAL_SHARED_TEXTURE_INITIAL")!=nullptr,getenv("RENDERDOC_METAL_UINT16_TEXTURE_INITIAL")!=nullptr);std::vector<ResourceId> images;
   for(const auto &s:specs)
   {
     char name[64];snprintf(name,sizeof(name),"initial-%u-%u",s.format,s.type);ResourceId id;
@@ -75,6 +75,10 @@ int main(int argc,char **argv)
       {
         const auto p=controller->PickPixel(images[i],0,0,{0,0,0},CompType::Typeless);
         if(p.uintValue[0]!=17){fprintf(stderr,"UInt pixel=%u fmt=%u\n",p.uintValue[0],s.format);return 11;}
+      }
+      if(s.format==113) {
+        const auto p=controller->PickPixel(images[i],0,0,{0,0,0},CompType::Typeless);
+        for(unsigned c=0;c<4;c++)if(p.uintValue[c]!=32768+8191*c)return 22;
       }
       if(s.format==20)
       {

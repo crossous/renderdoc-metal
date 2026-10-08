@@ -3,6 +3,8 @@
 #include "metal_buffer.h"
 #include "metal_command_buffer.h"
 #include "metal_device.h"
+#include "metal_replay.h"
+#include "metal_fence.h"
 #include <cmath>
 
 WrappedMTLAccelerationStructureCommandEncoder::WrappedMTLAccelerationStructureCommandEncoder(
@@ -214,6 +216,126 @@ static bool ValidIndexedFormattedTriangleBuild(WrappedMTLAccelerationStructure *
          (refitOnly ? sizes.refitScratchBufferSize : sizes.buildScratchBufferSize) <=
              Unwrap(scratch)->length() - scratchOffset;
 }
+
+static bool ValidMultiIndexedBuild(WrappedMTLAccelerationStructure *structure,
+    WrappedMTLBuffer *vertices, WrappedMTLBuffer *indices, const rdcarray<uint64_t> &parameters,
+    WrappedMTLBuffer *scratch, NS::UInteger scratchOffset, MTL::Device *device);
+
+template <typename SerialiserType>
+bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildFrozenTriangles(
+    SerialiserType &ser, WrappedMTLAccelerationStructure *structure, WrappedMTLBuffer *vertices,
+    WrappedMTLBuffer *indices, uint32_t kind, rdcarray<uint64_t> parameters,
+    WrappedMTLBuffer *scratch, NS::UInteger scratchOffset, bytebuf vertexBytes, bytebuf indexBytes)
+{
+  SERIALISE_ELEMENT_LOCAL(Encoder, this);
+  SERIALISE_ELEMENT(structure).Important();
+  SERIALISE_ELEMENT(vertices).Important();
+  SERIALISE_ELEMENT(indices).Important();
+  SERIALISE_ELEMENT(kind).Important();
+  SERIALISE_ELEMENT(parameters).Important();
+  SERIALISE_ELEMENT(scratch).Important();
+  SERIALISE_ELEMENT(scratchOffset).Important();
+  SERIALISE_ELEMENT(vertexBytes).Important();
+  SERIALISE_ELEMENT(indexBytes).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    const bool multi = ser.ChunkMetadata().chunkID == uint32_t(MetalChunk::MTLAccelerationStructureCommandEncoder_buildFrozenMultiIndexed);
+    if(multi != (kind == 8) || (!multi && kind != 1 && kind != 2) ||
+       !Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
+       Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
+       !m_Device->RecordRayIRGeometryASBuild(GetResID(structure), GetResID(vertices), GetResID(indices),
+           kind, parameters, GetResID(scratch), scratchOffset, vertexBytes, indexBytes))
+    { RDCERR("Invalid Metal frozen triangle geometry build"); return false; }
+    // Metal reads a complete final stride, while the frozen recipe stores only
+    // the effective final attribute bytes, exactly like InitialASUpload.
+    bytebuf upload = vertexBytes;
+    const uint64_t format = parameters[2] == uint64_t(MTL::AttributeFormatFloat4) ? 16 : 12;
+    if(kind != 8) upload.resize(upload.size() + parameters[1] - format);
+    auto staging = NS::TransferPtr(Unwrap(m_Device)->newBuffer(upload.data(), upload.size(),
+        MTL::ResourceStorageModeShared));
+    NS::SharedPtr<MTL::Buffer> indexStaging;
+    if(kind == 2 || kind == 8) indexStaging = NS::TransferPtr(Unwrap(m_Device)->newBuffer(indexBytes.data(),
+        indexBytes.size(), MTL::ResourceStorageModeShared));
+    if(!staging || ((kind == 2 || kind == 8) && !indexStaging)) return false;
+    auto descriptor = kind == 8 ? MetalASMultiIndexedDescriptor(staging.get(), indexStaging.get(), parameters) : TriangleDescriptor(staging.get(), 0, parameters[3], indexStaging.get(),
+        kind == 2 ? MTL::IndexType(parameters[9]) : MTL::IndexTypeUInt16,
+        parameters[7] != 0, !parameters[5], parameters[5], 0, parameters[4], parameters[6],
+        parameters[1], MTL::AttributeFormat(parameters[2]));
+    Unwrap(Encoder)->buildAccelerationStructure(Unwrap(structure), descriptor, Unwrap(scratch), scratchOffset);
+    // Native callbacks own only independent staging, including unretained submissions.
+    Unwrap(Encoder->m_CommandBuffer)->addCompletedHandler([staging, indexStaging](MTL::CommandBuffer *) {});
+    m_Device->RecordReplayFrozenASInput(GetResID(vertices));
+    if(indices) m_Device->RecordReplayFrozenASInput(GetResID(indices));
+    structure->m_LastBuildKind = kind;
+    structure->m_LastTriangleCount = kind == 1 ? parameters[3] : 0;
+    structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
+    structure->m_LastVertices = GetResID(vertices);
+    structure->m_LastAllowDuplicateIntersectionFunctionInvocation = parameters[6];
+    if(IsLoading(m_State))
+    {
+      AddEvent(); ActionDescription action;
+      action.customName = kind == 8 ? "Build Metal Frozen Multiple Indexed Geometries" : kind == 2 ? "Build Metal Frozen Indexed Triangle Geometry" :
+                                      "Build Metal Frozen Triangle Geometry";
+      action.flags = ActionFlags::BuildAccStruct; AddAction(action);
+    }
+  }
+  return true;
+}
+
+void WrappedMTLAccelerationStructureCommandEncoder::buildFrozenTriangles(
+    WrappedMTLAccelerationStructure *structure, WrappedMTLBuffer *vertices,
+    WrappedMTLBuffer *indices, uint32_t kind, rdcarray<uint64_t> p,
+    WrappedMTLBuffer *scratch, NS::UInteger scratchOffset)
+{
+  auto validInput = [&](WrappedMTLBuffer *buffer) {
+    return buffer && buffer->m_Type == eResBuffer &&
+        ValidMetalASPrivateInstanceInput(buffer) && buffer != scratch;
+  };
+  if(!IsActiveCapturing(m_State) || !m_CommandBuffer || !validInput(vertices) ||
+     ((kind == 2 || kind == 8) ? !validInput(indices) : kind != 1 || indices) ||
+     (kind == 8 ? p.size() < 20 || p.size() > 640 || p.size() % 10 : p.size() != (kind == 2 ? 10U : 8U)) ||
+     p[7] != 0 ||
+     (kind == 8 ? !ValidMultiIndexedBuild(structure, vertices, indices, p, scratch, scratchOffset, Unwrap(m_Device)) :
+      kind == 2 ? !ValidIndexedFormattedTriangleBuild(structure, vertices, p[0], p[1],
+         MTL::AttributeFormat(p[2]), indices, MTL::IndexType(p[9]), p[8], p[3], scratch,
+         scratchOffset, p[4], p[5], p[6], Unwrap(m_Device), p[7] != 0) :
+         !ValidFormattedTriangleBuild(structure, vertices, p[0], p[1], MTL::AttributeFormat(p[2]),
+         p[3], scratch, scratchOffset, p[4], p[5], p[6], Unwrap(m_Device), p[7] != 0)))
+  { RDCERR("Invalid or unsupported Metal frame triangle geometry input"); return; }
+  auto descriptor = kind == 8 ? MetalASMultiIndexedDescriptor(Unwrap(vertices), Unwrap(indices), p) : TriangleDescriptor(Unwrap(vertices), p[0], p[3], indices ? Unwrap(indices) : NULL,
+      kind == 2 ? MTL::IndexType(p[9]) : MTL::IndexTypeUInt16,
+      p[7] != 0, !p[5], p[5], kind == 2 ? p[8] : 0, p[4], p[6], p[1], MTL::AttributeFormat(p[2]));
+  SERIALISE_TIME_CALL(Unwrap(this)->buildAccelerationStructure(Unwrap(structure), descriptor,
+      Unwrap(scratch), scratchOffset));
+  structure->m_LastBuildKind = kind;
+  structure->m_LastTriangleCount = kind == 1 ? p[3] : 0;
+  structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
+  structure->m_LastVertices = GetResID(vertices);
+  structure->m_LastAllowDuplicateIntersectionFunctionInvocation = p[6];
+  CACHE_THREAD_SERIALISER();
+  SCOPED_SERIALISE_CHUNK(kind == 8 ? MetalChunk::MTLAccelerationStructureCommandEncoder_buildFrozenMultiIndexed :
+      MetalChunk::MTLAccelerationStructureCommandEncoder_buildFrozenTriangles);
+  Serialise_buildFrozenTriangles(ser, structure, vertices, indices, kind, p, scratch, scratchOffset, {}, {});
+  auto record = GetRecord(m_CommandBuffer);
+  for(auto resource : {GetRecord(structure), GetRecord(vertices), GetRecord(scratch)}) record->AddParent(resource);
+  if(indices) record->AddParent(GetRecord(indices));
+  MetalASFrameBuild evidence;
+  evidence.encoder = GetResID(this); evidence.target = GetResID(structure);
+  evidence.source = GetResID(vertices); evidence.scratch = GetResID(scratch); evidence.scratchOffset = scratchOffset;
+  evidence.metadata = ser.ChunkMetadata(); evidence.metadataFlags = ser.GetChunkMetadataRecording();
+  evidence.build = record->cmdInfo->initialASBuilds.back().build;
+  evidence.chunk = scope.Get(); record->AddChunk(evidence.chunk); record->cmdInfo->frameASBuilds.push_back(evidence);
+  record->MarkResourceFrameReferenced(GetResID(structure), eFrameRef_CompleteWrite);
+  record->MarkResourceFrameReferenced(GetResID(scratch), eFrameRef_PartialWrite);
+}
+
+template bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildFrozenTriangles(
+    ReadSerialiser &, WrappedMTLAccelerationStructure *, WrappedMTLBuffer *, WrappedMTLBuffer *,
+    uint32_t, rdcarray<uint64_t>, WrappedMTLBuffer *, NS::UInteger, bytebuf, bytebuf);
+template bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildFrozenTriangles(
+    WriteSerialiser &, WrappedMTLAccelerationStructure *, WrappedMTLBuffer *, WrappedMTLBuffer *,
+    uint32_t, rdcarray<uint64_t>, WrappedMTLBuffer *, NS::UInteger, bytebuf, bytebuf);
 
 static void SetRefittableIndexedMetadata(WrappedMTLAccelerationStructure *structure,
     WrappedMTLBuffer *vertices, NS::UInteger vertexOffset, NS::UInteger vertexStride,
@@ -757,6 +879,9 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_refitFormattedTria
     destination->m_LastVertices = GetResID(vertices);
     destination->m_LastCompactedSizeBuffer = ResourceId();
     destination->m_LastCompactedWriteCommandBuffer = ResourceId();
+  destination->m_CompactedSizeBuildCommandBuffer = ResourceId();
+  destination->m_CapturedCompactedSizeReadback.reset();
+  destination->m_CapturedCompactedSizeSubmission.reset();
     if(IsLoading(m_State))
     {
       AddEvent();
@@ -796,6 +921,7 @@ void WrappedMTLAccelerationStructureCommandEncoder::refitFormattedTriangle(
   destination->m_LastVertices = GetResID(vertices);
   destination->m_LastCompactedSizeBuffer = ResourceId();
   destination->m_LastCompactedWriteCommandBuffer = ResourceId();
+  destination->m_LastInitialCompactedSize = 0;
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();
@@ -1376,15 +1502,19 @@ static bool ValidInstanceBuild(WrappedMTLAccelerationStructure *structure,
                                MTL::Device *device, ResourceId commandBuffer,
                                NS::UInteger count = 1)
 {
+  // m_LastBuildKind/owner are published only after a real earlier build call.
+  // A BLAS and its TLAS may be encoded in the same submission; initial-state
+  // freezing and frame preflight separately validate the actual dependency.
   if(!structure || structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
      !child || child == structure || child->m_Type != eResAccelerationStructure ||
-     !Unwrap(child) || child->m_LastBuildKind < 1 ||
+     !Unwrap(child) || Unwrap(child)->device() != device || child->m_LastBuildKind < 1 ||
      (child->m_LastBuildKind > 4 && child->m_LastBuildKind != 6 &&
-      child->m_LastBuildKind != 7) ||
+      child->m_LastBuildKind != 7 && child->m_LastBuildKind != 8) ||
      child->m_LastBuildCommandBuffer == ResourceId() ||
-     child->m_LastBuildCommandBuffer == commandBuffer ||
      !instances || instances->m_Type != eResBuffer || !Unwrap(instances) ||
-     Unwrap(instances)->storageMode() != MTL::StorageModeShared ||
+     (Unwrap(instances)->storageMode() != MTL::StorageModeShared &&
+      !(Unwrap(instances)->storageMode() == MTL::StorageModeManaged &&
+        IsBackgroundCapturing(instances->m_State))) ||
      count < 1 || count > 65536 ||
      Unwrap(instances)->length() / sizeof(MTL::AccelerationStructureInstanceDescriptor) < count ||
      !Unwrap(instances)->contents() ||
@@ -1394,8 +1524,7 @@ static bool ValidInstanceBuild(WrappedMTLAccelerationStructure *structure,
   {
     MTL::AccelerationStructureInstanceDescriptor data = {};
     memcpy(&data, (const byte *)Unwrap(instances)->contents() + i * sizeof(data), sizeof(data));
-    if(data.options != 0 || data.mask != 0xff || data.intersectionFunctionTableOffset != 0 ||
-       data.accelerationStructureIndex != 0)
+    if(!ValidMetalASInstance(data, 1))
       return false;
     for(int column = 0; column < 4; column++)
       for(int row = 0; row < 3; row++)
@@ -1612,18 +1741,19 @@ static bool ValidDistinctInstanceBuild(WrappedMTLAccelerationStructure *structur
      !child0 || !child1 || child0 == child1 || child0 == structure || child1 == structure ||
      child0->m_Type != eResAccelerationStructure ||
      child1->m_Type != eResAccelerationStructure || !Unwrap(child0) || !Unwrap(child1) ||
+     Unwrap(child0)->device() != device || Unwrap(child1)->device() != device ||
      child0->m_LastBuildKind < 1 ||
      (child0->m_LastBuildKind > 4 && child0->m_LastBuildKind != 6 &&
-      child0->m_LastBuildKind != 7) ||
+      child0->m_LastBuildKind != 7 && child0->m_LastBuildKind != 8) ||
      child1->m_LastBuildKind < 1 ||
      (child1->m_LastBuildKind > 4 && child1->m_LastBuildKind != 6 &&
-      child1->m_LastBuildKind != 7) ||
+      child1->m_LastBuildKind != 7 && child1->m_LastBuildKind != 8) ||
      child0->m_LastBuildCommandBuffer == ResourceId() ||
      child1->m_LastBuildCommandBuffer == ResourceId() ||
-     child0->m_LastBuildCommandBuffer == commandBuffer ||
-     child1->m_LastBuildCommandBuffer == commandBuffer ||
      !instances || instances->m_Type != eResBuffer || !Unwrap(instances) ||
-     Unwrap(instances)->storageMode() != MTL::StorageModeShared ||
+     (Unwrap(instances)->storageMode() != MTL::StorageModeShared &&
+      !(Unwrap(instances)->storageMode() == MTL::StorageModeManaged &&
+        IsBackgroundCapturing(instances->m_State))) ||
      Unwrap(instances)->length() / sizeof(MTL::AccelerationStructureInstanceDescriptor) < 2 ||
      !Unwrap(instances)->contents() || !scratch || scratch->m_Type != eResBuffer ||
      !Unwrap(scratch))
@@ -1632,8 +1762,7 @@ static bool ValidDistinctInstanceBuild(WrappedMTLAccelerationStructure *structur
   {
     MTL::AccelerationStructureInstanceDescriptor data = {};
     memcpy(&data, (const byte *)Unwrap(instances)->contents() + i * sizeof(data), sizeof(data));
-    if(data.options != 0 || data.mask != 0xff || data.intersectionFunctionTableOffset != 0 ||
-       data.accelerationStructureIndex != i)
+    if(!ValidMetalASInstance(data, 2) || data.accelerationStructureIndex != i)
       return false;
     for(int column = 0; column < 4; column++)
       for(int row = 0; row < 3; row++)
@@ -1747,10 +1876,10 @@ static MTL::InstanceAccelerationStructureDescriptor *MultipleDistinctInstanceDes
       MTL::InstanceAccelerationStructureDescriptor::descriptor();
   descriptor->setInstanceDescriptorBuffer(instances);
   descriptor->setInstanceCount(count);
-  const NS::Object *nativeChildren[4] = {};
-  for(size_t i = 0; i < children.size(); i++)
-    nativeChildren[i] = Unwrap(children[i]);
-  descriptor->setInstancedAccelerationStructures(NS::Array::array(nativeChildren, children.size()));
+  rdcarray<const NS::Object *> nativeChildren;
+  nativeChildren.reserve(children.size());
+  for(auto child : children) nativeChildren.push_back(Unwrap(child));
+  descriptor->setInstancedAccelerationStructures(NS::Array::array(nativeChildren.data(), nativeChildren.size()));
   return descriptor;
 }
 
@@ -1767,7 +1896,9 @@ static bool ValidMultipleDistinctInstanceBuild(
      (identityIndices && count != children.size()) ||
      (!identityIndices && count == children.size()) ||
      !instances || instances->m_Type != eResBuffer || !Unwrap(instances) ||
-     Unwrap(instances)->storageMode() != MTL::StorageModeShared ||
+     (Unwrap(instances)->storageMode() != MTL::StorageModeShared &&
+      !(Unwrap(instances)->storageMode() == MTL::StorageModeManaged &&
+        IsBackgroundCapturing(instances->m_State))) ||
      Unwrap(instances)->length() / sizeof(MTL::AccelerationStructureInstanceDescriptor) <
          count ||
      !Unwrap(instances)->contents() || !scratch || scratch->m_Type != eResBuffer ||
@@ -1777,11 +1908,10 @@ static bool ValidMultipleDistinctInstanceBuild(
   {
     WrappedMTLAccelerationStructure *child = children[i];
     if(!child || child == structure || child->m_Type != eResAccelerationStructure ||
-       !Unwrap(child) || child->m_LastBuildKind < 1 ||
+       !Unwrap(child) || Unwrap(child)->device() != device || child->m_LastBuildKind < 1 ||
        (child->m_LastBuildKind > 4 && child->m_LastBuildKind != 6 &&
-        child->m_LastBuildKind != 7) ||
-       child->m_LastBuildCommandBuffer == ResourceId() ||
-       child->m_LastBuildCommandBuffer == commandBuffer)
+        child->m_LastBuildKind != 7 && child->m_LastBuildKind != 8) ||
+       child->m_LastBuildCommandBuffer == ResourceId())
       return false;
     for(size_t j = 0; j < i; j++)
       if(child == children[j]) return false;
@@ -1790,9 +1920,8 @@ static bool ValidMultipleDistinctInstanceBuild(
   {
     MTL::AccelerationStructureInstanceDescriptor data = {};
     memcpy(&data, (const byte *)Unwrap(instances)->contents() + i * sizeof(data), sizeof(data));
-    if(data.options != 0 || data.mask != 0xff || data.intersectionFunctionTableOffset != 0 ||
-       (identityIndices ? data.accelerationStructureIndex != i :
-                          data.accelerationStructureIndex >= children.size()))
+    if(!ValidMetalASInstance(data, children.size()) ||
+       (identityIndices && data.accelerationStructureIndex != i))
       return false;
     for(int column = 0; column < 4; column++)
       for(int row = 0; row < 3; row++)
@@ -2003,6 +2132,419 @@ template bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildRepe
     WriteSerialiser &, WrappedMTLAccelerationStructure *,
     rdcarray<WrappedMTLAccelerationStructure *>, WrappedMTLBuffer *, WrappedMTLBuffer *,
     NS::UInteger, rdcarray<byte>);
+
+static MTL::InstanceAccelerationStructureDescriptor *UserIDInstanceDescriptor(
+    MTL::Buffer *instances, const rdcarray<WrappedMTLAccelerationStructure *> &children,
+    const rdcarray<uint64_t> &p)
+{
+  auto descriptor = MultipleDistinctInstanceDescriptor(instances, children, p[3]);
+  descriptor->setInstanceDescriptorType(MTL::AccelerationStructureInstanceDescriptorTypeUserID);
+  descriptor->setInstanceDescriptorBufferOffset(p[0]);
+  descriptor->setInstanceDescriptorStride(p[1]);
+  return descriptor;
+}
+
+static bool ValidUserIDInstanceBuild(WrappedMTLAccelerationStructure *structure,
+    const rdcarray<WrappedMTLAccelerationStructure *> &children,
+    WrappedMTLBuffer *instances, WrappedMTLBuffer *scratch,
+    const rdcarray<uint64_t> &p, MTL::Device *device, ResourceId command, bytebuf &packed)
+{
+  if(!structure || structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
+     Unwrap(structure)->device() != device || children.empty() || children.size() > 4 ||
+     !instances || instances->m_Type != eResBuffer || !Unwrap(instances) ||
+     Unwrap(instances)->device() != device || Unwrap(instances)->heap() ||
+     (Unwrap(instances)->storageMode() != MTL::StorageModeShared &&
+      !(Unwrap(instances)->storageMode() == MTL::StorageModeManaged &&
+        IsBackgroundCapturing(instances->m_State))) ||
+     !scratch || scratch->m_Type != eResBuffer || !Unwrap(scratch) ||
+     Unwrap(scratch)->device() != device || p.size() != 8 ||
+     p[2] != uint64_t(MTL::AccelerationStructureInstanceDescriptorTypeUserID) ||
+     !PackMetalASInitialInstances((const byte *)Unwrap(instances)->contents(),
+         Unwrap(instances)->length(), p, children.size(), packed)) return false;
+  for(size_t i = 0; i < children.size(); i++)
+  {
+    auto child = children[i];
+    if(!child || child == structure || child->m_Type != eResAccelerationStructure ||
+       !Unwrap(child) || Unwrap(child)->device() != device ||
+       child->m_LastBuildCommandBuffer == ResourceId() || child->m_LastBuildCommandBuffer == command ||
+       (child->m_LastBuildKind != 1 && child->m_LastBuildKind != 2 &&
+        child->m_LastBuildKind != 3 && child->m_LastBuildKind != 4 &&
+        child->m_LastBuildKind != 6 && child->m_LastBuildKind != 7 &&
+        child->m_LastBuildKind != 8)) return false;
+    for(size_t j = 0; j < i; j++) if(child == children[j]) return false;
+  }
+  auto sizes = device->accelerationStructureSizes(UserIDInstanceDescriptor(Unwrap(instances), children, p));
+  return sizes.accelerationStructureSize && sizes.accelerationStructureSize <= structure->m_Size &&
+      sizes.buildScratchBufferSize && sizes.buildScratchBufferSize <= Unwrap(scratch)->length();
+}
+
+template <typename SerialiserType>
+bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildUserIDInstances(
+    SerialiserType &ser, WrappedMTLAccelerationStructure *structure,
+    rdcarray<WrappedMTLAccelerationStructure *> children, WrappedMTLBuffer *instances,
+    WrappedMTLBuffer *scratch, rdcarray<uint64_t> parameters, bytebuf descriptorBytes)
+{
+  SERIALISE_ELEMENT_LOCAL(Encoder, this);
+  SERIALISE_ELEMENT(structure).Important();
+  SERIALISE_ELEMENT(children).Important();
+  SERIALISE_ELEMENT(instances).Important();
+  SERIALISE_ELEMENT(scratch).Important();
+  SERIALISE_ELEMENT(parameters).Important();
+  SERIALISE_ELEMENT(descriptorBytes).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    bytebuf packed;
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
+       Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
+       !ValidUserIDInstanceBuild(structure, children, instances, scratch, parameters,
+           Unwrap(m_Device), GetResID(Encoder->m_CommandBuffer), packed) || packed != descriptorBytes)
+    {
+      RDCERR("Invalid Metal user-ID instance acceleration structure build");
+      return false;
+    }
+    Unwrap(Encoder)->buildAccelerationStructure(Unwrap(structure),
+        UserIDInstanceDescriptor(Unwrap(instances), children, parameters), Unwrap(scratch), 0);
+    structure->m_LastBuildKind = 5;
+    structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
+    structure->m_LastInstanceChild = GetResID(children[0]);
+    structure->m_LastInstanceBuffer = GetResID(instances);
+    if(IsLoading(m_State))
+    {
+      AddEvent();
+      ActionDescription action;
+      action.customName = "Build Metal User-ID Instance Acceleration Structure";
+      action.flags = ActionFlags::BuildAccStruct;
+      AddAction(action);
+    }
+  }
+  return true;
+}
+
+void WrappedMTLAccelerationStructureCommandEncoder::buildUserIDInstances(
+    WrappedMTLAccelerationStructure *structure,
+    rdcarray<WrappedMTLAccelerationStructure *> children, WrappedMTLBuffer *instances,
+    WrappedMTLBuffer *scratch, rdcarray<uint64_t> parameters)
+{
+  bytebuf packed;
+  // This direct CPU-input path does not infer an earlier same-CB GPU producer.
+  // GPU instance evidence and indirect AS identity relocation are separate gates.
+  if(!m_CommandBuffer || (IsCaptureMode(m_State) &&
+      !GetRecord(m_CommandBuffer)->HasOnlyASInitialCommands()) ||
+     !ValidUserIDInstanceBuild(structure, children, instances, scratch, parameters,
+      Unwrap(m_Device), GetResID(m_CommandBuffer), packed))
+  {
+    RDCERR("Invalid Metal user-ID instance acceleration structure build");
+    return;
+  }
+  SERIALISE_TIME_CALL(Unwrap(this)->buildAccelerationStructure(Unwrap(structure),
+      UserIDInstanceDescriptor(Unwrap(instances), children, parameters), Unwrap(scratch), 0));
+  structure->m_LastBuildKind = 5;
+  structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
+  structure->m_LastInstanceChild = GetResID(children[0]);
+  structure->m_LastInstanceBuffer = GetResID(instances);
+  if(IsCaptureMode(m_State))
+  {
+    const bytebuf &descriptorBytes = packed;
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLAccelerationStructureCommandEncoder_buildUserIDInstances);
+    Serialise_buildUserIDInstances(ser, structure, children, instances, scratch, parameters, descriptorBytes);
+    auto record = GetRecord(m_CommandBuffer);
+    record->AddParent(GetRecord(structure));
+    for(auto child : children) record->AddParent(GetRecord(child));
+    record->AddParent(GetRecord(instances)); record->AddParent(GetRecord(scratch));
+    record->MarkResourceFrameReferenced(GetResID(structure), eFrameRef_CompleteWrite);
+    record->MarkResourceFrameReferenced(GetResID(instances), eFrameRef_Read);
+    record->MarkResourceFrameReferenced(GetResID(scratch), eFrameRef_PartialWrite);
+    record->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder, void,
+    buildUserIDInstances, WrappedMTLAccelerationStructure *,
+    rdcarray<WrappedMTLAccelerationStructure *>, WrappedMTLBuffer *, WrappedMTLBuffer *,
+    rdcarray<uint64_t>, bytebuf);
+
+static MTL::InstanceAccelerationStructureDescriptor *NoChildIndirectInstanceDescriptor(
+    MTL::Buffer *instances, const rdcarray<uint64_t> &p)
+{
+  auto descriptor = MTL::InstanceAccelerationStructureDescriptor::descriptor();
+  descriptor->setInstanceDescriptorBuffer(instances);
+  descriptor->setInstanceDescriptorBufferOffset(p[0]);
+  descriptor->setInstanceDescriptorStride(p[1]);
+  descriptor->setInstanceDescriptorType(MTL::AccelerationStructureInstanceDescriptorTypeIndirect);
+  descriptor->setInstanceCount(p[3]);
+  return descriptor;
+}
+
+static bool PrepareIndirectInstanceBuild(WrappedMTLAccelerationStructure *structure,
+    const rdcarray<WrappedMTLAccelerationStructure *> &children,
+    WrappedMTLBuffer *instances, WrappedMTLBuffer *scratch, const rdcarray<uint64_t> &p,
+    MTL::Device *device, ResourceId command, bytebuf &raw,
+    NS::SharedPtr<MTL::Buffer> &staging, NS::UInteger scratchOffset)
+{
+  if(!scratch || scratch->m_Type != eResBuffer || !Unwrap(scratch) ||
+     scratchOffset % 256 || scratchOffset > Unwrap(scratch)->length()) return false;
+  if(p.size() == 8 && p[3] == 0)
+  {
+    if(!structure || structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
+       Unwrap(structure)->device() != device || !children.empty() ||
+       !instances || instances->m_Type != eResBuffer || !Unwrap(instances) ||
+       Unwrap(instances)->device() != device ||
+       !ValidMetalASEmptyIndirectParameters(p, Unwrap(instances)->length()) ||
+       !scratch || scratch->m_Type != eResBuffer || !Unwrap(scratch) ||
+       Unwrap(scratch)->device() != device) return false;
+    auto sizes = device->accelerationStructureSizes(NoChildIndirectInstanceDescriptor(Unwrap(instances), p));
+    raw.clear(); staging.reset();
+    return sizes.accelerationStructureSize && sizes.accelerationStructureSize <= structure->m_Size &&
+        sizes.buildScratchBufferSize && sizes.buildScratchBufferSize <= Unwrap(scratch)->length() - scratchOffset;
+  }
+  if(children.empty())
+  {
+    if(!structure || structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
+       Unwrap(structure)->device() != device || !instances || instances->m_Type != eResBuffer ||
+       !Unwrap(instances) || Unwrap(instances)->device() != device || Unwrap(instances)->heap() ||
+       Unwrap(instances)->storageMode() != MTL::StorageModeShared ||
+       !PackMetalASInactiveInstances((const byte *)Unwrap(instances)->contents(),
+           Unwrap(instances)->length(), p, raw) ||
+       !scratch || scratch->m_Type != eResBuffer || !Unwrap(scratch) ||
+       Unwrap(scratch)->device() != device) return false;
+    auto sizes = device->accelerationStructureSizes(NoChildIndirectInstanceDescriptor(Unwrap(instances), p));
+    staging.reset();
+    return sizes.accelerationStructureSize && sizes.accelerationStructureSize <= structure->m_Size &&
+        sizes.buildScratchBufferSize && sizes.buildScratchBufferSize <= Unwrap(scratch)->length() - scratchOffset;
+  }
+  if(!structure || structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
+     Unwrap(structure)->device() != device || children.empty() || children.size() > MetalMaxIndirectASChildren ||
+     !instances || instances->m_Type != eResBuffer || !Unwrap(instances) ||
+     Unwrap(instances)->device() != device || Unwrap(instances)->heap() ||
+     Unwrap(instances)->storageMode() != MTL::StorageModeShared ||
+     !scratch || scratch->m_Type != eResBuffer || !Unwrap(scratch) ||
+     Unwrap(scratch)->device() != device) return false;
+  rdcarray<uint64_t> identities;
+  for(size_t i = 0; i < children.size(); i++)
+  {
+    auto child = children[i];
+    if(!child || child == structure || child->m_Type != eResAccelerationStructure ||
+       !Unwrap(child) || Unwrap(child)->device() != device ||
+       child->m_LastBuildCommandBuffer == ResourceId() || child->m_LastBuildCommandBuffer == command ||
+       (child->m_LastBuildKind != 1 && child->m_LastBuildKind != 2 &&
+        child->m_LastBuildKind != 3 && child->m_LastBuildKind != 4 &&
+        child->m_LastBuildKind != 6 && child->m_LastBuildKind != 7 && child->m_LastBuildKind != 8)) return false;
+    for(size_t j = 0; j < i; j++) if(child == children[j]) return false;
+    identities.push_back(child->m_CapturedGPUResourceID);
+  }
+  bytebuf direct;
+  if(!PackMetalASIndirectInstances((const byte *)Unwrap(instances)->contents(),
+      Unwrap(instances)->length(), p, identities, raw) ||
+     !ConvertMetalASIndirectInstances(raw, p[3], identities, direct)) return false;
+  staging = NS::TransferPtr(device->newBuffer(direct.data(), direct.size(), MTL::ResourceStorageModeShared));
+  if(!staging) return false;
+  rdcarray<uint64_t> packedParameters = {0, 68,
+      uint64_t(MTL::AccelerationStructureInstanceDescriptorTypeUserID), p[3], 0, 0, 0, 0};
+  auto sizes = device->accelerationStructureSizes(UserIDInstanceDescriptor(staging.get(), children, packedParameters));
+  return sizes.accelerationStructureSize && sizes.accelerationStructureSize <= structure->m_Size &&
+      sizes.buildScratchBufferSize && sizes.buildScratchBufferSize <= Unwrap(scratch)->length() - scratchOffset;
+}
+
+// Frame-private input is an encoder-point snapshot, never CPU contents from the
+// original allocation. Validate the typed packet then rebuild on live children.
+static bool PreparePrivateIndirectInstanceBuild(WrappedMTLAccelerationStructure *structure,
+    const rdcarray<WrappedMTLAccelerationStructure *> &children, WrappedMTLBuffer *instances,
+    WrappedMTLBuffer *scratch, const rdcarray<uint64_t> &p, const bytebuf &raw,
+    MTL::Device *device, NS::SharedPtr<MTL::Buffer> &staging, NS::UInteger scratchOffset)
+{
+  if(!scratch || scratch->m_Type != eResBuffer || !Unwrap(scratch) ||
+     scratchOffset % 256 || scratchOffset > Unwrap(scratch)->length()) return false;
+  uint64_t bytes = 0;
+  if(!structure || structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
+     Unwrap(structure)->device() != device || !instances || instances->m_Type != eResBuffer ||
+     !Unwrap(instances) || Unwrap(instances)->device() != device ||
+     !ValidMetalASPrivateInstanceInput(instances) ||
+     !MetalASIndirectInstanceSpan(p, Unwrap(instances)->length(), bytes) || raw.size() != bytes ||
+     children.size() > MetalMaxIndirectASChildren || !scratch || scratch->m_Type != eResBuffer ||
+     !Unwrap(scratch) || Unwrap(scratch)->device() != device) return false;
+  rdcarray<uint64_t> identities;
+  for(size_t i = 0; i < children.size(); i++)
+  {
+    auto child = children[i];
+    if(!child || child == structure || child->m_Type != eResAccelerationStructure || !Unwrap(child) ||
+       Unwrap(child)->device() != device || child->m_LastBuildCommandBuffer == ResourceId() ||
+       (child->m_LastBuildKind != 1 && child->m_LastBuildKind != 2 && child->m_LastBuildKind != 3 &&
+        child->m_LastBuildKind != 4 && child->m_LastBuildKind != 6 && child->m_LastBuildKind != 7 &&
+        child->m_LastBuildKind != 8)) return false;
+    for(size_t j = 0; j < i; j++) if(child == children[j]) return false;
+    identities.push_back(child->m_CapturedGPUResourceID);
+  }
+  bytebuf packed;
+  if(children.empty())
+  {
+    if(!ValidMetalASInactiveInstances(raw, p[3])) return false;
+    packed = raw;
+  }
+  else if(!ConvertMetalASIndirectInstances(raw, p[3], identities, packed)) return false;
+  staging = NS::TransferPtr(device->newBuffer(packed.data(), packed.size(), MTL::ResourceStorageModeShared));
+  if(!staging) return false;
+  rdcarray<uint64_t> packedParameters = {0, children.empty() ? 72ULL : 68ULL,
+      uint64_t(children.empty() ? MTL::AccelerationStructureInstanceDescriptorTypeIndirect :
+          MTL::AccelerationStructureInstanceDescriptorTypeUserID), p[3], 0, 0, 0, 0};
+  auto descriptor = children.empty() ? NoChildIndirectInstanceDescriptor(staging.get(), packedParameters) :
+      UserIDInstanceDescriptor(staging.get(), children, packedParameters);
+  auto sizes = device->accelerationStructureSizes(descriptor);
+  return sizes.accelerationStructureSize && sizes.accelerationStructureSize <= structure->m_Size &&
+      sizes.buildScratchBufferSize && sizes.buildScratchBufferSize <= Unwrap(scratch)->length() - scratchOffset;
+}
+
+template <typename SerialiserType>
+bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildIndirectInstances(
+    SerialiserType &ser, WrappedMTLAccelerationStructure *structure,
+    rdcarray<WrappedMTLAccelerationStructure *> children, WrappedMTLBuffer *instances,
+    WrappedMTLBuffer *scratch, rdcarray<uint64_t> parameters, bytebuf descriptorBytes, NS::UInteger scratchOffset)
+{
+  SERIALISE_ELEMENT_LOCAL(Encoder, this);
+  SERIALISE_ELEMENT(structure).Important();
+  SERIALISE_ELEMENT(children).Important();
+  SERIALISE_ELEMENT(instances).Important();
+  SERIALISE_ELEMENT(scratch).Important();
+  SERIALISE_ELEMENT(parameters).Important();
+  SERIALISE_ELEMENT(descriptorBytes).Important();
+  if(ser.ChunkMetadata().chunkID == uint32_t(MetalChunk::MTLAccelerationStructureCommandEncoder_buildIndirectInstancesWithScratchOffset))
+  {
+    SERIALISE_ELEMENT(scratchOffset).Important();
+  }
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    bytebuf raw;
+    NS::SharedPtr<MTL::Buffer> staging;
+    const bool privateSnapshot = instances && instances->m_Type == eResBuffer && Unwrap(instances) &&
+        Unwrap(instances)->storageMode() == MTL::StorageModePrivate && !descriptorBytes.empty();
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
+       Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
+       (privateSnapshot ? !PreparePrivateIndirectInstanceBuild(structure, children, instances, scratch,
+           parameters, descriptorBytes, Unwrap(m_Device), staging, scratchOffset) :
+           !PrepareIndirectInstanceBuild(structure, children, instances, scratch, parameters,
+               Unwrap(m_Device), GetResID(Encoder->m_CommandBuffer), raw, staging, scratchOffset) || raw != descriptorBytes))
+    {
+      RDCERR("Invalid Metal typed indirect instance acceleration structure build");
+      return false;
+    }
+    rdcarray<uint64_t> packedParameters = {0, 68,
+        uint64_t(MTL::AccelerationStructureInstanceDescriptorTypeUserID), parameters[3], 0, 0, 0, 0};
+    rdcarray<uint64_t> inactiveParameters = {0, 72,
+        uint64_t(MTL::AccelerationStructureInstanceDescriptorTypeIndirect), parameters[3], 0, 0, 0, 0};
+    rdcarray<ResourceId> childIDs;
+    for(auto child : children) childIDs.push_back(GetResID(child));
+    if(!m_Device->RecordRayIRIndirectASBuild(GetResID(structure), childIDs, GetResID(instances),
+        GetResID(scratch), parameters, descriptorBytes, scratchOffset)) return false;
+    Unwrap(Encoder)->buildAccelerationStructure(Unwrap(structure),
+        (children.empty() ? NoChildIndirectInstanceDescriptor(privateSnapshot ? staging.get() : Unwrap(instances),
+            privateSnapshot ? inactiveParameters : parameters) :
+         UserIDInstanceDescriptor(staging.get(), children, packedParameters)), Unwrap(scratch), scratchOffset);
+    if(privateSnapshot) m_Device->RecordReplayFrozenASInput(GetResID(instances));
+    // The callback retains only the native staging allocation, not a wrapper.
+    Unwrap(Encoder->m_CommandBuffer)->addCompletedHandler([staging](MTL::CommandBuffer *) {});
+    structure->m_LastBuildKind = 5;
+    structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
+    structure->m_LastInstanceChild = children.empty() ? ResourceId() : GetResID(children[0]); structure->m_LastInstanceBuffer = GetResID(instances);
+    if(IsLoading(m_State))
+    {
+      AddEvent(); ActionDescription action;
+      action.customName = "Build Metal Typed Indirect Instance Acceleration Structure";
+      action.flags = ActionFlags::BuildAccStruct; AddAction(action);
+    }
+  }
+  return true;
+}
+
+void WrappedMTLAccelerationStructureCommandEncoder::buildIndirectInstances(
+    WrappedMTLAccelerationStructure *structure,
+    rdcarray<WrappedMTLAccelerationStructure *> children, WrappedMTLBuffer *instances,
+    WrappedMTLBuffer *scratch, rdcarray<uint64_t> parameters, NS::UInteger scratchOffset)
+{
+  bytebuf raw; NS::SharedPtr<MTL::Buffer> staging;
+  const bool privateInitial = IsCaptureMode(m_State) && instances && Unwrap(instances) &&
+      Unwrap(instances)->storageMode() == MTL::StorageModePrivate;
+  bool valid = m_CommandBuffer != NULL;
+  const bool emptyIndirect = parameters.size() == 8 && parameters[3] == 0;
+  if(emptyIndirect)
+    valid &= PrepareIndirectInstanceBuild(structure, children, instances, scratch, parameters,
+        Unwrap(m_Device), GetResID(m_CommandBuffer), raw, staging, scratchOffset);
+  else if(privateInitial)
+  {
+    uint64_t bytes = 0;
+    valid &= structure && structure->m_Type == eResAccelerationStructure && Unwrap(structure) &&
+        Unwrap(structure)->device() == Unwrap(m_Device) &&
+        instances->m_Type == eResBuffer && Unwrap(instances)->device() == Unwrap(m_Device) &&
+        ValidMetalASPrivateInstanceInput(instances) &&
+        MetalASIndirectInstanceSpan(parameters, Unwrap(instances)->length(), bytes) &&
+        scratch && scratch->m_Type == eResBuffer && Unwrap(scratch) &&
+        Unwrap(scratch)->device() == Unwrap(m_Device) && scratchOffset % 256 == 0 &&
+        scratchOffset <= Unwrap(scratch)->length() && children.size() <= MetalMaxIndirectASChildren;
+    for(auto child : children)
+      valid &= child && child != structure && child->m_Type == eResAccelerationStructure &&
+          Unwrap(child) && Unwrap(child)->device() == Unwrap(m_Device) &&
+          child->m_LastBuildCommandBuffer != ResourceId() &&
+          (IsActiveCapturing(m_State) || child->m_LastBuildCommandBuffer != GetResID(m_CommandBuffer)) &&
+          (child->m_LastBuildKind == 1 || child->m_LastBuildKind == 2 || child->m_LastBuildKind == 3 ||
+           child->m_LastBuildKind == 4 || child->m_LastBuildKind == 6 || child->m_LastBuildKind == 7 ||
+           child->m_LastBuildKind == 8);
+  }
+  else valid &= m_CommandBuffer && GetRecord(m_CommandBuffer)->HasOnlyASInitialCommands() &&
+      PrepareIndirectInstanceBuild(structure, children, instances, scratch, parameters,
+          Unwrap(m_Device), GetResID(m_CommandBuffer), raw, staging, scratchOffset);
+  if(!valid)
+  {
+    RDCERR("Invalid or unsupported Metal typed indirect instance build input"); return;
+  }
+  auto descriptor = MTL::InstanceAccelerationStructureDescriptor::descriptor();
+  descriptor->setInstanceDescriptorBuffer(Unwrap(instances));
+  descriptor->setInstanceDescriptorBufferOffset(parameters[0]); descriptor->setInstanceDescriptorStride(parameters[1]);
+  descriptor->setInstanceDescriptorType(MTL::AccelerationStructureInstanceDescriptorTypeIndirect);
+  descriptor->setInstanceCount(parameters[3]);
+  if(privateInitial)
+  {
+    auto sizes = Unwrap(m_Device)->accelerationStructureSizes(descriptor);
+    if(!sizes.accelerationStructureSize || sizes.accelerationStructureSize > structure->m_Size ||
+       !sizes.buildScratchBufferSize || sizes.buildScratchBufferSize > Unwrap(scratch)->length() - scratchOffset)
+    { RDCERR("Invalid Metal Private indirect instance allocation"); return; }
+  }
+  if(children.empty()) TrackInitialBuild(structure, instances, parameters, emptyIndirect ? 10 : 11);
+  SERIALISE_TIME_CALL(Unwrap(this)->buildAccelerationStructure(Unwrap(structure), descriptor, Unwrap(scratch), scratchOffset));
+  structure->m_LastBuildKind = 5; structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
+  structure->m_LastInstanceChild = children.empty() ? ResourceId() : GetResID(children[0]); structure->m_LastInstanceBuffer = GetResID(instances);
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(scratchOffset ? MetalChunk::MTLAccelerationStructureCommandEncoder_buildIndirectInstancesWithScratchOffset :
+        MetalChunk::MTLAccelerationStructureCommandEncoder_buildIndirectInstances);
+    Serialise_buildIndirectInstances(ser, structure, children, instances, scratch, parameters, raw, scratchOffset);
+    auto record = GetRecord(m_CommandBuffer); record->AddParent(GetRecord(structure));
+    for(auto child : children) record->AddParent(GetRecord(child));
+    record->AddParent(GetRecord(instances)); record->AddParent(GetRecord(scratch));
+    MetalASFrameBuild evidence;
+    if(privateInitial && !emptyIndirect && IsActiveCapturing(m_State))
+    {
+      evidence.encoder = GetResID(this); evidence.target = GetResID(structure);
+      evidence.source = GetResID(instances); evidence.scratch = GetResID(scratch);
+      evidence.scratchOffset = scratchOffset;
+      evidence.metadata = ser.ChunkMetadata();
+      evidence.metadataFlags = ser.GetChunkMetadataRecording();
+      evidence.build = record->cmdInfo->initialASBuilds.back().build;
+    }
+    Chunk *chunk = scope.Get(); record->AddChunk(chunk);
+    if(evidence.build)
+    { evidence.chunk = chunk; record->cmdInfo->frameASBuilds.push_back(evidence); }
+    record->MarkResourceFrameReferenced(GetResID(structure), eFrameRef_CompleteWrite);
+    record->MarkResourceFrameReferenced(GetResID(instances), eFrameRef_Read);
+    record->MarkResourceFrameReferenced(GetResID(scratch), eFrameRef_PartialWrite);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder, void,
+    buildIndirectInstances, WrappedMTLAccelerationStructure *,
+    rdcarray<WrappedMTLAccelerationStructure *>, WrappedMTLBuffer *, WrappedMTLBuffer *,
+    rdcarray<uint64_t>, bytebuf, NS::UInteger);
 
 static bool ValidIndexedTriangleBuild(WrappedMTLAccelerationStructure *structure,
                                       WrappedMTLBuffer *vertices, WrappedMTLBuffer *indices,
@@ -3441,7 +3983,7 @@ static bool ValidCompactedSource(WrappedMTLAccelerationStructure *source)
 {
   if(!source) return false;
   if(source->m_LastBuildKind == 2 || source->m_LastBuildKind == 3 ||
-     source->m_LastBuildKind == 6)
+     source->m_LastBuildKind == 6 || source->m_LastBuildKind == 8)
     return source->m_LastTriangleCount == 0;
   if(source->m_LastBuildKind == 1 || source->m_LastBuildKind == 4 ||
      source->m_LastBuildKind == 7)
@@ -3484,6 +4026,8 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_copyAndCompactAcce
        source->m_LastBuildCommandBuffer != source->m_LastCompactedWriteCommandBuffer ||
        source->m_LastCompactedWriteCommandBuffer == GetResID(Encoder->m_CommandBuffer) ||
        actualSize != expectedSize || expectedSize > destination->m_Size ||
+       (source->m_LastBuildCommandBuffer == GetResID(source) &&
+        source->m_LastInitialCompactedSize > destination->m_Size) ||
        destination->m_Size >= source->m_Size)
     {
       RDCERR("Invalid Metal acceleration structure compact copy or GPU size readback");
@@ -3510,17 +4054,47 @@ void WrappedMTLAccelerationStructureCommandEncoder::copyAndCompactAccelerationSt
   WrappedMTLBuffer *sizeBuffer = source ?
       (WrappedMTLBuffer *)GetResourceManager()->GetResource(source->m_LastCompactedSizeBuffer) : NULL;
   uint64_t requiredSize = 0;
+  bool sizeKnown = source && ReadCompactedSize(sizeBuffer, source->m_LastCompactedSizeOffset,
+      source->m_LastCompactedSizeType, requiredSize);
+  if(!sizeKnown && IsCaptureMode(m_State) && source && sizeBuffer && Unwrap(sizeBuffer) &&
+     Unwrap(sizeBuffer)->storageMode() == MTL::StorageModePrivate &&
+     source->m_CapturedCompactedSizeReadback && source->m_CapturedCompactedSizeSubmission &&
+     source->m_CapturedCompactedSizeSubmission->status() == MTL::CommandBufferStatusCompleted &&
+     !source->m_CapturedCompactedSizeSubmission->error())
+  {
+    const uint64_t bytes = source->m_LastCompactedSizeType == MTL::DataTypeUInt ? 4 :
+        source->m_LastCompactedSizeType == MTL::DataTypeULong ? 8 : 0;
+    auto snapshot = source->m_CapturedCompactedSizeReadback.get();
+    if(bytes && snapshot->length() == bytes && snapshot->contents())
+    { memcpy(&requiredSize, snapshot->contents(), bytes); sizeKnown = requiredSize > 0; }
+  }
   if(!source || !destination || source == destination ||
      source->m_Type != eResAccelerationStructure ||
      destination->m_Type != eResAccelerationStructure || !Unwrap(source) ||
-     !Unwrap(destination) || !ReadCompactedSize(sizeBuffer, source->m_LastCompactedSizeOffset,
-                                                source->m_LastCompactedSizeType, requiredSize) ||
+     !Unwrap(destination) || !sizeKnown ||
      !ValidCompactedSource(source) ||
-     source->m_LastBuildCommandBuffer != source->m_LastCompactedWriteCommandBuffer ||
+     source->m_LastBuildCommandBuffer != source->m_CompactedSizeBuildCommandBuffer ||
      source->m_LastCompactedWriteCommandBuffer == GetResID(m_CommandBuffer) ||
      requiredSize > destination->m_Size || destination->m_Size >= source->m_Size)
   {
-    RDCERR("Invalid Metal acceleration structure compact copy or missing completed GPU size");
+    // Capture validation must not drop a valid application's native command.
+    // An unsupported record stays explicitly invalid for replay (expectedSize=0).
+    if(IsCaptureMode(m_State) && source && destination && source != destination &&
+       source->m_Type == eResAccelerationStructure && destination->m_Type == eResAccelerationStructure &&
+       Unwrap(source) && Unwrap(destination) && m_CommandBuffer)
+    {
+      SERIALISE_TIME_CALL(Unwrap(this)->copyAndCompactAccelerationStructure(Unwrap(source), Unwrap(destination)));
+      RDCERR("Metal compact copy forwarded natively; missing typed source/completed size evidence, replay unsupported");
+      CACHE_THREAD_SERIALISER();
+      SCOPED_SERIALISE_CHUNK(MetalChunk::MTLAccelerationStructureCommandEncoder_copyAndCompactAccelerationStructure);
+      Serialise_copyAndCompactAccelerationStructure(ser, source, destination, sizeBuffer,
+          source->m_LastCompactedSizeOffset, source->m_LastCompactedSizeType, 0);
+      auto record = GetRecord(m_CommandBuffer);
+      record->AddParent(GetRecord(source)); record->AddParent(GetRecord(destination));
+      if(sizeBuffer) record->AddParent(GetRecord(sizeBuffer));
+      record->AddChunk(scope.Get());
+    }
+    else RDCERR("Invalid Metal acceleration structure compact copy or missing completed GPU size");
     return;
   }
   SERIALISE_TIME_CALL(Unwrap(this)->copyAndCompactAccelerationStructure(Unwrap(source),
@@ -3603,10 +4177,20 @@ void WrappedMTLAccelerationStructureCommandEncoder::writeCompactedSize(
   }
   SERIALISE_TIME_CALL(Unwrap(this)->writeCompactedAccelerationStructureSize(
       Unwrap(structure), Unwrap(buffer), offset, type));
+  TrackInitialBufferWrite(buffer);
   structure->m_LastCompactedSizeBuffer = GetResID(buffer);
   structure->m_LastCompactedSizeOffset = offset;
   structure->m_LastCompactedSizeType = type;
   structure->m_LastCompactedWriteCommandBuffer = GetResID(m_CommandBuffer);
+  structure->m_CompactedSizeBuildCommandBuffer = structure->m_LastBuildCommandBuffer;
+  structure->m_CapturedCompactedSizeReadback.reset();
+  structure->m_CapturedCompactedSizeSubmission.reset();
+  if(IsCaptureMode(m_State) && Unwrap(buffer)->storageMode() == MTL::StorageModePrivate)
+  {
+    bool found = false;
+    for(ResourceId id : m_PrivateCompactedSizeQueries) found |= id == GetResID(structure);
+    if(!found) m_PrivateCompactedSizeQueries.push_back(GetResID(structure));
+  }
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();
@@ -3616,6 +4200,8 @@ void WrappedMTLAccelerationStructureCommandEncoder::writeCompactedSize(
     MetalResourceRecord *record = GetRecord(m_CommandBuffer);
     record->AddParent(GetRecord(structure));
     record->AddParent(GetRecord(buffer));
+    record->MarkResourceFrameReferenced(GetResID(buffer), eFrameRef_PartialWrite);
+    GetRecord(structure)->AddParent(GetRecord(buffer));
     record->AddChunk(scope.Get());
   }
 }
@@ -3654,6 +4240,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_endEncoding(Serial
 void WrappedMTLAccelerationStructureCommandEncoder::endEncoding()
 {
   SERIALISE_TIME_CALL(Unwrap(this)->endEncoding());
+  SnapshotInitialInputsAtEnd();
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();
@@ -3664,3 +4251,287 @@ void WrappedMTLAccelerationStructureCommandEncoder::endEncoding()
 }
 
 INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder, void, endEncoding);
+
+template <typename SerialiserType>
+bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_insertDebugSignpost(
+    SerialiserType &ser, NS::String *string)
+{
+  SERIALISE_ELEMENT_LOCAL(Encoder, this);
+  SERIALISE_ELEMENT(string).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading() &&
+     (!Encoder || Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
+      !Unwrap(Encoder) || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder)))
+    return false;
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::SetMarker);
+  }
+  return true;
+}
+
+void WrappedMTLAccelerationStructureCommandEncoder::insertDebugSignpost(NS::String *string)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->insertDebugSignpost(string));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLAccelerationStructureCommandEncoder_insertDebugSignpost);
+    Serialise_insertDebugSignpost(ser, string);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder, void,
+                                insertDebugSignpost, NS::String *string);
+
+template <typename SerialiserType>
+bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_pushDebugGroup(
+    SerialiserType &ser, NS::String *string)
+{
+  SERIALISE_ELEMENT_LOCAL(Encoder, this);
+  SERIALISE_ELEMENT(string).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading() &&
+     (!Encoder || Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
+      !Unwrap(Encoder) || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder)))
+    return false;
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(string, ActionFlags::PushMarker);
+  }
+  return true;
+}
+
+void WrappedMTLAccelerationStructureCommandEncoder::pushDebugGroup(NS::String *string)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->pushDebugGroup(string));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLAccelerationStructureCommandEncoder_pushDebugGroup);
+    Serialise_pushDebugGroup(ser, string);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder, void,
+                                pushDebugGroup, NS::String *string);
+
+template <typename SerialiserType>
+bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_popDebugGroup(
+    SerialiserType &ser)
+{
+  SERIALISE_ELEMENT_LOCAL(Encoder, this);
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading() &&
+     (!Encoder || Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
+      !Unwrap(Encoder) || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder)))
+    return false;
+  if(IsLoading(m_State))
+  {
+    AddEvent();
+    m_Device->GetReplay()->AddDebugGroup(NULL, ActionFlags::PopMarker);
+  }
+  return true;
+}
+
+void WrappedMTLAccelerationStructureCommandEncoder::popDebugGroup()
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->popDebugGroup());
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLAccelerationStructureCommandEncoder_popDebugGroup);
+    Serialise_popDebugGroup(ser);
+    GetRecord(m_CommandBuffer)->AddChunk(scope.Get());
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder, void,
+                                popDebugGroup);
+
+template <typename SerialiserType>
+bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_updateFence(
+    SerialiserType &ser, WrappedMTLFence *fence)
+{
+  SERIALISE_ELEMENT_LOCAL(Encoder, this);
+  SERIALISE_ELEMENT(fence).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!Encoder || Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
+       !Unwrap(Encoder) || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
+       !ValidMetalFence(fence))
+    {
+      RDCERR("Invalid Metal acceleration structure updateFence resource or dependency");
+      return false;
+    }
+    Unwrap(Encoder)->updateFence(Unwrap(fence));
+    fence->Updated(m_Device->GetReplayEpoch(), GetResID(Encoder));
+  }
+  return true;
+}
+
+void WrappedMTLAccelerationStructureCommandEncoder::updateFence(WrappedMTLFence *fence)
+{
+  if(!ValidMetalFence(fence))
+  {
+    RDCERR("Invalid Metal acceleration structure fence");
+    return;
+  }
+  SERIALISE_TIME_CALL(Unwrap(this)->updateFence(Unwrap(fence)));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLAccelerationStructureCommandEncoder_updateFence);
+    Serialise_updateFence(ser, fence);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(fence), eFrameRef_Read);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder, void,
+                                updateFence, WrappedMTLFence *fence);
+
+template <typename SerialiserType>
+bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_waitForFence(
+    SerialiserType &ser, WrappedMTLFence *fence)
+{
+  SERIALISE_ELEMENT_LOCAL(Encoder, this);
+  SERIALISE_ELEMENT(fence).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!Encoder || Encoder->m_Type != eResAccelerationStructureCommandEncoder ||
+       !Unwrap(Encoder) || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
+       !ValidMetalFence(fence) || !fence->CanWait(m_Device->GetReplayEpoch(), GetResID(Encoder)))
+    {
+      RDCERR("Invalid Metal acceleration structure waitForFence resource or dependency");
+      return false;
+    }
+    Unwrap(Encoder)->waitForFence(Unwrap(fence));
+  }
+  return true;
+}
+
+void WrappedMTLAccelerationStructureCommandEncoder::waitForFence(WrappedMTLFence *fence)
+{
+  if(!ValidMetalFence(fence))
+  {
+    RDCERR("Invalid Metal acceleration structure fence");
+    return;
+  }
+  SERIALISE_TIME_CALL(Unwrap(this)->waitForFence(Unwrap(fence)));
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLAccelerationStructureCommandEncoder_waitForFence);
+    Serialise_waitForFence(ser, fence);
+    MetalResourceRecord *record = GetRecord(m_CommandBuffer);
+    record->AddChunk(scope.Get());
+    record->MarkResourceFrameReferenced(GetResID(fence), eFrameRef_Read);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder, void,
+                                waitForFence, WrappedMTLFence *fence);
+
+static bool ValidMultiIndexedBuild(WrappedMTLAccelerationStructure *structure,
+    WrappedMTLBuffer *vertices, WrappedMTLBuffer *indices, const rdcarray<uint64_t> &parameters,
+    WrappedMTLBuffer *scratch, NS::UInteger scratchOffset, MTL::Device *device)
+{
+  if(!structure || structure->m_Type != eResAccelerationStructure || !Unwrap(structure) ||
+     !vertices || vertices->m_Type != eResBuffer || !Unwrap(vertices) ||
+     !indices || indices->m_Type != eResBuffer || !Unwrap(indices) ||
+     !scratch || scratch->m_Type != eResBuffer || !Unwrap(scratch) ||
+     Unwrap(structure)->device() != device || Unwrap(vertices)->device() != device ||
+     Unwrap(indices)->device() != device || Unwrap(scratch)->device() != device ||
+     scratchOffset % 256 || scratchOffset > Unwrap(scratch)->length() ||
+     !ValidMetalASMultiIndexedParameters(parameters, Unwrap(vertices)->length(),
+                                         Unwrap(indices)->length())) return false;
+  auto descriptor = MetalASMultiIndexedDescriptor(Unwrap(vertices), Unwrap(indices), parameters);
+  auto sizes = device->accelerationStructureSizes(descriptor);
+  return sizes.accelerationStructureSize && sizes.buildScratchBufferSize &&
+      sizes.accelerationStructureSize <= structure->m_Size &&
+      sizes.buildScratchBufferSize <= Unwrap(scratch)->length() - scratchOffset;
+}
+
+template <typename SerialiserType>
+bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildMultiIndexed(
+    SerialiserType &ser, WrappedMTLAccelerationStructure *structure, WrappedMTLBuffer *vertices,
+    WrappedMTLBuffer *indices, rdcarray<uint64_t> parameters, WrappedMTLBuffer *scratch,
+    NS::UInteger scratchOffset)
+{
+  SERIALISE_ELEMENT_LOCAL(Encoder, this);
+  SERIALISE_ELEMENT(structure).Important();
+  SERIALISE_ELEMENT(vertices).Important();
+  SERIALISE_ELEMENT(indices).Important();
+  SERIALISE_ELEMENT(parameters).Important();
+  SERIALISE_ELEMENT(scratch).Important();
+  SERIALISE_ELEMENT(scratchOffset).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!Encoder || Encoder != m_Device->GetReplayAccelerationStructureCommandEncoder(Encoder) ||
+       Encoder->m_Type != eResAccelerationStructureCommandEncoder || !Unwrap(Encoder) ||
+       !ValidMultiIndexedBuild(structure, vertices, indices, parameters, scratch,
+                               scratchOffset, Unwrap(m_Device)))
+    {
+      RDCERR("Invalid Metal multi-geometry indexed acceleration structure build");
+      return false;
+    }
+    auto descriptor = MetalASMultiIndexedDescriptor(Unwrap(vertices), Unwrap(indices), parameters);
+    Unwrap(Encoder)->buildAccelerationStructure(Unwrap(structure), descriptor,
+                                                Unwrap(scratch), scratchOffset);
+    structure->m_LastBuildKind = 8;
+    structure->m_LastTriangleCount = 0;
+    structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
+    if(IsLoading(m_State))
+    {
+      AddEvent();
+      ActionDescription action;
+      action.customName = "Build Metal Acceleration Structure (Multiple Indexed Geometries)";
+      action.flags = ActionFlags::BuildAccStruct;
+      AddAction(action);
+    }
+  }
+  return true;
+}
+
+void WrappedMTLAccelerationStructureCommandEncoder::buildMultiIndexed(
+    WrappedMTLAccelerationStructure *structure, WrappedMTLBuffer *vertices,
+    WrappedMTLBuffer *indices, rdcarray<uint64_t> parameters, WrappedMTLBuffer *scratch,
+    NS::UInteger scratchOffset)
+{
+  if(!ValidMultiIndexedBuild(structure, vertices, indices, parameters, scratch,
+                             scratchOffset, Unwrap(m_Device)))
+  {
+    RDCERR("Invalid Metal multi-geometry indexed acceleration structure build");
+    return;
+  }
+  auto descriptor = MetalASMultiIndexedDescriptor(Unwrap(vertices), Unwrap(indices), parameters);
+  SERIALISE_TIME_CALL(Unwrap(this)->buildAccelerationStructure(
+      Unwrap(structure), descriptor, Unwrap(scratch), scratchOffset));
+  structure->m_LastBuildKind = 8;
+  structure->m_LastTriangleCount = 0;
+  structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLAccelerationStructureCommandEncoder_buildMultiIndexed);
+    Serialise_buildMultiIndexed(ser, structure, vertices, indices, parameters, scratch, scratchOffset);
+    auto record = GetRecord(m_CommandBuffer);
+    record->AddParent(GetRecord(structure)); record->AddParent(GetRecord(vertices));
+    record->AddParent(GetRecord(indices)); record->AddParent(GetRecord(scratch));
+    record->MarkResourceFrameReferenced(GetResID(scratch), eFrameRef_PartialWrite);
+    record->AddChunk(scope.Get());
+  }
+}
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLAccelerationStructureCommandEncoder, void, buildMultiIndexed,
+    WrappedMTLAccelerationStructure *structure, WrappedMTLBuffer *vertices,
+    WrappedMTLBuffer *indices, rdcarray<uint64_t> parameters, WrappedMTLBuffer *scratch,
+    NS::UInteger scratchOffset);

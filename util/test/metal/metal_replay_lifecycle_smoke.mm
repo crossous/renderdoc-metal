@@ -138,7 +138,19 @@ static bool OpenValidateClose(const char *path, bool expectDraw, bool validateUn
   const ActionDescription *draw = FindAction(renderer->GetRootActions(), ActionFlags::Drawcall);
   if(!draw) draw = FindAction(renderer->GetRootActions(), ActionFlags::MeshDispatch);
   bool rayCompute = false;
+  bool convertedQuery = false;
+  rdcarray<ResourceId> queryOutputs;
   for(const SDChunk *chunk : renderer->GetStructuredFile().chunks)
+  {
+    if((chunk->name == "MTLComputePipelineState::DeclareRayQueryDispatch" ||
+        chunk->name == "MTLComputePipelineState::DeclareRayQueryHeapDispatch") &&
+       FindAction(renderer->GetRootActions(), ActionFlags::Dispatch) != NULL)
+    {
+      convertedQuery = true;
+      const SDObject *output = chunk->FindChild("output");
+      if(output && output->AsResourceId() != ResourceId())
+        queryOutputs.push_back(output->AsResourceId());
+    }
     rayCompute |= chunk->name == "MTLAccelerationStructureCommandEncoder::refitTriangle" ||
                   chunk->name == "MTLAccelerationStructureCommandEncoder::refitTriangleExtended" ||
                   chunk->name == "MTLAccelerationStructureCommandEncoder::refitTriangleNoDuplicate" ||
@@ -151,6 +163,17 @@ static bool OpenValidateClose(const char *path, bool expectDraw, bool validateUn
                   chunk->name == "MTLAccelerationStructureCommandEncoder::buildMultipleDistinctInstances" ||
                   chunk->name == "MTLAccelerationStructureCommandEncoder::buildRepeatedDistinctInstances" ||
                   chunk->name == "MTLComputePipelineState::newIntersectionFunctionTableWithDescriptor";
+    // Opaque inline triangle queries need no function table or frame AS build.
+    // An actual compute dispatch with a non-null AS binding is also a compute
+    // ray capture; its output is verified by the dedicated ray oracle.
+    if(chunk->name == "MTLComputeCommandEncoder::setAccelerationStructure")
+    {
+      const SDObject *bound = chunk->FindChild("structure");
+      rayCompute |= bound && bound->AsResourceId() != ResourceId() &&
+                    FindAction(renderer->GetRootActions(), ActionFlags::Dispatch) != NULL;
+    }
+  }
+  rayCompute |= convertedQuery;
   ResourceId swapBuffer;
   for(const TextureDescription &texture : renderer->GetTextures())
   {
@@ -187,6 +210,29 @@ static bool OpenValidateClose(const char *path, bool expectDraw, bool validateUn
     }
     if(success && validateUnsupported)
       success = ValidateInspectionAndUnsupportedInterfaces(renderer, swapBuffer, draw->eventId);
+  }
+
+  if(success && convertedQuery)
+  {
+    // The dedicated query oracle checks the exact values and header identities.
+    // Exercise reset/readback ownership again across repeated controller teardown.
+    const ActionDescription *dispatch = FindAction(renderer->GetRootActions(), ActionFlags::Dispatch);
+    renderer->SetFrameEvent(dispatch->eventId, true);
+    rdcarray<rdcpair<ResourceId, bytebuf>> results;
+    for(ResourceId output : queryOutputs)
+    {
+      bytebuf bytes = renderer->GetBufferData(output, 0, 16);
+      success &= bytes.size() == 16;
+      results.push_back(make_rdcpair(output, bytes));
+    }
+    success &= !results.empty();
+    for(unsigned cycle = 0; cycle < 2 && success; cycle++)
+    {
+      renderer->SetFrameEvent(0, true);
+      renderer->SetFrameEvent(dispatch->eventId, true);
+      for(const auto &result : results)
+        success &= renderer->GetBufferData(result.first, 0, 16) == result.second;
+    }
   }
 
   renderer->Shutdown();

@@ -2,6 +2,7 @@
 #include "CoreGlobals.h"
 #include "Containers/Ticker.h"
 #include "Editor.h"
+#include "EditorViewportClient.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -9,6 +10,7 @@
 #include "HAL/ThreadSafeCounter.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/Paths.h"
+#include "Misc/FileHelper.h"
 #include "Modules/ModuleManager.h"
 #include "RenderingThread.h"
 #include "RHICommandList.h"
@@ -27,12 +29,16 @@ DEFINE_LOG_CATEGORY_STATIC(LogRenderDocMetalCapture, Log, All);
 #define LOCTEXT_NAMESPACE "RenderDocMetalCapture"
 
 void AnnotateUE58MetalDescriptorLayouts(RENDERDOC_API_1_7_0 *API, FRHICommandListImmediate &RHICmdList);
+bool StartMetalNativeFrameBaseline();
 
 struct FRenderDocMetalCaptureEndState
 {
   FThreadSafeCounter Phase; // 0=waiting, 1=render command pending, 2=finished
   void *Device = nullptr;  // Accessed only by ordered render-thread commands.
   double PresentDeadline = 0.0; // Start only after capture metadata preparation completes.
+  FTextureRHIRef NativeViewportTexture;
+  FIntPoint NativeViewportSize = FIntPoint::ZeroValue;
+  FString NativeViewportAfterCapture;
 };
 
 class FRenderDocMetalCaptureModule final : public IModuleInterface
@@ -40,6 +46,7 @@ class FRenderDocMetalCaptureModule final : public IModuleInterface
 public:
   virtual void StartupModule() override
   {
+    if(StartMetalNativeFrameBaseline()) return;
     UToolMenus::RegisterStartupCallback(
         FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FRenderDocMetalCaptureModule::RegisterMenus));
     ResolveAPI();
@@ -153,6 +160,34 @@ private:
                PreviousWindowSize.X, PreviousWindowSize.Y, int32(PreviousWindowMode), int32(bPreviousWindowMaximized));
       }
     Scene->SetFixedViewportSize(Width, Height);
+    // Optional fixture camera; never used to decide API or replay support.
+    const FString Camera = FPlatformMisc::GetEnvironmentVariable(TEXT("UE_METAL_CAPTURE_CAMERA"));
+    if(!Camera.IsEmpty())
+    {
+      TArray<FString> Parts;
+      Camera.ParseIntoArray(Parts, TEXT(","));
+      double Values[6] = {};
+      bool Valid = Parts.Num() == 6;
+      for(int32 I = 0; Valid && I < 6; ++I)
+        Valid = LexTryParseString(Values[I], *Parts[I]) && FMath::IsFinite(Values[I]);
+      bool Applied = false;
+      if(Valid && GEditor)
+        for(FEditorViewportClient *Client : GEditor->GetAllViewportClients())
+          if(Client && Client->Viewport == Viewport)
+          {
+            Client->SetViewLocation(FVector(Values[0], Values[1], Values[2]));
+            Client->SetViewRotation(FRotator(Values[3], Values[4], Values[5]));
+            Client->Invalidate();
+            Applied = true;
+          }
+      if(!Applied)
+      {
+        Notify(LOCTEXT("InvalidCaptureCamera", "Controlled camera requires six finite values and an editor viewport."), true);
+        RestoreCaptureSize();
+        return false;
+      }
+      UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Controlled editor camera applied: %s"), *Camera);
+    }
     // Complete the resize before StartFrameCapture so frame resource births remain
     // ordinary background resources, and report the resulting size rather than flags.
     FlushRenderingCommands();
@@ -283,6 +318,44 @@ private:
     UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Drawing target viewport %p (%dx%d)"),
            Viewport, Viewport->GetSizeXY().X, Viewport->GetSizeXY().Y);
     Viewport->Draw(true);
+    const FString NativeViewportOutput =
+        FPlatformMisc::GetEnvironmentVariable(TEXT("UE_METAL_NATIVE_VIEWPORT_OUTPUT"));
+    const bool NativeReadAfterCapture =
+        FPlatformMisc::GetEnvironmentVariable(TEXT("UE_METAL_NATIVE_VIEWPORT_AFTER_CAPTURE")) == TEXT("1");
+    if(!NativeViewportOutput.IsEmpty() && NativeReadAfterCapture)
+    {
+      // Retain the exact viewport backing. Read it in the ordered end command,
+      // after EndFrameCapture, before another draw can overwrite this backing.
+      CaptureEndState->NativeViewportTexture = Viewport->GetRenderTargetTexture();
+      CaptureEndState->NativeViewportSize = Viewport->GetSizeXY();
+      CaptureEndState->NativeViewportAfterCapture = NativeViewportOutput;
+    }
+    if(!NativeViewportOutput.IsEmpty() && !NativeReadAfterCapture)
+    {
+      // Optional diagnostic oracle from this exact full viewport draw, before
+      // Slate presentation. Frame-end readback can affect scheduling; do not
+      // count an output match with this observer as a production mechanism fix.
+      FReadSurfaceDataFlags Flags(RCM_UNorm);
+      Flags.SetLinearToGamma(false);
+      TArray<FColor> Pixels;
+      const FIntPoint Size = Viewport->GetSizeXY();
+      if(FPaths::IsRelative(NativeViewportOutput) || Size.X > 2048 || Size.Y > 2048 ||
+         IFileManager::Get().FileExists(*NativeViewportOutput) ||
+         !Viewport->ReadPixels(Pixels, Flags) || Pixels.Num() != Size.X * Size.Y ||
+         !FFileHelper::SaveArrayToFile(TArrayView<const uint8>(reinterpret_cast<const uint8 *>(Pixels.GetData()), Pixels.Num() * sizeof(FColor)), *NativeViewportOutput))
+      {
+        UE_LOG(LogRenderDocMetalCapture, Error, TEXT("Same-frame Native viewport observation failed"));
+        ENQUEUE_RENDER_COMMAND(DiscardNativeViewportObservation)(
+            [CaptureAPI = API, PreviousEmitDrawEvents = bOldEmitDrawEvents](FRHICommandListImmediate &) {
+              CaptureAPI->DiscardFrameCapture(nullptr, nullptr);
+              SetEmitDrawEvents(PreviousEmitDrawEvents);
+            });
+        FlushRenderingCommands();
+        RestoreCaptureSize();
+        return;
+      }
+      UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Same-frame Native viewport saved: %dx%d BGRA, linearToGamma=0, %s"), Size.X, Size.Y, *NativeViewportOutput);
+    }
     // A scene viewport can render offscreen; Slate presents its texture later in the editor
     // tick. Keep the controlled capture open through that present so Metal has a backbuffer.
     EndCaptureHandle = FTSTicker::GetCoreTicker().AddTicker(
@@ -317,6 +390,22 @@ private:
           const uint32 Result = Presented ? CaptureAPI->EndFrameCapture(nullptr, nullptr) :
                                             CaptureAPI->DiscardFrameCapture(nullptr, nullptr);
           SetEmitDrawEvents(PreviousEmitDrawEvents);
+          if(Presented && Result && !State->NativeViewportAfterCapture.IsEmpty())
+          {
+            const FIntPoint Size = State->NativeViewportSize;
+            TArray<FColor> Pixels;
+            FReadSurfaceDataFlags Flags(RCM_UNorm);
+            Flags.SetLinearToGamma(false);
+            const bool Valid = State->NativeViewportTexture.IsValid() && Size.X > 0 && Size.Y > 0 &&
+                Size.X <= 2048 && Size.Y <= 2048 && !FPaths::IsRelative(State->NativeViewportAfterCapture) &&
+                !IFileManager::Get().FileExists(*State->NativeViewportAfterCapture);
+            if(Valid)
+              RHICmdList.ReadSurfaceData(State->NativeViewportTexture, FIntRect(0, 0, Size.X, Size.Y), Pixels, Flags);
+            const bool Saved = Valid && Pixels.Num() == Size.X * Size.Y &&
+                FFileHelper::SaveArrayToFile(TArrayView<const uint8>(reinterpret_cast<const uint8 *>(Pixels.GetData()), Pixels.Num() * sizeof(FColor)), *State->NativeViewportAfterCapture);
+            UE_LOG(LogRenderDocMetalCapture, Display, TEXT("Same-frame Native viewport AFTER capture: saved=%d %dx%d BGRA, linearToGamma=0, %s"), Saved, Size.X, Size.Y, *State->NativeViewportAfterCapture);
+            State->NativeViewportTexture.SafeRelease();
+          }
           State->Phase.Set(2);
           if(Presented)
           {

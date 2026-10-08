@@ -31,7 +31,7 @@
 template <>
 rdcstr DoStringise(const MetalChunk &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1415, "Chunks changed without updating names");
+  RDCCOMPILE_ASSERT((uint32_t)MetalChunk::Max == 1445, "Chunks changed without updating names");
 
   BEGIN_ENUM_STRINGISE(MetalChunk)
   {
@@ -198,6 +198,16 @@ rdcstr DoStringise(const MetalChunk &el)
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_enqueue, "MTLCommandBuffer::enqueue");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_encodeMetalFXSpatial, "MTLCommandBuffer::encodeMetalFXSpatial");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_encodeMetalFXTemporal, "MTLCommandBuffer::encodeMetalFXTemporal");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_insertDebugSignpost,
+                               "MTLAccelerationStructureCommandEncoder::insertDebugSignpost");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_pushDebugGroup,
+                               "MTLAccelerationStructureCommandEncoder::pushDebugGroup");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_popDebugGroup,
+                               "MTLAccelerationStructureCommandEncoder::popDebugGroup");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_updateFence,
+                               "MTLAccelerationStructureCommandEncoder::updateFence");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_waitForFence,
+                               "MTLAccelerationStructureCommandEncoder::waitForFence");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_commit, "MTLCommandBuffer::commit");
     STRINGISE_ENUM_CLASS_NAMED(MTLCommandBuffer_addScheduledHandler,
                                "MTLCommandBuffer::addScheduledHandler");
@@ -253,6 +263,8 @@ rdcstr DoStringise(const MetalChunk &el)
                                "MTLParallelRenderCommandEncoder::popDebugGroup");
     STRINGISE_ENUM_CLASS_NAMED(MTLParallelRenderCommandEncoder_insertDebugSignpost,
                                "MTLParallelRenderCommandEncoder::insertDebugSignpost");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_CaptureHeapBirthContents, "MTLBuffer::CaptureHeapBirthContents");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_CaptureHeapBirthUnspecified, "MTLBuffer::CaptureHeapBirthUnspecified");
     STRINGISE_ENUM_CLASS_NAMED(MTLResource_CaptureGPUIdentity,
                                "MTLResource::CaptureGPUIdentity");
     STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_DeclareDescriptorTable,
@@ -804,6 +816,31 @@ rdcstr DoStringise(const MetalChunk &el)
     STRINGISE_ENUM_CLASS_NAMED(MTLHeap_newTexture, "MTLHeap::newTexture");
     STRINGISE_ENUM_CLASS_NAMED(MTLHeap_newBufferWithOffset, "MTLHeap::newBuffer(offset)");
     STRINGISE_ENUM_CLASS_NAMED(MTLHeap_newTextureWithOffset, "MTLHeap::newTexture(offset)");
+    STRINGISE_ENUM_CLASS_NAMED(MTLHeap_newAccelerationStructure, "MTLHeap::newAccelerationStructure");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildMultiIndexed, "MTLAccelerationStructureCommandEncoder::buildMultiIndexed");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructure_CaptureGPUIdentity, "MTLAccelerationStructure::CaptureGPUIdentity");
+    STRINGISE_ENUM_CLASS_NAMED(MTLFunctionTable_CaptureGPUIdentity, "MTLFunctionTable::CaptureGPUIdentity");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_DeclareRayIRDispatch, "MTLComputePipelineState::DeclareRayIRDispatch");
+    STRINGISE_ENUM_CLASS_NAMED(MTLFunctionHandle_DeclareRayIRShaderRole, "MTLFunctionHandle::DeclareRayIRShaderRole");
+    STRINGISE_ENUM_CLASS_NAMED(MTLFunctionHandle_DeclareRayIRLocalRoot, "MTLFunctionHandle::DeclareRayIRLocalRoot");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_DeclareRayIRHeapEntry, "MTLComputePipelineState::DeclareRayIRHeapEntry");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_DeclareRayIRGlobalRoot, "MTLComputePipelineState::DeclareRayIRGlobalRoot");
+    STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setIntersectionFunctionTable,
+                               "MTLArgumentEncoder::setIntersectionFunctionTable");
+    STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_setAccelerationStructure,
+                               "MTLArgumentEncoder::setAccelerationStructure");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildUserIDInstances, "MTLAccelerationStructureCommandEncoder::buildUserIDInstances");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildFrozenMultiIndexed, "MTLAccelerationStructureCommandEncoder::buildFrozenMultiIndexed");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_DeclareRayQueryDispatch, "MTLComputePipelineState::DeclareRayQueryDispatch");
+    STRINGISE_ENUM_CLASS_NAMED(MTLBuffer_DeclareRayASHeader, "MTLBuffer::DeclareRayASHeader");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_DeclareIRComputeRoot, "MTLComputePipelineState::DeclareIRComputeRoot");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_DeclareIRComputeHeapEntry, "MTLComputePipelineState::DeclareIRComputeHeapEntry");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_CaptureIRComputeReflection, "MTLComputePipelineState::CaptureIRComputeReflection");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_DeclareRayQueryHeapCBVRoot, "MTLComputePipelineState::DeclareRayQueryHeapCBVRoot");
+    STRINGISE_ENUM_CLASS_NAMED(MTLComputePipelineState_DeclareRayQueryHeapDispatch, "MTLComputePipelineState::DeclareRayQueryHeapDispatch");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildFrozenTriangles, "MTLAccelerationStructureCommandEncoder::buildFrozenTriangles");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildIndirectInstancesWithScratchOffset, "MTLAccelerationStructureCommandEncoder::buildIndirectInstancesWithScratchOffset");
+    STRINGISE_ENUM_CLASS_NAMED(MTLAccelerationStructureCommandEncoder_buildIndirectInstances, "MTLAccelerationStructureCommandEncoder::buildIndirectInstances");
     STRINGISE_ENUM_CLASS_NAMED(MTLArgumentEncoder_newArgumentEncoderForBufferAtIndex,
                                "MTLArgumentEncoder::newArgumentEncoderForBufferAtIndex");
     STRINGISE_ENUM_CLASS_NAMED(Max, "Max Chunk");

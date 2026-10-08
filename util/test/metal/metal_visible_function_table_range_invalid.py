@@ -66,7 +66,8 @@ def main():
             run(command, 'convert', '-f', xml, '-o', invalid, '-c', 'rdc')
             message = run(command, 'replay', '--loops', '1', invalid, success=False)
             assert ('Failed to process Metal chunk' in message or
-                    'Failed to replay Metal chunk' in message), (tag, message)
+                    'Failed to replay Metal chunk' in message or
+                    'Missing or wrong-type Metal ray binding object' in message), (tag, message)
     print(f'{capture.stem} visible-table range malformed captures rejected without crash: {len(cases)} cases')
 
 

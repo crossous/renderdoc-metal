@@ -10,7 +10,7 @@ struct InitialTextureSpec
   unsigned format, type, width, height, depth, arrays, mips, bytes, block, components;
 };
 
-inline std::vector<InitialTextureSpec> InitialTextureSpecs(bool shared=false)
+inline std::vector<InitialTextureSpec> InitialTextureSpecs(bool shared=false, bool uint16=false)
 {
   // Expected sizes are independent of the driver's format/footprint helpers.
   const unsigned formats[][4] = {
@@ -32,13 +32,15 @@ inline std::vector<InitialTextureSpec> InitialTextureSpecs(bool shared=false)
     }
   if(!shared)for(unsigned format:{250u,252u,260u})for(unsigned type:{2u,3u})
     specs.push_back({format,type,3,5,1,type==3?2u:1u,3,format==250?2u:format==260?8u:4u,1,1});
+  if(uint16&&!shared)for(unsigned type:{2u,3u,5u,6u,7u})
+    specs.push_back({113,type,3,type==5||type==6?3u:5u,type==7?2u:1u,type==3||type==6?2u:1u,type==5||type==6?2u:3u,8,1,4});
   return specs;
 }
 
 inline std::vector<InitialTextureSpec> BufferTextureInitialSpecs()
 {
   const unsigned formats[][3]={{53,4,1},{123,16,4},{125,16,4},{70,4,4},{55,4,1},{72,4,4},
-    {105,8,2},{54,4,1},{25,2,1},{65,4,2},{103,8,2},{73,4,4},{23,2,1},{115,8,4},{63,4,2},{10,1,1}};
+    {105,8,2},{54,4,1},{25,2,1},{65,4,2},{103,8,2},{73,4,4},{23,2,1},{115,8,4},{63,4,2},{10,1,1},{113,8,4}};
   std::vector<InitialTextureSpec> result;
   for(const auto &f:formats)result.push_back({f[0],9,7,1,1,1,1,f[1],1,f[2]});
   return result;
@@ -77,6 +79,7 @@ inline uint8_t InitialTextureByte(const InitialTextureSpec &s,unsigned mip,unsig
     {
       const unsigned width=s.bytes/s.components;
       uint32_t value=17+19*mip+11*slice+13*z+7*y+3*x+23*component;
+      if(s.format==113)value=32768+8191*component+(x%101);
       if(s.format==60||s.format==110)value+=0x2300;
       if(s.format==54)value=uint32_t(-int32_t(value));
       if(s.format==90||s.format==92)

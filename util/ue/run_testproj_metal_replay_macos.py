@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from prepare_ue_metal_replay_candidate import sha
+from ue_metal_capture_supervisor import run_launcher
 
 
 def main():
@@ -91,8 +92,9 @@ def main():
                 if not preserved.exists():
                     shutil.copyfile(live, preserved)
             with (session / 'capture-launch.log').open('w') as log:
-                subprocess.run(launcher + ['--run'], env=env, stdout=log,
-                               stderr=subprocess.STDOUT, check=True, timeout=400)
+                launch_exit = run_launcher(launcher + ['--run'], env, log, timeout=400)
+                if launch_exit:
+                    raise subprocess.CalledProcessError(launch_exit, launcher + ['--run'])
             if settings_sha is not None and sha(settings) != settings_sha:
                 raise RuntimeError('Original editor settings changed during isolated launch')
             if not live.exists() or sha(live) == previous_sha:

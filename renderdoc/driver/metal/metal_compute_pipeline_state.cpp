@@ -109,7 +109,7 @@ bool WrappedMTLComputePipelineState::Serialise_newVisibleFunctionTable(Serialise
   {
     if(!Pipeline || Pipeline->m_Type != eResComputePipelineState || !Pipeline->m_Real ||
        Table == ResourceId() || GetResourceManager()->HasResource(Table) ||
-       count == 0 || count > 32)
+       count == 0 || count > MetalMaxComputeVisibleFunctionTableEntries)
     {
       RDCERR("Invalid Metal compute visible-function-table descriptor");
       return false;

@@ -62,6 +62,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--audit-dir', type=Path, required=True)
     parser.add_argument('--build-dir', type=Path, default=root / 'build-macos-debug')
+    parser.add_argument('--pre-submit-manifest', type=Path,
+                        help='Reuse successful bounded no-GPU validation of this exact capture/library')
     args = parser.parse_args()
     source, output, audit, build = [p.resolve() for p in
                                  (args.capture, args.output, args.audit_dir, args.build_dir)]
@@ -78,9 +80,27 @@ def main():
     try:
         # Existing strict diagnostic refuses malformed provenance/order/lifetime
         # before initial GPU uploads and before any captured GPU submission.
-        subprocess.run([sys.executable, str(root / 'util/ue/run_ue_metal_replay_diagnostic.py'),
-                        '--capture', str(source), '--mode', 'pre-submit',
-                        '--build-dir', str(build), '--log', str(audit / 'pre-submit.log')], check=True)
+        if args.pre_submit_manifest:
+            proof_path = args.pre_submit_manifest.resolve()
+            proof = json.loads(proof_path.read_text())
+            # This diagnostic deliberately returns APIReplayFailed after its
+            # successful checks, before initial/frame GPU submission.
+            if not (proof.get('accepted') is True and proof.get('exit') == 4 and
+                    proof.get('backend_sha256') == library_sha and
+                    proof.get('capture_sha256') == original_sha and
+                    proof.get('GPU_wait_observed') is False and
+                    proof.get('strict_diagnostics') == [] and proof.get('stopped') == ''):
+                raise RuntimeError('Prior pre-submit proof is incomplete or belongs to another candidate')
+            log = proof_path.parent / 'pre-submit.log'
+            if 'Metal pre-submit diagnostic accepted candidate coverage65' not in log.read_text(errors='replace'):
+                raise RuntimeError('Prior pre-submit acceptance log is missing')
+            manifest.update(pre_submit_proof=str(proof_path),
+                            pre_submit_proof_sha256=sha(proof_path),
+                            pre_submit_log_sha256=sha(log))
+        else:
+            subprocess.run([sys.executable, str(root / 'util/ue/run_ue_metal_replay_diagnostic.py'),
+                            '--capture', str(source), '--mode', 'pre-submit',
+                            '--build-dir', str(build), '--log', str(audit / 'pre-submit.log')], check=True)
         env = os.environ.copy()
         for key in tuple(env):
             if key.startswith('RENDERDOC_METAL_'):
@@ -135,7 +155,7 @@ def main():
                         original_chunks=len(original_chunks), candidate_chunks=len(replay_chunks),
                         binary_members=len(binaries), preserved_binary_payloads_and_thumbnail=True,
                         preserved_commands_and_metadata=True,
-                        pre_submit_log=str(audit / 'pre-submit.log'))
+                        pre_submit_log=str(log if args.pre_submit_manifest else audit / 'pre-submit.log'))
         print(json.dumps(manifest, indent=2))
         return 0
     finally:

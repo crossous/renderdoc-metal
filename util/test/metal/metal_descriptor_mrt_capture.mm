@@ -28,6 +28,8 @@ int main()
     const bool depthPass=depthFormatName!=nullptr;
     const bool depthOnlyPass=getenv("RENDERDOC_METAL_MRT_DEPTH_ONLY")!=nullptr;
     if(depthOnlyPass && !depthPass)return 51;
+    const bool fragmentlessColor=getenv("RENDERDOC_METAL_MRT_FRAGMENTLESS_COLOR")!=nullptr;
+    if(fragmentlessColor && !depthOnlyPass)return 91;
     const bool stencilPass=depthPass && !strcmp(depthFormatName,"d32s8");
     const bool frameDepth=getenv("RENDERDOC_METAL_MRT_FRAME_DEPTH")!=nullptr;
     if(frameDepth && !depthPass)return 41;
@@ -38,7 +40,11 @@ int main()
     const bool crossAlias=getenv("RENDERDOC_METAL_CROSS_KIND_ALIAS")!=nullptr;
     if(crossAlias && !frameIntermediate)return 35;
     if(frameTextureView && !frameIntermediate)return 38;
-    const bool fiveTargets=getenv("RENDERDOC_METAL_FIVE_MRT")!=nullptr;
+    const unsigned targetCount=getenv("RENDERDOC_METAL_MRT_TARGETS")?
+        unsigned(strtoul(getenv("RENDERDOC_METAL_MRT_TARGETS"),nullptr,10)):
+        getenv("RENDERDOC_METAL_FIVE_MRT")?5U:2U;
+    if(targetCount!=2 && (targetCount<5 || targetCount>8))return 90;
+    const bool fiveTargets=targetCount>2;
     const bool directGraphicsBuffers=getenv("RENDERDOC_METAL_MRT_DIRECT_GRAPHICS_BUFFERS")!=nullptr;
     const bool parallelPass=getenv("RENDERDOC_METAL_PARALLEL_MRT")!=nullptr;
     id<MTLDevice> device=MTLCreateSystemDefaultDevice(); NSError *error=nil;
@@ -73,7 +79,7 @@ int main()
       cd.sampleCount=16; cd.storageMode=MTLStorageModeShared;
       counter=[device newCounterSampleBufferWithDescriptor:cd error:&error]; if(!counter)return 48;
     }
-    id<MTLLibrary> library=[device newLibraryWithSource:@R"MSL(
+    NSString *shaderSource=@R"MSL(
 #include <metal_stdlib>
 using namespace metal;
 struct BufferEntry { device const uint *value [[id(0)]]; ulong z [[id(1)]]; ulong metadata [[id(2)]]; };
@@ -147,7 +153,17 @@ fragment MRTOut resource_fragment_direct(VSOut in [[stage_in]], const device ulo
   float4 color=ordinary ? float4(texture->image.sample(sampling->point,float2(0.5)).r+(in.value+17.0)/255.0,64.0/255.0,128.0/255.0,1) : float4(1,0,1,1);
   MRTOut out;out.first=color;out.second=color;return out;
 }
-struct MRT5Out { float4 first [[color(0)]]; float4 second [[color(1)]]; float4 third [[color(2)]]; float4 fourth [[color(3)]]; float4 fifth [[color(4)]]; };
+struct MRT5Out { float4 first [[color(0)]]; float4 second [[color(1)]]; float4 third [[color(2)]]; float4 fourth [[color(3)]]; float4 fifth [[color(4)]];
+#if MRT_COUNT > 5
+  float4 sixth [[color(5)]];
+#endif
+#if MRT_COUNT > 6
+  float4 seventh [[color(6)]];
+#endif
+#if MRT_COUNT > 7
+  float4 eighth [[color(7)]];
+#endif
+};
 fragment MRT5Out resource_fragment_five(VSOut in [[stage_in]], const device ulong *root [[buffer(0)]])
 {
   const device TextureEntry *texture=reinterpret_cast<const device TextureEntry *>(root[2]);
@@ -156,7 +172,17 @@ fragment MRT5Out resource_fragment_five(VSOut in [[stage_in]], const device ulon
       sampling->metadata==0x3333333333333333ul && root[1]==0xabcdef0123456789ul &&
       root[3]==0xabcdef0123456789ul && root[5]==0xabcdef0123456789ul;
   float4 color=ordinary ? float4(texture->image.sample(sampling->point,float2(0.5)).r+(in.value+17.0)/255.0,64.0/255.0,128.0/255.0,1) : float4(1,0,1,1);
-  MRT5Out out;out.first=color;out.second=color;out.third=color;out.fourth=color;out.fifth=color;return out;
+  MRT5Out out;out.first=color;out.second=color;out.third=color;out.fourth=color;out.fifth=color;
+#if MRT_COUNT > 5
+  out.sixth=color;
+#endif
+#if MRT_COUNT > 6
+  out.seventh=color;
+#endif
+#if MRT_COUNT > 7
+  out.eighth=color;
+#endif
+  return out;
 }
 fragment float4 mrt_resolve(VSOut in [[stage_in]], const device ulong *root [[buffer(0)]])
 {
@@ -176,7 +202,10 @@ kernel void zero_arguments() {}
 kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *args [[buffer(2)]])
 { if(root[1]==0xabcdef0123456789ul){args[0]=0;args[1]=1;args[2]=1;} }
 
-)MSL" options:nil error:&error];
+)MSL";
+    id<MTLLibrary> library=[device newLibraryWithSource:
+        [NSString stringWithFormat:@"#define MRT_COUNT %u\n%@",targetCount,shaderSource]
+        options:nil error:&error];
     if(!library) { fprintf(stderr,"%s\n",error.localizedDescription.UTF8String); return 2; }
     id<MTLComputePipelineState> pipeline=[device newComputePipelineStateWithFunction:[library newFunctionWithName:indirectPass?@"resources_indirect":@"resources"] error:&error];
     id<MTLComputePipelineState> copyPipeline=[device newComputePipelineStateWithFunction:[library newFunctionWithName:indirectPass?@"copy_resource_indirect":@"copy_resource"] error:&error];
@@ -193,24 +222,27 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
       renderDescriptor.stencilAttachmentPixelFormat=stencilPass?depthFormat:MTLPixelFormatInvalid; }
     renderDescriptor.colorAttachments[0].pixelFormat=MTLPixelFormatBGRA8Unorm;
     renderDescriptor.colorAttachments[1].pixelFormat=MTLPixelFormatRGBA8Unorm;
-    if(fiveTargets)for(unsigned slot=2;slot<5;slot++)renderDescriptor.colorAttachments[slot].pixelFormat=MTLPixelFormatRGBA8Unorm;
+    if(fiveTargets)for(unsigned slot=2;slot<targetCount;slot++)renderDescriptor.colorAttachments[slot].pixelFormat=MTLPixelFormatRGBA8Unorm;
     id<MTLRenderPipelineState> renderPipeline=[device newRenderPipelineStateWithDescriptor:renderDescriptor error:&error];
     if(!renderPipeline){fprintf(stderr,"%s\n",error.localizedDescription.UTF8String);return 20;}
     id<MTLRenderPipelineState> depthOnlyPipeline=nil;
     if(depthOnlyPass) {
       MTLRenderPipelineDescriptor *depthOnlyDescriptor=[renderDescriptor copy]; depthOnlyDescriptor.fragmentFunction=nil;
       for(unsigned slot=0;slot<8;slot++)depthOnlyDescriptor.colorAttachments[slot].pixelFormat=MTLPixelFormatInvalid;
+      if(fragmentlessColor)depthOnlyDescriptor.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA8Unorm;
       depthOnlyPipeline=[device newRenderPipelineStateWithDescriptor:depthOnlyDescriptor error:&error];
       if(!depthOnlyPipeline){fprintf(stderr,"%s\n",error.localizedDescription.UTF8String);return 52;}
     }
     renderDescriptor.fragmentFunction=[library newFunctionWithName:@"mrt_resolve"];
     if(directGraphicsBuffers) renderDescriptor.vertexFunction=[library newFunctionWithName:@"resource_vertex"];
-    for(unsigned slot=1;slot<5;slot++)renderDescriptor.colorAttachments[slot].pixelFormat=MTLPixelFormatInvalid;
+    for(unsigned slot=1;slot<targetCount;slot++)renderDescriptor.colorAttachments[slot].pixelFormat=MTLPixelFormatInvalid;
     id<MTLRenderPipelineState> resolvePipeline=[device newRenderPipelineStateWithDescriptor:renderDescriptor error:&error];
     MTLTextureDescriptor *intermediateDescriptor=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:2 height:2 mipmapped:NO];
     intermediateDescriptor.storageMode=MTLStorageModeShared;
     intermediateDescriptor.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead;
     id<MTLTexture> intermediate=[device newTextureWithDescriptor:intermediateDescriptor];
+    id<MTLTexture> fragmentlessTarget=fragmentlessColor?[device newTextureWithDescriptor:intermediateDescriptor]:nil;
+    if(fragmentlessColor && !fragmentlessTarget)return 92;
     id<MTLTexture> baseIntermediate=intermediate;
     id<MTLTexture> sampledIntermediate=intermediate;
     MTLTextureDescriptor *frameDescriptor=[intermediateDescriptor copy];
@@ -226,7 +258,7 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
       frameHeap=[device newHeapWithDescriptor:heapDescriptor];if(!frameHeap)return 31;
     }
     NSMutableArray<id<MTLTexture>> *extraTargets=[NSMutableArray new];
-    if(fiveTargets)for(unsigned slot=2;slot<5;slot++)[extraTargets addObject:[device newTextureWithDescriptor:intermediateDescriptor]];
+    if(fiveTargets)for(unsigned slot=2;slot<targetCount;slot++)[extraTargets addObject:[device newTextureWithDescriptor:intermediateDescriptor]];
     const uint64_t resolveBytes[]={0,intermediate.gpuResourceID._impl,0x2222222222222222ULL};
     id<MTLBuffer> resolveTable=nil;
     if(!resolvePipeline||!intermediate)return 24;
@@ -301,7 +333,7 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
       auto get=(pRENDERDOC_GetAPI)dlsym(RTLD_DEFAULT,"RENDERDOC_GetAPI");
       if(!get || !get(eRENDERDOC_API_Version_1_7_0,(void **)&api)) return 4;
       api->SetCaptureFilePathTemplate(path);
-      RENDERDOC_AnnotationValue coverage={}; coverage.uint32=(getenv("RENDERDOC_METAL_MRT_BLIT_MARKERS") || residencyA || directGraphicsBuffers || visibilityOutput || getenv("RENDERDOC_METAL_MRT_LOGICAL_GPU_RETIREMENT"))?65:mixedFreshCPUSlot?64:unusedProducerSlot?63:freshCPUSlot?62:getenv("RENDERDOC_METAL_MRT_INITIAL_CPU_SLOT")?61:getenv("RENDERDOC_METAL_MRT_NATIVE_BUDGET")?60:renderIndirect?58:indirectPass?57:depthOnlyPass?56:deferredPass?55:counterPass?54:depthPass?53:frameTextureView?26:(crossAlias?24:(frameIntermediate?21:((fiveTargets||parallelPass)?20:9)));
+      RENDERDOC_AnnotationValue coverage={}; coverage.uint32=(fragmentlessColor || targetCount>5 || getenv("RENDERDOC_METAL_MRT_BLIT_MARKERS") || residencyA || directGraphicsBuffers || visibilityOutput || getenv("RENDERDOC_METAL_MRT_LOGICAL_GPU_RETIREMENT"))?65:mixedFreshCPUSlot?64:unusedProducerSlot?63:freshCPUSlot?62:getenv("RENDERDOC_METAL_MRT_INITIAL_CPU_SLOT")?61:getenv("RENDERDOC_METAL_MRT_NATIVE_BUDGET")?60:renderIndirect?58:indirectPass?57:depthOnlyPass?56:deferredPass?55:counterPass?54:depthPass?53:frameTextureView?26:(crossAlias?24:(frameIntermediate?21:((fiveTargets||parallelPass)?20:9)));
       if(api->SetObjectAnnotation((__bridge void *)device,(__bridge void *)device,"metal.descriptorCoverage",eRENDERDOC_UInt32,0,&coverage)) return 5;
     }
     auto annotation=[&](id object,const char *key,uint64_t a,uint64_t b,uint64_t c,uint64_t d) {
@@ -543,6 +575,12 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
       if(!consume())return 19;
       if(depthOnlyPass) {
         auto dp=[MTLRenderPassDescriptor renderPassDescriptor];
+        if(fragmentlessColor) {
+          dp.colorAttachments[0].texture=fragmentlessTarget;
+          dp.colorAttachments[0].loadAction=MTLLoadActionClear;
+          dp.colorAttachments[0].storeAction=deferredPass?MTLStoreActionUnknown:MTLStoreActionStore;
+          dp.colorAttachments[0].clearColor=MTLClearColorMake(80.0/255,64.0/255,128.0/255,1);
+        }
         dp.depthAttachment.texture=depthTexture; dp.depthAttachment.loadAction=MTLLoadActionClear;
         dp.depthAttachment.storeAction=deferredPass?MTLStoreActionUnknown:MTLStoreActionStore; dp.depthAttachment.clearDepth=1;
         if(stencilPass) { dp.stencilAttachment.texture=depthTexture; dp.stencilAttachment.loadAction=MTLLoadActionClear;
@@ -556,11 +594,17 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
         [child setVertexBytes:root length:sizeof(root) atIndex:0];
         for(id<MTLBuffer> table:tables)[child useResource:table usage:MTLResourceUsageRead stages:MTLRenderStageVertex];
         [child useResource:input usage:MTLResourceUsageRead stages:MTLRenderStageVertex];
+        if(fragmentlessColor) {
+          if(annotation(child,"metal.descriptorInlineLayout",2,0,3,16))return 93;
+          for(unsigned i=0;i<3;i++)if(annotation(child,"metal.descriptorInlineBinding",uint64_t(2)<<32,i,(uint64_t)(__bridge void *)tables[i],0))return 94;
+          [child setFragmentBytes:root length:sizeof(root) atIndex:0];
+          [child setFragmentBuffer:input offset:0 atIndex:2];
+        }
         [child drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-        if(deferredPass && !parallelPass) { [child setDepthStoreAction:MTLStoreActionStore];
+        if(deferredPass && !parallelPass) { if(fragmentlessColor)[child setColorStoreAction:MTLStoreActionStore atIndex:0]; [child setDepthStoreAction:MTLStoreActionStore];
           if(stencilPass)[child setStencilStoreAction:MTLStoreActionStore]; }
         [child endEncoding];
-        if(parallelPass) { if(deferredPass) { [parent setDepthStoreAction:MTLStoreActionStore];
+        if(parallelPass) { if(deferredPass) { if(fragmentlessColor)[parent setColorStoreAction:MTLStoreActionStore atIndex:0]; [parent setDepthStoreAction:MTLStoreActionStore];
             if(stencilPass)[parent setStencilStoreAction:MTLStoreActionStore]; } [parent endEncoding]; }
       }
       id<CAMetalDrawable> drawable=[layer nextDrawable];MTLRenderPassDescriptor *pass=[MTLRenderPassDescriptor renderPassDescriptor];
@@ -568,7 +612,7 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
       pass.colorAttachments[0].storeAction=(parallelPass||deferredPass)?MTLStoreActionUnknown:MTLStoreActionStore;pass.colorAttachments[0].clearColor=MTLClearColorMake(0.125,0.25,0.5,1);
       pass.colorAttachments[1].texture=intermediate;pass.colorAttachments[1].loadAction=MTLLoadActionClear;
       pass.colorAttachments[1].storeAction=(parallelPass||deferredPass)?MTLStoreActionUnknown:MTLStoreActionStore;
-      if(fiveTargets)for(unsigned slot=2;slot<5;slot++)
+      if(fiveTargets)for(unsigned slot=2;slot<targetCount;slot++)
       {
         pass.colorAttachments[slot].texture=extraTargets[slot-2];
         pass.colorAttachments[slot].loadAction=MTLLoadActionClear;
@@ -632,7 +676,7 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
       if(renderIndirect) { if(!indirectDraw(render,16)) { [render endEncoding];if(parallel)[parallel endEncoding];return 60; } }
       else [render drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
       if(deferredPass && !parallelPass) {
-        for(unsigned slot=0;slot<(fiveTargets?5:2);slot++)[render setColorStoreAction:MTLStoreActionStore atIndex:slot];
+        for(unsigned slot=0;slot<targetCount;slot++)[render setColorStoreAction:MTLStoreActionStore atIndex:slot];
         if(depthPass)[render setDepthStoreAction:MTLStoreActionStore];
         if(stencilPass)[render setStencilStoreAction:MTLStoreActionStore];
       }
@@ -640,7 +684,7 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
       [render endEncoding];
       if(parallelPass)
       {
-        for(unsigned slot=0;slot<(fiveTargets?5:2);slot++)[parallel setColorStoreAction:MTLStoreActionStore atIndex:slot];
+        for(unsigned slot=0;slot<targetCount;slot++)[parallel setColorStoreAction:MTLStoreActionStore atIndex:slot];
         if(deferredPass && depthPass)[parallel setDepthStoreAction:MTLStoreActionStore];
         if(deferredPass && stencilPass)[parallel setStencilStoreAction:MTLStoreActionStore];
         [parallel endEncoding];
@@ -727,6 +771,11 @@ kernel void zero_indirect(const device ulong *root [[buffer(0)]], device uint *a
       {
         [extra getBytes:mrtPixels bytesPerRow:8 fromRegion:MTLRegionMake2D(0,0,2,2) mipmapLevel:0];
         for(unsigned i=0;i<16;i+=4)if(mrtPixels[i]!=(capture==0?186:122)||mrtPixels[i+1]!=64||mrtPixels[i+2]!=128||mrtPixels[i+3]!=255)return 29;
+      }
+      if(fragmentlessColor) {
+        [fragmentlessTarget getBytes:mrtPixels bytesPerRow:8 fromRegion:MTLRegionMake2D(0,0,2,2) mipmapLevel:0];
+        for(unsigned i=0;i<16;i+=4)if(mrtPixels[i]!=80 || mrtPixels[i+1]!=64 || mrtPixels[i+2]!=128 || mrtPixels[i+3]!=255)return 95;
+        printf("Native vertex-only colour retained PASS capture=%d\n",capture);
       }
       if(counterPass) {
         NSData *data=[counter resolveCounterRange:NSMakeRange(0,8)];

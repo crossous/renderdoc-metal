@@ -33,26 +33,28 @@ int main(int argc,char **argv)
   if(!firstState || firstState->computeBuffers.empty()) return 5;
   output=firstState->computeBuffers[0].resourceId; arguments=firstState->indirectBuffer.resourceId;
   if(output==ResourceId() || arguments==ResourceId()) return 5;
-  const uint32_t counts[]={1,3,2};
+  const bool variant=getenv("RENDERDOC_METAL_INDIRECT_VARIANT")!=nullptr;
+  const uint32_t argumentOffset=variant?28:16,outputOffset=variant?32:16;
+  const uint32_t counts[]={variant?3U:1U,variant?2U:3U,variant?4U:2U};
   for(unsigned i=0;i<3;i++)
     if(indirect[i].dispatchDimension[0]!=counts[i] || indirect[i].dispatchDimension[1]!=1 || indirect[i].dispatchDimension[2]!=1)
     { fprintf(stderr,"Indirect %u EID %u groups=%u/%u/%u expected=%u/1/1\n",i,indirect[i].eventId,indirect[i].dispatchDimension[0],indirect[i].dispatchDimension[1],indirect[i].dispatchDimension[2],counts[i]); return 6; }
   controller->SetFrameEvent(lastEvent,true);
-  auto finalArgs=controller->GetBufferData(arguments,16,12); uint32_t args[3]={};
+  auto finalArgs=controller->GetBufferData(arguments,argumentOffset,12); uint32_t args[3]={};
   if(finalArgs.size()!=12) return 7;
   memcpy(args,finalArgs.data(),12); if(args[0]!=0 || args[1]!=1 || args[2]!=1) return 8;
   const bool bufferWeight=atoi(argv[2])!=0;
-  const uint32_t totals[]={10,70,130},completed[]={1,4,6};
+  const uint32_t totals[]={variant?51U:10U,variant?109U:70U,variant?281U:130U},completed[]={variant?3U:1U,variant?5U:4U,variant?9U:6U};
   for(unsigned step:{2U,0U,1U,0U,2U,1U,2U})
   {
     controller->SetFrameEvent(0,true); controller->SetFrameEvent(indirect[step].eventId,true);
     auto data=controller->GetBufferData(output,0,64); if(data.size()!=64) return 9;
     uint32_t values[16];memcpy(values,data.data(),64);
-    if(values[4]!=(bufferWeight?7*completed[step]:totals[step]) || values[5]!=completed[step]) return 10;
-    for(unsigned i=0;i<16;i++) if(i!=4 && i!=5 && values[i]!=0x13572468) return 11;
+    if(values[outputOffset/4]!=(bufferWeight?7*completed[step]:totals[step]) || values[outputOffset/4+1]!=completed[step]) return 10;
+    for(unsigned i=0;i<16;i++) if(i!=outputOffset/4 && i!=outputOffset/4+1 && values[i]!=0x13572468) return 11;
     const auto *metal=controller->GetPipelineState().GetMetalPipelineState();
     if(!metal) return 12; const auto &state=*metal;
-    if(state.computeBuffers.size()<2 || state.computeBuffers[0].resourceId!=output || state.computeBuffers[0].byteOffset!=16) return 12;
+    if(state.computeBuffers.size()<2 || state.computeBuffers[0].resourceId!=output || state.computeBuffers[0].byteOffset!=outputOffset) return 12;
   }
   controller->Shutdown(); RENDERDOC_ShutdownReplay();
   puts("PASS per-use indirect groups 1/3/2 despite final zero; 7 reset/seeks; output, inline/buffer binding restoration and sentinels");

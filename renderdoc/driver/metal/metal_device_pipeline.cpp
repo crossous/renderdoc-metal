@@ -7,6 +7,93 @@
 #include "metal_function.h"
 #include "metal_render_pipeline_state.h"
 #include "metal_replay.h"
+#include <atomic>
+#include <pthread.h>
+
+namespace
+{
+uint64_t CompileTraceNativeThreadID()
+{
+  uint64_t value = 0;
+  pthread_threadid_np(NULL, &value);
+  return value;
+}
+
+rdcstr CompileTraceName(NS::String *name)
+{
+  // Keep a single log record even for shader names containing control characters.
+  rdcstr result;
+  const char *text = name ? name->utf8String() : "";
+  const char digits[] = "0123456789abcdef";
+  for(size_t i = 0; text && text[i] && i < 1024; i++)
+  {
+    const unsigned char c = (unsigned char)text[i];
+    if(c == '"' || c == '\\')
+    {
+      result += '\\';
+      result += char(c);
+    }
+    else if(c < 32 || c >= 127)
+    {
+      // Hex encodes bytes, avoiding a truncated multibyte UTF-8 sequence.
+      result += "\\u00";
+      result += digits[c >> 4];
+      result += digits[c & 15];
+    }
+    else
+      result += char(c);
+  }
+  return result;
+}
+}
+
+MetalComputeCompileTrace WrappedMTLDevice::BeginComputeCompileTrace(
+    const char *api, MTL::Function *function, MTL::ComputePipelineDescriptor *descriptor,
+    MTL::PipelineOption options)
+{
+  MetalComputeCompileTrace trace;
+  if(!IsCaptureMode(m_State) ||
+     Process::GetEnvVariable("RENDERDOC_METAL_PIPELINE_COMPILE_TRACE") != "1")
+    return trace;
+  static std::atomic<uint64_t> sequence(0);
+  trace.token = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+  trace.started = Timing::GetTick();
+  const rdcstr name = CompileTraceName(function ? function->name() : NULL);
+  const rdcstr label = CompileTraceName(descriptor ? descriptor->label() : NULL);
+  MTL::LinkedFunctions *links = descriptor ? descriptor->linkedFunctions() : NULL;
+  RDCLOG("MetalComputeCompileTrace {\"phase\":\"begin\",\"token\":%llu,\"thread\":%llu,\"native_thread\":%llu,"
+         "\"api\":\"%s\",\"function_name_bytes\":\"%s\",\"label_bytes\":\"%s\","
+         "\"options\":%llu,\"linked_functions\":%llu,\"binary_functions\":%llu,"
+         "\"private_functions\":%llu,\"max_call_stack_depth\":%llu}",
+         (unsigned long long)trace.token, (unsigned long long)Threading::GetCurrentID(),
+         (unsigned long long)CompileTraceNativeThreadID(),
+         api, name.c_str(), label.c_str(), (unsigned long long)options,
+         (unsigned long long)(links && links->functions() ? links->functions()->count() : 0),
+         (unsigned long long)(links && links->binaryFunctions() ? links->binaryFunctions()->count() : 0),
+         (unsigned long long)(links && links->privateFunctions() ? links->privateFunctions()->count() : 0),
+         (unsigned long long)(descriptor ? descriptor->maxCallStackDepth() : 0));
+  return trace;
+}
+
+void MetalEndComputeCompileTrace(const MetalComputeCompileTrace &trace, bool success)
+{
+  if(!trace.token)
+    return;
+  const double milliseconds = double(Timing::GetTick() - trace.started) /
+                              Timing::GetTickFrequency();
+  RDCLOG("MetalComputeCompileTrace {\"phase\":\"end\",\"token\":%llu,\"thread\":%llu,\"native_thread\":%llu,"
+         "\"success\":%s,\"elapsed_ms\":%.3f}", (unsigned long long)trace.token,
+         (unsigned long long)Threading::GetCurrentID(), (unsigned long long)CompileTraceNativeThreadID(),
+         success ? "true" : "false", milliseconds);
+}
+
+void MetalSubmittedComputeCompileTrace(const MetalComputeCompileTrace &trace)
+{
+  if(trace.token)
+    RDCLOG("MetalComputeCompileTrace {\"phase\":\"submitted\",\"token\":%llu,\"thread\":%llu,\"native_thread\":%llu}",
+           (unsigned long long)trace.token, (unsigned long long)Threading::GetCurrentID(),
+           (unsigned long long)CompileTraceNativeThreadID());
+}
 
 namespace
 {
@@ -263,8 +350,11 @@ WrappedMTLComputePipelineState *WrappedMTLDevice::newComputePipelineStateWithFun
     MTL::AutoreleasedComputePipelineReflection *reflection, NS::Error **error)
 {
   MTL::ComputePipelineState *real = NULL;
+  const MetalComputeCompileTrace trace = BeginComputeCompileTrace(
+      "function-options-sync", Unwrap(computeFunction), NULL, options);
   SERIALISE_TIME_CALL(real = Unwrap(this)->newComputePipelineState(
                           Unwrap(computeFunction), options, reflection, error));
+  MetalEndComputeCompileTrace(trace, real != NULL);
   if(!real)
     return NULL;
   WrappedMTLComputePipelineState *wrapped = NULL;
@@ -303,7 +393,8 @@ bool WrappedMTLDevice::Serialise_newComputePipelineStateWithDescriptor(
        !ValidPreloadedLibraries(descriptor.preloadedLibraries) ||
        !ValidArchives(descriptor.binaryArchives) ||
        descriptor.maxTotalThreadsPerThreadgroup > Unwrap(this)->maxThreadsPerThreadgroup().width ||
-       descriptor.maxCallStackDepth != 1 || descriptor.supportAddingBinaryFunctions ||
+       descriptor.maxCallStackDepth != (HasRayIRPipeline(ComputePipelineState) ? 2U : 1U) ||
+       descriptor.supportAddingBinaryFunctions ||
        descriptor.supportIndirectCommandBuffers ||
        !descriptor.stageInputDescriptor.attributes.empty() ||
        !descriptor.stageInputDescriptor.layouts.empty() ||
@@ -379,8 +470,11 @@ WrappedMTLComputePipelineState *WrappedMTLDevice::newComputePipelineStateWithDes
   realDescriptor->setLinkedFunctions(links);
   links->release();
   MTL::ComputePipelineState *real = NULL;
+  const MetalComputeCompileTrace trace = BeginComputeCompileTrace(
+      "descriptor-sync", realDescriptor->computeFunction(), realDescriptor, options);
   SERIALISE_TIME_CALL(real = Unwrap(this)->newComputePipelineState(
                           realDescriptor, options, reflection, error));
+  MetalEndComputeCompileTrace(trace, real != NULL);
   realDescriptor->release();
   if(!real)
     return NULL;

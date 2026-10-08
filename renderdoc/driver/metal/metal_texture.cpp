@@ -30,7 +30,7 @@
 // No host pointer or returned bytes are stored. Validate the recorded linear layout even though
 // replay does not perform a CPU read: application writes derived from it are captured separately.
 // Packed/compressed/depth formats require dedicated block/aspect pitch rules.
-static bool ValidCPUTextureRead(WrappedMTLTexture *texture, const MTL::Region &region,
+bool ValidateMetalCPUTextureRead(WrappedMTLTexture *texture, const MTL::Region &region,
                                 uint64_t level, uint64_t slice, uint64_t rowPitch,
                                 uint64_t imagePitch)
 {
@@ -53,11 +53,12 @@ static bool ValidCPUTextureRead(WrappedMTLTexture *texture, const MTL::Region &r
      size.width > width - origin.x || origin.y > height || size.height > height - origin.y ||
      origin.z > depth || size.depth > depth - origin.z)
     return false;
-  const ResourceFormat format = MakeResourceFormat(real->pixelFormat());
-  if(format.Special() || format.compType == CompType::Depth || !format.compByteWidth ||
-     !format.compCount)
-    return false;
-  const uint64_t pixelSize = uint64_t(format.compByteWidth) * format.compCount;
+  uint32_t bw = 0, bh = 0, bytes = 0;
+  // Packed scalar formats share the capture/initial-state block layout. Depth
+  // aspects and compressed CPU reads retain their separate unsupported contract.
+  if(!GetTextureDataBlockShape(real->pixelFormat(), bw, bh, bytes) || bw != 1 || bh != 1 ||
+     MakeResourceFormat(real->pixelFormat()).compType == CompType::Depth) return false;
+  const uint64_t pixelSize = bytes;
   if(size.width > UINT64_MAX / pixelSize || rowPitch < size.width * pixelSize ||
      rowPitch % pixelSize || size.height - 1 > (UINT64_MAX - size.width * pixelSize) / rowPitch)
     return false;
@@ -260,77 +261,23 @@ static bool ValidTextureView(MTL::Texture *source, MTL::PixelFormat format,
   if(!source || variant > 2 || source->sampleCount() != 1 || source->framebufferOnly() ||
      source->parentTexture())
     return false;
-  // Metal permits a stencil aspect view of a Private depth/stencil texture with
-  // PixelFormatView usage. Keep this separate from ordinary same-format Shared views.
-  if(source->pixelFormat() == MTL::PixelFormatDepth32Float_Stencil8 &&
-     format == MTL::PixelFormatX32_Stencil8 && variant <= 1 &&
-     source->textureType() == MTL::TextureType2D &&
-     source->storageMode() == MTL::StorageModePrivate &&
-     (source->usage() & MTL::TextureUsagePixelFormatView) &&
-     (variant == 0 || (type == MTL::TextureType2D && levels.location == 0 &&
-                      levels.length == source->mipmapLevelCount() && slices.location == 0 &&
-                      slices.length == 1)))
-    return true;
-  if(source->storageMode() == MTL::StorageModePrivate && variant == 1 &&
-     (source->pixelFormat() == format ||
-      (source->pixelFormat() == MTL::PixelFormatBGRA8Unorm_sRGB &&
-       format == MTL::PixelFormatBGRA8Unorm)) &&
-     (format == MTL::PixelFormatR8Unorm || format == MTL::PixelFormatR8Uint ||
-      format == MTL::PixelFormatR16Float || format == MTL::PixelFormatR32Uint ||
-      format == MTL::PixelFormatR32Float || format == MTL::PixelFormatRGBA8Unorm ||
-      format == MTL::PixelFormatBGRA8Unorm || format == MTL::PixelFormatRGB10A2Unorm ||
-      format == MTL::PixelFormatRG11B10Float) &&
-     levels.length && levels.location < source->mipmapLevelCount() &&
-     levels.length <= source->mipmapLevelCount() - levels.location && slices.length)
-  {
-    uint64_t availableSlices = 0;
-    switch(source->textureType())
-    {
-      case MTL::TextureType2D:
-        if(type == MTL::TextureType2D) availableSlices = 1;
-        break;
-      case MTL::TextureType2DArray:
-        if(type == MTL::TextureType2D || type == MTL::TextureType2DArray)
-          availableSlices = source->arrayLength();
-        break;
-      case MTL::TextureTypeCube:
-        if(type == MTL::TextureType2DArray ||
-           (type == MTL::TextureTypeCube && slices.location == 0 && slices.length == 6))
-          availableSlices = 6;
-        break;
-      default: break;
-    }
-    if(availableSlices && slices.location < availableSlices &&
-       slices.length <= availableSlices - slices.location &&
-       (type != MTL::TextureType2D || slices.length == 1))
-      return true;
-  }
-  if(
-     (source->pixelFormat() != MTL::PixelFormatRGBA8Unorm &&
-      source->pixelFormat() != MTL::PixelFormatBGRA8Unorm) ||
-     format != source->pixelFormat() || source->storageMode() != MTL::StorageModeShared ||
-     source->sampleCount() != 1)
-    return false;
-  if(source->textureType() != MTL::TextureType2D &&
-     source->textureType() != MTL::TextureType2DArray)
-    return false;
+  RDMTL::TextureDescriptor parent, projected;
+  parent.textureType = source->textureType();
+  parent.pixelFormat = source->pixelFormat();
+  parent.width = source->width(); parent.height = source->height(); parent.depth = source->depth();
+  parent.mipmapLevelCount = source->mipmapLevelCount(); parent.arrayLength = source->arrayLength();
+  parent.sampleCount = source->sampleCount(); parent.storageMode = source->storageMode();
+  parent.usage = source->usage();
   if(variant == 0)
-    return true;
-  if(type != MTL::TextureType2D && type != MTL::TextureType2DArray)
-    return false;
-  const uint64_t availableSlices = source->textureType() == MTL::TextureType2D ? 1 :
-                                   source->arrayLength();
-  if(!levels.length || levels.location >= source->mipmapLevelCount() ||
-     levels.length > source->mipmapLevelCount() - levels.location || !slices.length ||
-     slices.location >= availableSlices || slices.length > availableSlices - slices.location ||
-     (type == MTL::TextureType2D && slices.length != 1) ||
-     (type == MTL::TextureType2DArray && source->textureType() != MTL::TextureType2DArray))
-    return false;
-  if(variant == 2)
-    for(MTL::TextureSwizzle channel : {swizzle.red, swizzle.green, swizzle.blue, swizzle.alpha})
-      if(channel > MTL::TextureSwizzleAlpha)
-        return false;
-  return true;
+  {
+    type = parent.textureType;
+    levels = NS::Range(0, parent.mipmapLevelCount);
+    slices = NS::Range(0, type == MTL::TextureTypeCube || type == MTL::TextureTypeCubeArray ?
+        6 * parent.arrayLength : type == MTL::TextureType2DArray ? parent.arrayLength : 1);
+  }
+  // The Native factory and descriptor preflight use the same API projection.
+  // Aspect identity does not create storage or require independent initial bytes.
+  return ProjectMetalTextureView(parent, format, type, levels, slices, swizzle, projected);
 }
 
 template <typename SerialiserType>
@@ -435,6 +382,7 @@ WrappedMTLTexture *WrappedMTLTexture::newTextureView(MTL::PixelFormat format,
     Serialise_newTextureView(ser, wrapped, format, type, levels, slices, swizzle, variant);
     MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
     record->AddParent(GetRecord(this));
+    record->textureParent = GetResID(this);
     Chunk *creation = scope.Get();
     record->AddChunk(creation);
     if(IsActiveCapturing(m_State) && m_Device->IsCapturedFrameResource(GetResID(this)))
@@ -457,7 +405,7 @@ bool WrappedMTLTexture::Serialise_getBytes(SerialiserType &ser, void *pixelBytes
   SERIALISE_ELEMENT(region).Important();
   SERIALISE_ELEMENT(level).Important();
   SERIALISE_CHECK_READ_ERRORS();
-  if(IsReplayingAndReading() && !ValidCPUTextureRead(Texture, region, level, 0, bytesPerRow, 0))
+  if(IsReplayingAndReading() && !ValidateMetalCPUTextureRead(Texture, region, level, 0, bytesPerRow, 0))
   {
     RDCERR("Invalid or unsupported Metal texture CPU readback layout");
     return false;
@@ -492,7 +440,7 @@ bool WrappedMTLTexture::Serialise_getBytes(SerialiserType &ser, void *pixelBytes
   SERIALISE_ELEMENT(slice).Important();
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading() &&
-     !ValidCPUTextureRead(Texture, region, level, slice, bytesPerRow, bytesPerImage))
+     !ValidateMetalCPUTextureRead(Texture, region, level, slice, bytesPerRow, bytesPerImage))
   {
     RDCERR("Invalid or unsupported Metal texture CPU readback slice/layout");
     return false;

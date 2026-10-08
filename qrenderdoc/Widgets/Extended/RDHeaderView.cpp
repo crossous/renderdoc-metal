@@ -58,8 +58,10 @@ RDHeaderView::RDHeaderView(Qt::Orientation orient, QWidget *parent) : QHeaderVie
   if(treeView)
   {
     QObject::connect(treeView, &QTreeView::expanded,
+                     this,
                      [this](const QModelIndex &) { rowsChanged(QModelIndex(), 0, 0); });
     QObject::connect(treeView, &QTreeView::collapsed,
+                     this,
                      [this](const QModelIndex &) { rowsChanged(QModelIndex(), 0, 0); });
   }
 }
@@ -87,6 +89,7 @@ void RDHeaderView::setModel(QAbstractItemModel *model)
                         &RDHeaderView::columnsInserted);
     QObject::disconnect(m, &QAbstractItemModel::rowsInserted, this, &RDHeaderView::rowsChanged);
     QObject::disconnect(m, &QAbstractItemModel::rowsRemoved, this, &RDHeaderView::rowsChanged);
+    QObject::disconnect(m, &QAbstractItemModel::dataChanged, this, nullptr);
   }
 
   QHeaderView::setModel(model);
@@ -99,7 +102,7 @@ void RDHeaderView::setModel(QAbstractItemModel *model)
                      &RDHeaderView::columnsInserted);
     QObject::connect(model, &QAbstractItemModel::rowsInserted, this, &RDHeaderView::rowsChanged);
     QObject::connect(model, &QAbstractItemModel::rowsRemoved, this, &RDHeaderView::rowsChanged);
-    QObject::connect(model, &QAbstractItemModel::dataChanged,
+    QObject::connect(model, &QAbstractItemModel::dataChanged, this,
                      [this](const QModelIndex &topLeft, const QModelIndex &bottomRight,
                             const QVector<int> &roles) {
                        if(roles.contains(Qt::DisplayRole))
@@ -512,6 +515,7 @@ void RDHeaderView::setPinnedColumns(int numColumns, QAbstractScrollArea *scroll)
 {
   m_pinnedColumns = numColumns;
   QObject::connect(scroll->horizontalScrollBar(), &QScrollBar::valueChanged,
+                   this,
                    [this]() { viewport()->update(); });
 }
 

@@ -74,6 +74,17 @@ id<MTLResource> MetalWrappedResource(id<MTLResource> resource)
 {
   return id<MTLBuffer>(GetWrapped(self)->newBuffer(length, (MTL::ResourceOptions)options));
 }
+- (id<MTLAccelerationStructure>)newAccelerationStructureWithSize:(NSUInteger)size
+    API_AVAILABLE(macos(13.0), ios(16.0))
+{
+  return id<MTLAccelerationStructure>(GetWrapped(self)->newAccelerationStructure(size, 0, false));
+}
+- (id<MTLAccelerationStructure>)newAccelerationStructureWithSize:(NSUInteger)size
+                                                         offset:(NSUInteger)offset
+    API_AVAILABLE(macos(13.0), ios(16.0))
+{
+  return id<MTLAccelerationStructure>(GetWrapped(self)->newAccelerationStructure(size, offset, true));
+}
 - (id<MTLBuffer>)newBufferWithLength:(NSUInteger)length options:(MTLResourceOptions)options
                             offset:(NSUInteger)offset
 {

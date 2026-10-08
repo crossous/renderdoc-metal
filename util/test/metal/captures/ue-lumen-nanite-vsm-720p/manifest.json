@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "recorded_date": "2026-10-08",
+  "purpose": "Manual UI acceptance candidate; not a full output-correctness or release certificate",
+  "scene": {
+    "engine": "Unreal Engine 5.8",
+    "viewport": [
+      1280,
+      720
+    ],
+    "quality": "High (2)",
+    "features": [
+      "Lumen hardware RT inline ray queries",
+      "Nanite",
+      "Virtual Shadow Maps"
+    ],
+    "nanite_mesh_actors": 15,
+    "materials": 6,
+    "application_budgets": {
+      "r.Shadow.Virtual.MaxPhysicalPages": 1024,
+      "r.LumenScene.SurfaceCache.AtlasSize": 1024,
+      "r.Streaming.PoolSize": 64,
+      "r.Nanite.Streaming.StreamingPoolSize": 32,
+      "r.Nanite.Streaming.NumInitialRootPages": 256
+    }
+  },
+  "capture_backend_sha256": "850c540b3a7f571b3fcdceb0cc19c907e19a24bebc9aa81dbe613682490068c9",
+  "replay_backend_sha256": "1845eca83cf44f152d8b8d908df4275bcf2ba15df193c0fb10bbf61c90c67eed",
+  "files": [
+    {
+      "file": "UE-Lumen-Nanite-VSM-1280x720.rdc",
+      "bytes": 90758617,
+      "sha256": "c827cc7e7ee1f58e7a9a620a9583e9093208d1e0b797ebce1caa975d371a27f8"
+    },
+    {
+      "file": "UE-Lumen-Nanite-VSM-1280x720-Replay.png",
+      "bytes": 626537,
+      "sha256": "98844e0bd9adbcf0784a9d0a6994ecf9e27a4ef8b433c972a43e35e1c580ab80"
+    },
+    {
+      "file": "UE-Lumen-Nanite-VSM-1280x720-Native.png",
+      "bytes": 626054,
+      "sha256": "70c0b01c38bd9722cbf7147cae916a03c3282cce623e77d82b84f65bb640a83e"
+    }
+  ],
+  "execution": {
+    "native_capture": "COMPLETED",
+    "replay_GPU": "COMPLETED",
+    "whole_frame_replays": 3,
+    "EID0_resets": 2,
+    "replay_seconds": 168.875226,
+    "peak_RSS_bytes": 2598191104
+  },
+  "output_comparison": {
+    "status": "FAIL",
+    "scope": "same captured full Native UE viewport 1280x720 BGRA at frame end",
+    "conversion": "original UE RHISurfaceDataConversion / FColor::Requantize10to8; RGB10A2 little endian to BGRA8, no gamma/flip/tolerance",
+    "same_frame_native_BGRA_sha256": "fd14b841d5c304210584b31e2016bb15a3ffb9c93ca339ebda5efd3b5870287c",
+    "cycles": [
+      {
+        "cycle": 0,
+        "raw_sha256": "174251d660f516ce5406ac07ba6c289050420794259fe2c6289bd3b97e3a2151",
+        "UE_converted_BGRA_sha256": "4e8a755d72f9a0851be7c293390431586f6d86ee049fbb6017b7d0afafe191ad",
+        "status": "FAIL",
+        "changed_pixels": 18133,
+        "changed_channels": 22473,
+        "maximum_channel_error": 37
+      },
+      {
+        "cycle": 1,
+        "raw_sha256": "5e272ccd23fbc50bf4dd92ed6279de03a7f608abe2bfef3171d5859f14e9142e",
+        "UE_converted_BGRA_sha256": "3e5e3f6385dc7a17936f33cfe20688fafa9dd9113d72a6bf5c22ab3ac013e6a8",
+        "status": "FAIL",
+        "changed_pixels": 23804,
+        "changed_channels": 29696,
+        "maximum_channel_error": 24
+      },
+      {
+        "cycle": 2,
+        "raw_sha256": "23a9e84e0391dd9d583b58bc01eb36ce1cd2d2b50a4bf272399d93f2caea60b6",
+        "UE_converted_BGRA_sha256": "7115061f156bec9f01335e4baecc13c6dc89bde7e8384e3375d1822a3de63436",
+        "status": "FAIL",
+        "changed_pixels": 15578,
+        "changed_channels": 19230,
+        "maximum_channel_error": 24
+      }
+    ]
+  },
+  "overall_acceptance": {
+    "status": "INCOMPLETE",
+    "reason": "Native image comparison FAIL, unresolved cause; final UI manual acceptance pending"
+  },
+  "UI_manual_acceptance": "NOT_RUN",
+  "known_gaps": [
+    "Native versus replay full pixel differences, variable over EID0 cycles; cannot assert legal nondeterminism or add tolerance from this evidence alone",
+    "fresh 1845eca8 capture a877c06d rejects a background overlapping placement factory before frame epoch; genuine cause/restoration contract not closed, not delivered as a working capture",
+    "full converted matrix on 1845eca8 NOT_RUN; historical f1ba1862 complete gates remain historical",
+    "render-stage RT, extra Metal3 and unsupported physical device evidence remain uncertified"
+  ],
+  "details": "../../../../../docs/metal-replay/UE_UI_CAPTURE_2026-10-08.md",
+  "preview_note": "RGB-only display PNGs; exact comparison includes BGRA bytes. Preview image agreement is not an acceptance oracle.",
+  "publication_checks": {
+    "python_syntax_files": 88,
+    "shell_syntax_files": 23,
+    "diff_whitespace": "PASS",
+    "Qt_header_model_lifetime": "PASS (CPU-only offscreen widget regression)",
+    "capture_supervisor_unit_tests": "PASS",
+    "GPU_rerun": "NOT_RUN; existing candidate results recorded separately"
+  }
+}

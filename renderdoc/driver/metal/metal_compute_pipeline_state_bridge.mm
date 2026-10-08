@@ -96,7 +96,8 @@
 - (nullable id<MTLVisibleFunctionTable>)newVisibleFunctionTableWithDescriptor:
     (MTLVisibleFunctionTableDescriptor *)descriptor API_AVAILABLE(macos(11.0), ios(14.0))
 {
-  if(!descriptor || descriptor.functionCount == 0 || descriptor.functionCount > 32)
+  if(!descriptor || descriptor.functionCount == 0 ||
+     descriptor.functionCount > MetalMaxComputeVisibleFunctionTableEntries)
   {
     RDCERR("Unsupported Metal compute visible-function-table size");
     return nil;

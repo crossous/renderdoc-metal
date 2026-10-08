@@ -26,7 +26,10 @@ def main():
         (folder / f"{label}.log").write_text(text)
         if refuse:
             assert result.returncode in (1, 4), (label, result.returncode, text)
-            assert (any(word in text.lower() for word in ("descriptor", "gpu identity"))
+            # Schema4 is now a typed ray field, admitted only with a complete IR
+            # declaration. A legacy untyped capture must still fail before GPU work.
+            assert ((any(word in text.lower() for word in ("descriptor", "gpu identity")) or
+                     "Metal ray resource layout requires an IR dispatch declaration" in text)
                     and "failed" in text.lower()), (label, text)
             assert "Metal replay wait begin" not in text, (label, text)
             assert "Private initial contents upload" not in text, (label, text)

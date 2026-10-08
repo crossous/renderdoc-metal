@@ -112,8 +112,13 @@ public:
 private:
   WrappedMTLCommandBuffer *m_CommandBuffer = NULL;
   WrappedMTLComputePipelineState *m_Pipeline = NULL;
+  WrappedMTLVisibleFunctionTable *m_VisibleTables[31] = {};
+  WrappedMTLIntersectionFunctionTable *m_IntersectionTables[31] = {};
+  bool ValidateFunctionTableBindings() const;
   bool m_CaptureIndirectArguments = false;
   uint32_t m_CaptureIndirectOrdinal = 0;
+  uint64_t m_IndirectReplayEpoch = ~0ULL;
+  uint32_t m_IndirectReplayOrdinal = 0;
   MetalComputeIndirectCapture m_IndirectCapture;
 
 };

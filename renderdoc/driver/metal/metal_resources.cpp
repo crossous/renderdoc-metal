@@ -83,6 +83,13 @@ bool MetalResourceRecord::MarkResourceFrameReferenced(ResourceId id, FrameRefTyp
     state = m_Resource->GetResourceManager()->GetResourceRecord(id);
   LockChunks();
   const bool added = ResourceRecord::MarkResourceFrameReferenced(id, type);
+  // A texture view is an API object, not independent storage. Its creation
+  // parent record alone retains the factory but does not reference the parent's
+  // initial contents. As Vulkan image descriptors refer to their base image,
+  // record the real backing when an encoder uses a view. A subresource view
+  // write cannot establish a full overwrite of the parent allocation.
+  if(state && state->m_Type == eResTexture && state->textureParent != ResourceId())
+    ResourceRecord::MarkResourceFrameReferenced(state->textureParent, eFrameRef_ReadBeforeWrite);
   if(state && (state->m_Type == eResDepthStencilState || state->m_Type == eResSamplerState))
     AddParent(state);
   UnlockChunks();
@@ -122,4 +129,58 @@ void WrappedMTLObject::AddEvent()
 void WrappedMTLObject::AddAction(const ActionDescription &a)
 {
   m_Device->AddAction(a);
+}
+
+bool MetalResourceRecord::HasOnlyASInitialCommands()
+{
+  LockChunks();
+  bool valid = true;
+  for(const StoredChunk &stored : m_Chunks)
+  {
+    const MetalChunk chunk = stored.chunk->GetChunkType<MetalChunk>();
+    if(ToStr(chunk).beginsWith("MTLAccelerationStructureCommandEncoder::")) continue;
+    if(chunk == MetalChunk::MTLCommandQueue_commandBuffer ||
+       chunk == MetalChunk::MTLCommandQueue_commandBufferWithDescriptor ||
+       chunk == MetalChunk::MTLCommandQueue_commandBufferWithUnretainedReferences ||
+       chunk == MetalChunk::MTLCommandBuffer_accelerationStructureCommandEncoder ||
+       chunk == MetalChunk::MTLCommandBuffer_accelerationStructureCommandEncoderWithDescriptor ||
+       chunk == MetalChunk::MTLCommandBuffer_pushDebugGroup ||
+       chunk == MetalChunk::MTLCommandBuffer_popDebugGroup ||
+       chunk == MetalChunk::MTLBuffer_InternalModifyCPUContents ||
+       chunk == MetalChunk::MTLCommandBuffer_enqueue) continue;
+    valid = false;
+    if(getenv("RENDERDOC_METAL_TRACE_INITIAL_AS"))
+      fprintf(stderr, "Metal AS initial input excludes command %s\n", ToStr(chunk).c_str());
+    break;
+  }
+  UnlockChunks();
+  return valid;
+}
+
+void MetalResourceRecord::MarkASInitialReferences(WrappedMTLAccelerationStructure *structure)
+{
+  if(!structure) return;
+  MarkResourceFrameReferenced(GetResID(structure), eFrameRef_Read);
+  if(structure->m_LastCompactedWriteCommandBuffer != ResourceId() &&
+     structure->m_LastCompactedWriteCommandBuffer == structure->m_LastBuildCommandBuffer)
+    MarkResourceFrameReferenced(structure->m_LastCompactedSizeBuffer, eFrameRef_Read);
+  const auto build = structure->m_CapturedInitialBuild;
+  if(!build) return;
+  MarkResourceFrameReferenced(build->source, eFrameRef_Read);
+  MarkResourceFrameReferenced(build->indexSource, eFrameRef_Read);
+  // Initial TLAS support permits primitive children only; keep this walk bounded.
+  for(ResourceId child : build->children)
+  {
+    MarkResourceFrameReferenced(child, eFrameRef_Read);
+    auto object = structure->GetResourceManager()->GetResource(child, true);
+    if(object && object->m_Type == eResAccelerationStructure)
+    {
+      const auto input = ((WrappedMTLAccelerationStructure *)object)->m_CapturedInitialBuild;
+      if(input)
+      {
+        MarkResourceFrameReferenced(input->source, eFrameRef_Read);
+        MarkResourceFrameReferenced(input->indexSource, eFrameRef_Read);
+      }
+    }
+  }
 }

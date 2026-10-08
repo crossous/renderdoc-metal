@@ -6,6 +6,10 @@
 // Native debug instrumentation mirrors Vulkan's per-use indirect readback.
 // No CPU wait, encoder split or replacement of the application's dispatch.
 MTL::ComputePipelineState *CreateMetalIndirectReadbackPipeline(MTL::Device *device);
+// Preserve the actual GPU arguments and use an identical copy for execution,
+// or a zero-work copy on extent overflow / a changed frozen invocation contract. Word 3 records
+// the validation result; words 4..6 are the execution copy.
+MTL::ComputePipelineState *CreateMetalIndirectReplayPipeline(MTL::Device *device);
 struct MetalIndirectReadback
 {
   NS::SharedPtr<MTL::Buffer> snapshot;

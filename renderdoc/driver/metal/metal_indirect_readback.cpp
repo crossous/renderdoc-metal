@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "metal_indirect_readback.h"
+#include "common/common.h"
 #include <cstring>
 
 MTL::ComputePipelineState *CreateMetalIndirectReadbackPipeline(MTL::Device *device)
@@ -18,6 +19,49 @@ kernel void rdoc_indirect_readback(device const uint *source [[buffer(0)]],
   if(!library) return NULL;
   auto function = NS::TransferPtr(library->newFunction(NS::String::string("rdoc_indirect_readback", NS::UTF8StringEncoding)));
   return function ? device->newComputePipelineState(function.get(), &error) : NULL;
+}
+
+MTL::ComputePipelineState *CreateMetalIndirectReplayPipeline(MTL::Device *device)
+{
+  if(!device) return NULL;
+  const char *code=R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+kernel void rdoc_indirect_replay(device const uint *source [[buffer(0)]],
+                                 device uint *snapshot [[buffer(1)]],
+                                 constant uint *limits [[buffer(3)]])
+{
+  uint3 groups=uint3(source[0],source[1],source[2]);
+  uint2 work=uint2(limits[0],0);
+  bool valid=limits[0] && (!limits[2] || all(groups==uint3(limits[3],limits[4],limits[5])));
+  // Original Native GPU counts are execution inputs, not CPU analysis work.
+  // Preserve checked 64-bit extent arithmetic and the frozen RT invocation
+  // contract. A zero axis executes no shader, just like a direct zero grid.
+  if(all(groups != uint3(0)))
+    for(uint i=0;i<3;i++)
+    {
+      // Use 32-bit limbs: Native pipeline compilation of dynamic ulong
+      // division fails on some Metal compiler services. mulhi preserves exact
+      // checked 64-bit multiplication without requiring 64-bit GPU division.
+      uint high=work.y*groups[i],carry=mulhi(work.x,groups[i]);
+      if(mulhi(work.y,groups[i]) || high > 0xffffffffu-carry) valid=false;
+      if(valid) work=uint2(work.x*groups[i],high+carry);
+    }
+  snapshot[0]=groups.x; snapshot[1]=groups.y; snapshot[2]=groups.z;
+  snapshot[3]=valid?0x52444349u:0u;
+  snapshot[4]=valid?groups.x:0u;
+  snapshot[5]=valid?groups.y:1u;
+  snapshot[6]=valid?groups.z:1u;
+}
+)MSL";
+  NS::Error *error=NULL;
+  auto library=NS::TransferPtr(device->newLibrary(NS::String::string(code,NS::UTF8StringEncoding),NULL,&error));
+  if(!library)
+  { RDCERR("Metal indirect guard library compilation failed: %s", error ? error->localizedDescription()->utf8String() : "unknown"); return NULL; }
+  auto function=NS::TransferPtr(library->newFunction(NS::String::string("rdoc_indirect_replay",NS::UTF8StringEncoding)));
+  MTL::ComputePipelineState *pipeline=function?device->newComputePipelineState(function.get(),&error):NULL;
+  if(!pipeline) RDCERR("Metal indirect guard pipeline compilation failed: %s", error ? error->localizedDescription()->utf8String() : "missing function");
+  return pipeline;
 }
 
 void MetalComputeIndirectCapture::BindPipeline(MTL::ComputePipelineState *pipeline)
@@ -68,11 +112,11 @@ bool MetalComputeIndirectCapture::Snapshot(MTL::Device *device, MTL::ComputeComm
   auto snapshot=NS::TransferPtr(device->newBuffer(16, MTL::ResourceStorageModeShared));
   if(!snapshot) return false;
   memset(snapshot->contents(), 0, 16);
-  encoder->memoryBarrier(MTL::BarrierScopeBuffers);
+  encoder->memoryBarrier(MTL::BarrierScope(MTL::BarrierScopeBuffers | MTL::BarrierScopeTextures));
   encoder->setComputePipelineState(m_CopyPipeline.get());
   encoder->setBuffer(source, offset, 0); encoder->setBuffer(snapshot.get(), 0, 1);
   encoder->dispatchThreadgroups(MTL::Size(1,1,1), MTL::Size(1,1,1));
-  encoder->memoryBarrier(MTL::BarrierScopeBuffers);
+  encoder->memoryBarrier(MTL::BarrierScope(MTL::BarrierScopeBuffers | MTL::BarrierScopeTextures));
   encoder->setComputePipelineState(m_Pipeline.get());
   for(uint32_t slot=0;slot<2;slot++) {
     const auto &binding=m_Bindings[slot];

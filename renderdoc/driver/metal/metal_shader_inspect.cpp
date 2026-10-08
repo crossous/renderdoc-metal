@@ -3,7 +3,11 @@
 #include "metal_device.h"
 #include "metal_buffer.h"
 #include "metal_texture.h"
+#include "metal_sampler_state.h"
+#include "metal_acceleration_structure.h"
+#include "metal_function.h"
 #include "metal_air_access.h"
+#include "metal_descriptor_types.h"
 #include "metal_shader_features.h"
 #include <unistd.h>
 
@@ -11,6 +15,55 @@ void MetalReplay::AddShaderBinary(ResourceId library, const bytebuf &data)
 {
   m_LibraryBinaries[library] = data;
   m_LibraryDebugSources[library] = ExtractMetalDebugSources(data);
+}
+
+rdcstr MetalReplay::GetComputeAIR(ResourceId pipeline, rdcstr &entry)
+{
+  const auto function=m_ComputePipelines.find(pipeline);
+  if(function==m_ComputePipelines.end())return {};
+  const auto reflection=m_Shaders.find(function->second);
+  if(reflection==m_Shaders.end())return {};
+  entry=reflection->second.entryPoint;
+  // The public disassembler can return captured MSL or an explanatory string.
+  // Neither is an AIR module. Source-compiled Native pipelines still replay
+  // through the original API; unavailable optional AIR is a display state.
+  const auto library=m_ShaderLibraries.find(reflection->second.resourceId);
+  if(library==m_ShaderLibraries.end() || !m_LibraryBinaries.count(library->second))return {};
+  return DisassembleShader(pipeline,&reflection->second,"Metal AIR (Apple toolchain)");
+}
+
+bool MetalReplay::GetGraphicsAIR(ResourceId pipeline, uint32_t stage, rdcstr &entry,
+    rdcstr &air, std::map<rdcstr, rdcpair<rdcstr, rdcstr>> &linked)
+{
+  entry.clear();air.clear();linked.clear();
+  const auto info=m_RenderPipelines.find(pipeline);
+  if(info==m_RenderPipelines.end() || (stage!=1 && stage!=2) || IsMeshPipeline(pipeline) ||
+     IsTilePipeline(pipeline))return false;
+  const auto function=stage==1?info->second.vertexFunction:info->second.fragmentFunction;
+  if(function==ResourceId())return stage==2;
+  auto read=[&](ResourceId id,rdcstr &name,rdcstr &module) {
+    const auto reflection=m_Shaders.find(id);
+    if(reflection==m_Shaders.end())return false;
+    name=reflection->second.entryPoint;
+    module=DisassembleShader(pipeline,&reflection->second,"Metal AIR (Apple toolchain)");
+    return !name.empty() && !module.empty() && module.size()<=4*1024*1024;
+  };
+  if(!read(function,entry,air))return false;
+  const auto &functions=stage==1?info->second.descriptor.vertexLinkedFunctions:
+      info->second.descriptor.fragmentLinkedFunctions;
+  rdcarray<WrappedMTLFunction *> attached=functions.functions;
+  attached.append(functions.binaryFunctions);attached.append(functions.privateFunctions);
+  for(const auto &group:functions.groups)attached.append(group.functions);
+  if(attached.size()>32)return false;
+  for(auto fn:attached)
+  {
+    rdcstr name,module;
+    if(!read(GetResID(fn),name,module))return false;
+    auto existing=linked.find(name);
+    if(existing!=linked.end() && existing->second.second!=module)return false;
+    linked[name]=make_rdcpair(name,module);
+  }
+  return true;
 }
 
 rdcarray<rdcstr> MetalReplay::GetDisassemblyTargets(bool withPipeline)
@@ -108,17 +161,24 @@ void MetalReplay::ResolveUniformBindlessAccess(bool cpuOnly)
       {
         memcpy(&value.object, &buffers[slot].resourceId, sizeof(value.object));
         value.offset = buffers[slot].byteOffset;
+        value.metadata=m_pDriver->IsIRDescriptorMetadataAddress(buffers[slot].resourceId,value.offset);
       }
-      else if(m_SelectedGraphicsInlineData.count({stage, uint32_t(slot)})) value.slot = int(slot);
+      else if(m_SelectedGraphicsInlineData.count({stage, uint32_t(slot)})) {value.slot = int(slot);value.metadata=true;}
       else continue;
       bindings[uint32_t(slot)] = value;
     }
     if(bindings.empty()) continue;
+    std::map<std::tuple<ResourceId,uint64_t,unsigned>,bytebuf> readCache;
     auto readBytes = [&](ResourceId buffer, uint64_t offset, unsigned bytes) {
+      const auto key=std::make_tuple(buffer,offset,bytes);
+      const auto cached=readCache.find(key);
+      if(cached!=readCache.end())return cached->second;
       bytebuf data;
       if(!cpuOnly) GetBufferData(buffer, offset, bytes, data);
       else
       {
+        if(m_pDriver->ReadProvenIRComputeUniformBytes(m_UniformInspectionOffset,buffer,offset,bytes,data))
+          return data;
         // Called after this submission's captured CPU writes are restored, before commit.
         // Never submit a readback or infer GPU-written values from stale CPU contents.
         auto slot = m_pDriver->m_DescriptorSlotShadow.find({buffer, offset - offset % 24});
@@ -144,11 +204,26 @@ void MetalReplay::ResolveUniformBindlessAccess(bool cpuOnly)
             data.assign((const byte *)real->contents() + offset, bytes);
         }
       }
-      return data;
+      readCache[key]=data;return data;
     };
     auto load = [&](const MetalAIR::Value &address, unsigned bytes, MetalAIR::Value::Kind kind) {
       MetalAIR::Value result;
       ResourceId buffer; memcpy(&buffer, &address.object, sizeof(buffer));
+      if(address.ranged)
+      {
+        if(kind!=MetalAIR::Value::Integer || !address.offsetKnown || address.slot>=0 ||
+           !bytes || bytes>8 || address.High()<address.offset)return result;
+        const uint64_t span=address.High()-address.offset+bytes;
+        const auto description=GetBuffer(buffer);
+        if(span<bytes || span>64*1024 || address.offset%bytes || span%bytes ||
+           address.High()>description.length || bytes>description.length-address.High())return result;
+        const auto data=readBytes(buffer,address.offset,unsigned(span));
+        if(data.size()!=span)return result;
+        uint64_t low=UINT64_MAX,high=0;
+        for(uint64_t i=0;i<span;i+=bytes)
+        {uint64_t scalar=0;memcpy(&scalar,data.data()+i,bytes);low=RDCMIN(low,scalar);high=RDCMAX(high,scalar);}
+        return MetalAIR::Value::Range(low,high);
+      }
       if(address.slot >= 0)
       {
         auto in = m_SelectedGraphicsInlineData.find({stage, uint32_t(address.slot)});
@@ -160,6 +235,7 @@ void MetalReplay::ResolveUniformBindlessAccess(bool cpuOnly)
           result.kind = kind;
           memcpy(&result.object, &pointer->second.first, sizeof(result.object));
           result.offset = pointer->second.second;
+          result.metadata=m_pDriver->IsIRDescriptorMetadataAddress(pointer->second.first,result.offset);
         }
         else if(kind == MetalAIR::Value::Integer && address.offset <= in->second.data.size() &&
                 bytes <= in->second.data.size() - address.offset)
@@ -177,6 +253,41 @@ void MetalReplay::ResolveUniformBindlessAccess(bool cpuOnly)
         bytebuf data = readBytes(buffer, address.offset, bytes);
         if(data.size() == bytes)
         { result.kind = kind; memcpy(&result.offset, data.data(), bytes); }
+      }
+      else if(kind == MetalAIR::Value::AccelerationStructure)
+      {
+        // Only the public runtime Header's typed AS field is inspected. The
+        // acceleration structure's internal allocation and shader remain opaque.
+        const auto header=m_pDriver->m_RayASHeaderCurrent.find({buffer,address.offset});
+        if(header==m_pDriver->m_RayASHeaderCurrent.end() ||
+           !m_pDriver->ValidateRayASHeader(header->second)) return result;
+        auto object=m_pDriver->GetResourceManager()->GetResource(header->second.structure,true);
+        if(!object || object->m_Type!=eResAccelerationStructure || !object->m_Real)return result;
+        if(!cpuOnly)
+        {
+          const auto data=readBytes(buffer,address.offset,8);uint64_t handle=0;
+          if(data.size()==8)memcpy(&handle,data.data(),8);
+          if(!handle || handle!=Unwrap((WrappedMTLAccelerationStructure *)object)->gpuResourceID()._impl)
+            return result;
+        }
+        result=address;result.kind=kind;
+      }
+      else if(kind == MetalAIR::Value::Sampler)
+      {
+        const auto slot=m_pDriver->m_DescriptorSlotShadow.find({buffer,address.offset});
+        if(slot==m_pDriver->m_DescriptorSlotShadow.end() || !slot->second.live ||
+           slot->second.type!=7 || slot->second.gpuExpected)return result;
+        const auto source=slot->second.sources.find(2);
+        if(source==slot->second.sources.end() || source->second.offset)return result;
+        auto *wrapped=m_pDriver->GetResourceManager()->GetResource(source->second.resource,true);
+        if(!wrapped || wrapped->m_Type!=eResSamplerState || !wrapped->m_Real)return result;
+        if(!cpuOnly)
+        {
+          const auto data=readBytes(buffer,address.offset,8);uint64_t handle=0;
+          if(data.size()==8)memcpy(&handle,data.data(),8);
+          if(!handle || handle!=Unwrap((WrappedMTLSamplerState *)wrapped)->gpuResourceID()._impl)return result;
+        }
+        result=address;result.kind=kind;
       }
       else if(kind == MetalAIR::Value::Texture)
       {
@@ -204,6 +315,10 @@ void MetalReplay::ResolveUniformBindlessAccess(bool cpuOnly)
         auto slot = m_pDriver->m_DescriptorSlotShadow.find({buffer, address.offset - address.offset % 24});
         if(slot == m_pDriver->m_DescriptorSlotShadow.end() || !slot->second.live) return result;
         auto source = slot->second.sources.find(uint32_t(address.offset % 24 / 8));
+        bool headerSource=false;
+        if(source==slot->second.sources.end() && !(address.offset%24) &&
+           slot->second.type==4 && slot->second.sources.size()==1 && slot->second.sources.count(3))
+        {source=slot->second.sources.find(3);headerSource=true;}
         if(source == slot->second.sources.end() ||
            GetBuffer(source->second.resource).resourceId == ResourceId()) return result;
         if(!cpuOnly)
@@ -218,45 +333,135 @@ void MetalReplay::ResolveUniformBindlessAccess(bool cpuOnly)
         result.kind = kind;
         memcpy(&result.object, &source->second.resource, sizeof(result.object));
         result.offset = source->second.offset;
+        memcpy(&result.descriptorObject,&buffer,sizeof(result.descriptorObject));
+        result.descriptorOffset=address.offset;
+        result.metadata=headerSource;
       }
       return result;
     };
     const rdcstr air = DisassembleShader(ResourceId(), &reflection->second, "Metal AIR (Apple toolchain)");
-    const auto reads = MetalAIR::UniformTextureAccess(air.c_str(), reflection->second.entryPoint.c_str(), bindings, load);
+    const ResourceId selectedPipeline=stage==0?m_MetalPipelineState->computePipelineResourceId:
+        m_MetalPipelineState->pipelineResourceId;
+    const auto proved=m_pDriver->m_IRRuntimeDescriptorAccesses.find({m_UniformInspectionOffset,stage});
+    bool useProved=(stage<=2) && proved!=m_pDriver->m_IRRuntimeDescriptorAccesses.end() &&
+        m_ShaderReplacements.empty();
+    if(useProved)
+      for(const auto &access:proved->second)
+        useProved &= access.pipeline==selectedPipeline;
+    const auto completeness=m_pDriver->m_IRRuntimeDescriptorAccessComplete.find({m_UniformInspectionOffset,stage});
+    if(useProved && completeness!=m_pDriver->m_IRRuntimeDescriptorAccessComplete.end() &&
+       !completeness->second && Process::GetEnvVariable("RENDERDOC_METAL_TRACE_UNIFORM_PROOFS")=="1")
+      RDCLOG("MetalUniformInspection chunk=%llu stage=%u accessDisplay=partial; Native binding restoration independent",
+          (unsigned long long)m_UniformInspectionOffset,stage);
+    const auto report=useProved?MetalAIR::UniformAccessReport():
+        MetalAIR::UniformResourceAccess(air.c_str(), reflection->second.entryPoint.c_str(), bindings, load,{},true);
+    if(cpuOnly && Process::GetEnvVariable("RENDERDOC_METAL_TRACE_UNIFORM_PROOFS")=="1")
+      RDCLOG("MetalUniformInspection chunk=%llu stage=%u valid=%u AS=%u unknownAS=%u texture=%u unknownTexture=%u sampler=%u unknownSampler=%u bufferRead=%u bufferWrite=%u unknownBuffer=%u",
+          (unsigned long long)m_UniformInspectionOffset,stage,uint32_t(report.validModule),
+          report.queryResets,report.unresolvedStructures,report.textureCalls,report.unresolvedTextures,
+          report.samplerCalls,report.unresolvedSamplers,report.bufferReads,report.bufferWrites,report.unresolvedBuffers);
+    auto reads = report.accesses;
+    for(const auto &buffer:report.buffers)
+    {auto access=buffer.address;access.kind=MetalAIR::Value::Buffer;access.write=buffer.write;reads.push_back(access);}
+    if(useProved)
+    {
+      reads.clear();
+      for(const auto &access:proved->second)
+      {
+        if(access.pipeline!=selectedPipeline)continue;
+        MetalAIR::Value value;value.kind=MetalAIR::Value::Kind(access.kind);
+        value.object=access.object;value.offset=access.offset;
+        value.descriptorObject=access.descriptorObject;value.descriptorOffset=access.descriptorOffset;
+        value.write=access.write;value.resourceOnly=access.resourceOnly;reads.push_back(value);
+      }
+    }
     for(const auto &read : reads)
     {
-      ResourceId table; memcpy(&table, &read.object, sizeof(table));
-      const uint64_t entry = read.offset - 8;
+      const bool structure=read.kind==MetalAIR::Value::AccelerationStructure;
+      const bool sampler=read.kind==MetalAIR::Value::Sampler;
+      const bool buffer=read.kind==MetalAIR::Value::Buffer;
+      if((structure || buffer) && !read.descriptorObject)continue;
+      ResourceId table;const uint64_t object=structure || buffer?read.descriptorObject:read.object;
+      memcpy(&table, &object, sizeof(table));
+      const uint64_t entry = structure || buffer?read.descriptorOffset:sampler?read.offset:read.offset - 8;
       if(entry > UINT32_MAX) continue;
       auto slot = m_pDriver->m_DescriptorSlotShadow.find({table, entry});
       if(slot == m_pDriver->m_DescriptorSlotShadow.end()) continue;
-      auto source = slot->second.sources.find(1);
+      auto source = slot->second.sources.find(structure?3:sampler?2:buffer?0:1);
       if(source == slot->second.sources.end()) continue;
       BindlessDescriptor binding;
       binding.access.stage = stage == 0 ? ShaderStage::Compute :
                              stage == 3 ? ShaderStage::Task : stage == 4 ? ShaderStage::Mesh :
                              stage == 1 ? ShaderStage::Vertex : ShaderStage::Fragment;
-      binding.access.type = read.write ? DescriptorType::ReadWriteImage : DescriptorType::Image;
+      const bool write=read.write || (read.resourceOnly && MetalDescriptor::Writable(slot->second.type));
+      binding.access.type = structure?DescriptorType::AccelerationStructure:sampler?DescriptorType::Sampler:
+                           buffer?(write?DescriptorType::ReadWriteBuffer:
+                               MetalDescriptor::ConstantBuffer(slot->second.type)?DescriptorType::ConstantBuffer:DescriptorType::Buffer):
+                           write ? DescriptorType::ReadWriteImage : DescriptorType::Image;
       binding.access.index = DescriptorAccess::NoShaderBinding;
       binding.access.descriptorStore = table;
       binding.access.byteOffset = uint32_t(entry);
       binding.access.arrayElement = uint32_t(entry / 24);
       binding.access.byteSize = 24;
       binding.descriptor.type = binding.access.type;
-      binding.descriptor.resource = source->second.resource;
-      const auto texture = GetTexture(binding.descriptor.resource);
-      binding.descriptor.textureType = texture.type;
-      binding.descriptor.format = texture.format;
-      binding.descriptor.numMips = uint8_t(texture.mips);
-      binding.descriptor.numSlices = uint16_t(texture.arraysize);
+      if(structure)
+      {
+        ResourceId headerBuffer;memcpy(&headerBuffer,&read.object,sizeof(headerBuffer));
+        const auto header=m_pDriver->m_RayASHeaderCurrent.find({headerBuffer,read.offset});
+        if(header==m_pDriver->m_RayASHeaderCurrent.end() || source->second.resource!=headerBuffer ||
+           source->second.offset!=read.offset)continue;
+        binding.descriptor.resource=header->second.structure;
+      }
+      else if(buffer)
+      {
+        ResourceId actual;memcpy(&actual,&read.object,sizeof(actual));
+        if(actual!=source->second.resource)continue;
+        const auto description=GetBuffer(actual);
+        if(description.resourceId==ResourceId() || source->second.offset>description.length)continue;
+        binding.descriptor.resource=actual;binding.descriptor.byteOffset=source->second.offset;
+        binding.descriptor.byteSize=description.length-source->second.offset;
+        // IR buffer-view metadata encodes byte length in its low 32 bits;
+        // higher bits describe typed views. An unsized legacy entry still
+        // exposes the remaining native allocation, as before.
+        if(slot->second.data.size()>=24)
+        {
+          uint32_t length=0;memcpy(&length,slot->second.data.data()+16,4);
+          if(length)
+          {if(length>binding.descriptor.byteSize)continue;binding.descriptor.byteSize=length;}
+        }
+      }
+      else if(sampler)
+        binding.descriptor.resource=source->second.resource;
+      else
+      {
+        binding.descriptor.resource = source->second.resource;
+        const auto texture = GetTexture(binding.descriptor.resource);
+        binding.descriptor.textureType = texture.type;
+        binding.descriptor.format = texture.format;
+        binding.descriptor.numMips = uint8_t(texture.mips);
+        binding.descriptor.numSlices = uint16_t(texture.arraysize);
+        if(texture.type==TextureType::Buffer)
+        {
+          const ResourceId parent=GetBufferTextureSource(source->second.resource);
+          auto viewObject=m_pDriver->GetResourceManager()->GetResource(source->second.resource,true);
+          auto real=viewObject && viewObject->m_Type==eResTexture && viewObject->m_Real?
+              Unwrap((WrappedMTLTexture *)viewObject):NULL;
+          uint32_t bw=0,bh=0,bytes=0;
+          if(parent==ResourceId() || !real || !GetTextureDataBlockShape(real->pixelFormat(),bw,bh,bytes) ||
+             bw!=1 || bh!=1 || !bytes)continue;
+          binding.access.type=binding.descriptor.type=write?DescriptorType::ReadWriteTypedBuffer:DescriptorType::TypedBuffer;
+          binding.descriptor.resource=parent;binding.descriptor.view=source->second.resource;
+          binding.descriptor.byteOffset=real->bufferOffset();binding.descriptor.byteSize=real->width()*bytes;
+        }
+      }
       bool duplicate = false;
       for(auto &other : m_SelectedBindlessDescriptors)
       {
         duplicate |= other.access.stage == binding.access.stage &&
                      other.access.descriptorStore == table && other.access.byteOffset == entry;
         if(other.access.stage == binding.access.stage && other.access.descriptorStore == table &&
-           other.access.byteOffset == entry && read.write)
-          other.access.type = other.descriptor.type = DescriptorType::ReadWriteImage;
+           other.access.byteOffset == entry && write)
+          other.access.type = other.descriptor.type = binding.access.type;
       }
       if(!duplicate) m_SelectedBindlessDescriptors.push_back(binding);
     }
@@ -292,7 +497,9 @@ rdcarray<DescriptorLogicalLocation> MetalReplay::GetDescriptorLocations(
       for(const auto &binding : m_SelectedBindlessDescriptors)
         if(binding.access.descriptorStore == descriptorStore && binding.access.byteOffset == offset)
         {
-          location.category = binding.access.type == DescriptorType::ReadWriteImage
+          location.category = (binding.access.type == DescriptorType::ReadWriteImage ||
+                               binding.access.type == DescriptorType::ReadWriteBuffer ||
+                               binding.access.type == DescriptorType::ReadWriteTypedBuffer)
                                   ? DescriptorCategory::ReadWriteResource
                                   : DescriptorCategory::ReadOnlyResource;
           location.fixedBindNumber = offset / 24;

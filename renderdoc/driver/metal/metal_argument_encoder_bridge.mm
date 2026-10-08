@@ -24,6 +24,7 @@
 
 #include "metal_argument_encoder.h"
 #include "metal_visible_function_table.h"
+#include "metal_acceleration_structure.h"
 #include "metal_types_bridge.h"
 
 @implementation ObjCBridgeMTLArgumentEncoder
@@ -132,6 +133,43 @@
 {
   for(NSUInteger i = 0; i < range.length; i++)
     GetWrapped(self)->setSamplerState(GetWrapped(samplers[i]), range.location + i);
+}
+
+- (void)setIntersectionFunctionTable:(nullable id<MTLIntersectionFunctionTable>)table
+                        atIndex:(NSUInteger)index API_AVAILABLE(macos(11.0), ios(14.0))
+{
+  if(table && ![table isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]])
+  {
+    RDCERR("Cannot capture unwrapped Metal argument IntersectionFunctionTable");
+    return;
+  }
+  GetWrapped(self)->setIntersectionFunctionTable(
+      table ? GetWrapped((ObjCBridgeMTLIntersectionFunctionTable *)table) : NULL, index);
+}
+
+- (void)setAccelerationStructure:(nullable id<MTLAccelerationStructure>)structure
+                        atIndex:(NSUInteger)index API_AVAILABLE(macos(11.0), ios(14.0))
+{
+  if(structure && ![structure isKindOfClass:[ObjCBridgeMTLAccelerationStructure class]])
+  {
+    RDCERR("Cannot capture unwrapped Metal argument AccelerationStructure");
+    return;
+  }
+  GetWrapped(self)->setAccelerationStructure(
+      structure ? GetWrapped((ObjCBridgeMTLAccelerationStructure *)structure) : NULL, index);
+}
+
+- (void)setIntersectionFunctionTables:(const id<MTLIntersectionFunctionTable> _Nullable [])tables
+                            withRange:(NSRange)range API_AVAILABLE(macos(11.0), ios(14.0))
+{
+  if(range.location > 32 || range.length > 32 - range.location || (range.length && !tables))
+    return;
+  for(NSUInteger i = 0; i < range.length; i++)
+    if(tables[i] && ![tables[i] isKindOfClass:[ObjCBridgeMTLIntersectionFunctionTable class]]) return;
+  for(NSUInteger i = 0; i < range.length; i++)
+    GetWrapped(self)->setIntersectionFunctionTable(
+        tables[i] ? GetWrapped((ObjCBridgeMTLIntersectionFunctionTable *)tables[i]) : NULL,
+        range.location + i);
 }
 
 - (void)setVisibleFunctionTable:(nullable id<MTLVisibleFunctionTable>)table

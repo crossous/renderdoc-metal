@@ -1,4 +1,5 @@
 #include "metal_acceleration_structure.h"
+#include "metal_device.h"
 #include "metal_types_bridge.h"
 
 @implementation ObjCBridgeMTLAccelerationStructure
@@ -27,8 +28,14 @@
 - (MTLStorageMode)storageMode { return self.real.storageMode; }
 - (MTLHazardTrackingMode)hazardTrackingMode { return self.real.hazardTrackingMode; }
 - (MTLResourceOptions)resourceOptions { return self.real.resourceOptions; }
-- (id<MTLHeap>)heap { return nil; }
-- (NSUInteger)heapOffset { return 0; }
+- (id<MTLHeap>)heap { return MetalWrappedHeap(self.real.heap); }
+- (NSUInteger)heapOffset { return self.real.heapOffset; }
 - (NSUInteger)allocatedSize { return self.real.allocatedSize; }
+- (MTLResourceID)gpuResourceID API_AVAILABLE(macos(13.0), ios(16.0))
+{
+  MTLResourceID identity = self.real.gpuResourceID;
+  GetWrapped(self)->m_Device->CaptureAccelerationStructureGPUIdentity(GetWrapped(self), identity._impl);
+  return identity;
+}
 - (BOOL)isAliasable { return self.real.isAliasable; }
 @end

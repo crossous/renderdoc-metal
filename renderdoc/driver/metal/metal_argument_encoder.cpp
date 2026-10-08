@@ -30,6 +30,7 @@
 #include "metal_sampler_state.h"
 #include "metal_texture.h"
 #include "metal_visible_function_table.h"
+#include "metal_acceleration_structure.h"
 
 WrappedMTLArgumentEncoder::WrappedMTLArgumentEncoder(MTL::ArgumentEncoder *realArgumentEncoder,
                                                      ResourceId objId,
@@ -145,11 +146,20 @@ void WrappedMTLArgumentEncoder::ConfigureDescriptorLayout(const rdcarray<uint64_
 {
   for(size_t i = 0; i + 5 < descriptors.size(); i += 6)
   {
-    const uint64_t base = descriptors[i], length = descriptors[i + 2];
+    const uint64_t base = descriptors[i], length = RDCMAX(1ULL, descriptors[i + 2]);
     if(base >= ARRAY_COUNT(m_MemberTypes) || length > ARRAY_COUNT(m_MemberTypes) - base)
       continue;
     for(uint64_t member = 0; member < length; ++member)
+    {
       m_MemberTypes[base + member] = MTL::DataType(descriptors[i + 1]);
+      if(m_MemberTypes[base + member] == MTL::DataTypePointer)
+      {
+        // Device descriptors specify pointer slots, without a reflected pointee size/alignment.
+        // Validate a non-empty byte range; native encoding supplies the replay GPU address.
+        m_BufferSizes[base + member] = 1;
+        m_BufferAlignments[base + member] = 1;
+      }
+    }
   }
 }
 
@@ -231,7 +241,8 @@ template bool WrappedMTLArgumentEncoder::Serialise_newArgumentEncoder(WriteSeria
 bool WrappedMTLArgumentEncoder::SelectReplayBuffer(WrappedMTLBuffer *buffer, uint64_t offset)
 {
   if(!buffer || buffer->m_Type != eResBuffer || !buffer->m_Real ||
-     Unwrap(buffer)->storageMode() != MTL::StorageModeShared ||
+     (Unwrap(buffer)->storageMode() != MTL::StorageModeShared &&
+      Unwrap(buffer)->storageMode() != MTL::StorageModeManaged) ||
      offset > Unwrap(buffer)->length() ||
      Unwrap(this)->encodedLength() > Unwrap(buffer)->length() - offset ||
      (Unwrap(this)->alignment() && offset % Unwrap(this)->alignment()))
@@ -421,6 +432,9 @@ bool WrappedMTLArgumentEncoder::Serialise_setVisibleFunctionTable(
       return false;
     }
     Unwrap(ArgumentEncoder)->setVisibleFunctionTable(Unwrap(table), index);
+    m_Device->GetReplay()->SetArgumentBufferRayResource(
+        GetResID(ArgumentEncoder->m_ArgumentBuffer), ArgumentEncoder->m_ArgumentOffset,
+        (uint32_t)index, GetResID(table), MTL::DataTypeVisibleFunctionTable);
   }
   return true;
 }
@@ -445,6 +459,109 @@ template bool WrappedMTLArgumentEncoder::Serialise_setVisibleFunctionTable(
     ReadSerialiser &, WrappedMTLVisibleFunctionTable *, NS::UInteger);
 template bool WrappedMTLArgumentEncoder::Serialise_setVisibleFunctionTable(
     WriteSerialiser &, WrappedMTLVisibleFunctionTable *, NS::UInteger);
+
+template <typename SerialiserType>
+bool WrappedMTLArgumentEncoder::Serialise_setIntersectionFunctionTable(
+    SerialiserType &ser, WrappedMTLIntersectionFunctionTable *table, NS::UInteger index)
+{
+  SERIALISE_ELEMENT_LOCAL(ArgumentEncoder, this).Important();
+  SERIALISE_ELEMENT_LOCAL(resource, GetResID(table)).TypedAs("MTLIntersectionFunctionTable"_lit).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ArgumentEncoder || ArgumentEncoder->m_Type != eResArgumentEncoder ||
+       !ArgumentEncoder->m_Real || !ArgumentEncoder->m_ArgumentBuffer || index >= 32 ||
+       ArgumentEncoder->m_MemberTypes[index] != MTL::DataTypeIntersectionFunctionTable)
+    {
+      RDCERR("Invalid Metal argument IntersectionFunctionTable encoder or member");
+      return false;
+    }
+    auto object = resource == ResourceId() ? NULL : GetResourceManager()->GetResource(resource, true);
+    if(resource != ResourceId() && (!object || object->m_Type != eResIntersectionFunctionTable ||
+       !object->m_Real || object->m_Device != m_Device))
+    {
+      RDCERR("Invalid Metal argument IntersectionFunctionTable resource");
+      return false;
+    }
+    table = (WrappedMTLIntersectionFunctionTable *)object;
+    Unwrap(ArgumentEncoder)->setIntersectionFunctionTable(Unwrap(table), index);
+    m_Device->GetReplay()->SetArgumentBufferRayResource(
+        GetResID(ArgumentEncoder->m_ArgumentBuffer), ArgumentEncoder->m_ArgumentOffset,
+        (uint32_t)index, resource, ArgumentEncoder->m_MemberTypes[index]);
+  }
+  return true;
+}
+
+void WrappedMTLArgumentEncoder::setIntersectionFunctionTable(WrappedMTLIntersectionFunctionTable *table, NS::UInteger index)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->setIntersectionFunctionTable(Unwrap(table), index));
+  if(IsCaptureMode(m_State))
+  {
+    if(!CheckCaptureMutation()) return;
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLArgumentEncoder_setIntersectionFunctionTable);
+    Serialise_setIntersectionFunctionTable(ser, table, index);
+    auto record = GetRecord(m_ArgumentBuffer);
+    record->AddChunk(scope.Get());
+    if(table) record->AddParent(GetRecord(table));
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLArgumentEncoder, void, setIntersectionFunctionTable,
+                                WrappedMTLIntersectionFunctionTable *, NS::UInteger);
+
+template <typename SerialiserType>
+bool WrappedMTLArgumentEncoder::Serialise_setAccelerationStructure(
+    SerialiserType &ser, WrappedMTLAccelerationStructure *structure, NS::UInteger index)
+{
+  SERIALISE_ELEMENT_LOCAL(ArgumentEncoder, this).Important();
+  SERIALISE_ELEMENT_LOCAL(resource, GetResID(structure)).TypedAs("MTLAccelerationStructure"_lit).Important();
+  SERIALISE_ELEMENT(index).Important();
+  SERIALISE_CHECK_READ_ERRORS();
+  if(IsReplayingAndReading())
+  {
+    if(!ArgumentEncoder || ArgumentEncoder->m_Type != eResArgumentEncoder ||
+       !ArgumentEncoder->m_Real || !ArgumentEncoder->m_ArgumentBuffer || index >= 32 ||
+       (ArgumentEncoder->m_MemberTypes[index] != MTL::DataTypePrimitiveAccelerationStructure &&
+        ArgumentEncoder->m_MemberTypes[index] != MTL::DataTypeInstanceAccelerationStructure))
+    {
+      RDCERR("Invalid Metal argument AccelerationStructure encoder or member");
+      return false;
+    }
+    auto object = resource == ResourceId() ? NULL : GetResourceManager()->GetResource(resource, true);
+    if(resource != ResourceId() && (!object || object->m_Type != eResAccelerationStructure ||
+       !object->m_Real || object->m_Device != m_Device))
+    {
+      RDCERR("Invalid Metal argument AccelerationStructure resource");
+      return false;
+    }
+    structure = (WrappedMTLAccelerationStructure *)object;
+    Unwrap(ArgumentEncoder)->setAccelerationStructure(Unwrap(structure), index);
+    m_Device->GetReplay()->SetArgumentBufferRayResource(
+        GetResID(ArgumentEncoder->m_ArgumentBuffer), ArgumentEncoder->m_ArgumentOffset,
+        (uint32_t)index, resource, ArgumentEncoder->m_MemberTypes[index]);
+  }
+  return true;
+}
+
+void WrappedMTLArgumentEncoder::setAccelerationStructure(WrappedMTLAccelerationStructure *structure, NS::UInteger index)
+{
+  SERIALISE_TIME_CALL(Unwrap(this)->setAccelerationStructure(Unwrap(structure), index));
+  if(IsCaptureMode(m_State))
+  {
+    if(!CheckCaptureMutation()) return;
+    CACHE_THREAD_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(MetalChunk::MTLArgumentEncoder_setAccelerationStructure);
+    Serialise_setAccelerationStructure(ser, structure, index);
+    auto record = GetRecord(m_ArgumentBuffer);
+    record->AddChunk(scope.Get());
+    if(structure) record->AddParent(GetRecord(structure));
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(WrappedMTLArgumentEncoder, void, setAccelerationStructure,
+                                WrappedMTLAccelerationStructure *, NS::UInteger);
 
 template <typename SerialiserType>
 bool WrappedMTLArgumentEncoder::Serialise_setArgumentBufferArray(

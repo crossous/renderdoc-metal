@@ -179,6 +179,7 @@ bool WrappedMTLDevice::Serialise_newAccelerationStructureWithSize(
     wrapped->m_LastCompactedSizeOffset = 0;
     wrapped->m_LastCompactedSizeType = MTL::DataTypeNone;
     wrapped->m_LastCompactedWriteCommandBuffer = ResourceId();
+    wrapped->m_LastInitialCompactedSize = 0;
     wrapped->m_LastBuildKind = 0;
     wrapped->m_LastTriangleCount = 0;
     wrapped->m_LastBuildCommandBuffer = ResourceId();
@@ -248,7 +249,7 @@ INSTANTIATE_FUNCTION_WITH_RETURN_SERIALISED(WrappedMTLDevice, WrappedMTLAccelera
                                             newAccelerationStructureWithSize, NS::UInteger size);
 
 // Six scalar fields per descriptor avoid serialising Objective-C objects or process-local pointers.
-// Device-created argument buffers currently support only sampled 2D textures and samplers.
+// Device layouts describe untyped read-only buffer pointers, sampled 2D textures and samplers.
 static bool ValidArgumentDescriptors(const rdcarray<uint64_t> &fields)
 {
   if(fields.empty() || fields.size() > 16 * 6 || fields.size() % 6)
@@ -256,9 +257,14 @@ static bool ValidArgumentDescriptors(const rdcarray<uint64_t> &fields)
   bool occupied[32] = {};
   for(size_t i = 0; i < fields.size(); i += 6)
   {
-    const uint64_t index = fields[i], type = fields[i + 1], count = fields[i + 2];
-    if(index >= 32 || !count || count > 32 - index ||
-       (type != MTL::DataTypeTexture && type != MTL::DataTypeSampler) ||
+    // Metal uses zero arrayLength for a scalar descriptor (the native default).
+    const uint64_t index = fields[i], type = fields[i + 1], count = RDCMAX(1ULL, fields[i + 2]);
+    if(index >= 32 || count > 32 - index ||
+       (type != MTL::DataTypeTexture && type != MTL::DataTypeSampler &&
+        type != MTL::DataTypePointer && type != MTL::DataTypeVisibleFunctionTable &&
+        type != MTL::DataTypeIntersectionFunctionTable &&
+        type != MTL::DataTypePrimitiveAccelerationStructure &&
+        type != MTL::DataTypeInstanceAccelerationStructure) ||
        fields[i + 3] != MTL::BindingAccessReadOnly ||
        (type == MTL::DataTypeTexture && fields[i + 4] != MTL::TextureType2D) ||
        fields[i + 5] != 0)
@@ -612,8 +618,18 @@ WrappedMTLDevice::~WrappedMTLDevice()
   SAFE_DELETE(m_DummyReplayRateMap);
   SAFE_DELETE(m_Replay);
   SAFE_DELETE(m_StoredStructuredData);
-  if(m_ResourceManager && IsReplayMode(m_State))
+  if(m_FrameCaptureRecord && m_ResourceManager)
+  {
+    m_FrameCaptureRecord->Delete(m_ResourceManager);
+    m_FrameCaptureRecord = NULL;
+  }
+  if(m_ResourceManager && (IsReplayMode(m_State) || IsStructuredExporting(m_State)))
+  {
+    // The owner device is destroyed here, not by its child resource manager.
+    // This also applies to the CPU-only structured-export dummy device.
+    m_ResourceManager->ReleaseResource(GetResID(this));
     m_ResourceManager->Shutdown();
+  }
   SAFE_DELETE(m_ResourceManager);
   if(m_mtlCommandQueue)
     m_mtlCommandQueue->release();
@@ -623,9 +639,30 @@ WrappedMTLDevice::~WrappedMTLDevice()
 }
 
 IMP WrappedMTLDevice::g_real_CAMetalLayer_nextDrawable;
-IMP WrappedMTLDevice::g_real_CAMetalDrawable_texture;
-IMP WrappedMTLDevice::g_real_CAMetalDrawable_present;
 uint64_t WrappedMTLDevice::g_nextDrawableTLSSlot;
+
+// Drawable acquisition can occur on several application workers/layers. Publish
+// the original IMP before replacing a selector, and keep one record per class.
+// An inherited hook must resolve its ancestor's original rather than be saved
+// as an original implementation itself.
+static Threading::CriticalSection s_ObjcDrawableHooksLock;
+struct MetalDrawableOriginals
+{
+  IMP texture = NULL;
+  IMP present = NULL;
+};
+static std::map<Class, MetalDrawableOriginals> s_DrawableOriginals;
+
+static MetalDrawableOriginals DrawableOriginals(Class cls)
+{
+  SCOPED_LOCK(s_ObjcDrawableHooksLock);
+  for(; cls; cls = class_getSuperclass(cls))
+  {
+    auto found = s_DrawableOriginals.find(cls);
+    if(found != s_DrawableOriginals.end()) return found->second;
+  }
+  return {};
+}
 
 MTL::Texture *hooked_CAMetalDrawable_texture(id self, SEL _cmd)
 {
@@ -633,14 +670,17 @@ MTL::Texture *hooked_CAMetalDrawable_texture(id self, SEL _cmd)
   if(texture)
     return (MTL::Texture *)texture;
 
-  return ((MTL::Texture * (*)(id, SEL))WrappedMTLDevice::g_real_CAMetalDrawable_texture)(self,
-                                                                                       _cmd);
+  const IMP original = DrawableOriginals(object_getClass(self)).texture;
+  RDCASSERT(original && original != (IMP)hooked_CAMetalDrawable_texture);
+  return ((MTL::Texture * (*)(id, SEL))original)(self, _cmd);
 }
 
 void hooked_CAMetalDrawable_present(id self, SEL _cmd)
 {
   WrappedMTLTexture *texture = WrappedMTLDevice::GetDrawableTexture((MTL::Drawable *)self);
-  ((void (*)(id, SEL))WrappedMTLDevice::g_real_CAMetalDrawable_present)(self, _cmd);
+  const IMP original = DrawableOriginals(object_getClass(self)).present;
+  RDCASSERT(original && original != (IMP)hooked_CAMetalDrawable_present);
+  ((void (*)(id, SEL))original)(self, _cmd);
   // commandBuffer.presentDrawable already records its presentation and removes this
   // drawable from the lookup. Only handle applications that call drawable.present().
   if(texture)
@@ -664,29 +704,50 @@ CA::MetalDrawable *hooked_CAMetalLayer_nextDrawable(id self, SEL _cmd)
   // wrapped texture into Apple's real residency set. Use the real device only for the duration of
   // nextDrawable(), then restore the proxy which applications expect to retrieve from the layer.
   mtlLayer->setDevice(Unwrap(device));
+  IMP nextDrawable;
+  {
+    SCOPED_LOCK(s_ObjcDrawableHooksLock);
+    nextDrawable = WrappedMTLDevice::g_real_CAMetalLayer_nextDrawable;
+  }
   CA::MetalDrawable *caMtlDrawable =
-      ((CA::MetalDrawable * (*)(id, SEL)) WrappedMTLDevice::g_real_CAMetalLayer_nextDrawable)(self,
-                                                                                              _cmd);
+      ((CA::MetalDrawable * (*)(id, SEL))nextDrawable)(self, _cmd);
   mtlLayer->setDevice((MTL::Device *)device);
 
   if(caMtlDrawable)
   {
-    static bool s_hookDrawableTexture = false;
-    if(!s_hookDrawableTexture)
+    const Class cls = object_getClass(caMtlDrawable);
+    MetalDrawableOriginals originals;
     {
-      Method textureMethod = class_getInstanceMethod(object_getClass(caMtlDrawable),
-                                                     sel_registerName("texture"));
-      WrappedMTLDevice::g_real_CAMetalDrawable_texture =
-          method_setImplementation(textureMethod, (IMP)hooked_CAMetalDrawable_texture);
-      Method presentMethod = class_getInstanceMethod(object_getClass(caMtlDrawable),
-                                                    sel_registerName("present"));
-      WrappedMTLDevice::g_real_CAMetalDrawable_present =
-          method_setImplementation(presentMethod, (IMP)hooked_CAMetalDrawable_present);
-      s_hookDrawableTexture = true;
+      SCOPED_LOCK(s_ObjcDrawableHooksLock);
+      auto found = s_DrawableOriginals.find(cls);
+      if(found == s_DrawableOriginals.end())
+      {
+        const SEL textureSelector = sel_registerName("texture"), presentSelector = sel_registerName("present");
+        Method textureMethod = class_getInstanceMethod(cls, textureSelector);
+        Method presentMethod = class_getInstanceMethod(cls, presentSelector);
+        originals.texture = method_getImplementation(textureMethod);
+        originals.present = method_getImplementation(presentMethod);
+        const MetalDrawableOriginals inherited = DrawableOriginals(class_getSuperclass(cls));
+        if(originals.texture == (IMP)hooked_CAMetalDrawable_texture) originals.texture = inherited.texture;
+        if(originals.present == (IMP)hooked_CAMetalDrawable_present) originals.present = inherited.present;
+        RDCASSERT(originals.texture && originals.present &&
+                  originals.texture != (IMP)hooked_CAMetalDrawable_texture &&
+                  originals.present != (IMP)hooked_CAMetalDrawable_present);
+        s_DrawableOriginals[cls] = originals;
+        // class_getInstanceMethod may return an inherited Method. Add a local
+        // override first so installing a subclass hook never rewrites its parent.
+        if(!class_addMethod(cls, textureSelector, (IMP)hooked_CAMetalDrawable_texture,
+                            method_getTypeEncoding(textureMethod)))
+          method_setImplementation(class_getInstanceMethod(cls, textureSelector), (IMP)hooked_CAMetalDrawable_texture);
+        if(!class_addMethod(cls, presentSelector, (IMP)hooked_CAMetalDrawable_present,
+                            method_getTypeEncoding(presentMethod)))
+          method_setImplementation(class_getInstanceMethod(cls, presentSelector), (IMP)hooked_CAMetalDrawable_present);
+      }
+      else originals = found->second;
     }
 
     MTL::Texture *realTexture =
-        ((MTL::Texture * (*)(id, SEL))WrappedMTLDevice::g_real_CAMetalDrawable_texture)(
+        ((MTL::Texture * (*)(id, SEL))originals.texture)(
             (id)caMtlDrawable, sel_registerName("texture"));
     device->RegisterDrawableInfo(caMtlDrawable, realTexture);
   }
@@ -696,6 +757,7 @@ CA::MetalDrawable *hooked_CAMetalLayer_nextDrawable(id self, SEL _cmd)
 
 void WrappedMTLDevice::MTLHookObjcMethods()
 {
+  SCOPED_LOCK(s_ObjcDrawableHooksLock);
   static bool s_hookObjcMethods = false;
   if(s_hookObjcMethods)
     return;
@@ -705,8 +767,9 @@ void WrappedMTLDevice::MTLHookObjcMethods()
 
   Method m =
       class_getInstanceMethod(objc_lookUpClass("CAMetalLayer"), sel_registerName("nextDrawable"));
-  g_real_CAMetalLayer_nextDrawable =
-      method_setImplementation(m, (IMP)hooked_CAMetalLayer_nextDrawable);
+  g_real_CAMetalLayer_nextDrawable = method_getImplementation(m);
+  RDCASSERT(g_real_CAMetalLayer_nextDrawable != (IMP)hooked_CAMetalLayer_nextDrawable);
+  method_setImplementation(m, (IMP)hooked_CAMetalLayer_nextDrawable);
   s_hookObjcMethods = true;
 }
 
@@ -1124,7 +1187,9 @@ bool WrappedMTLDevice::Serialise_newBufferWithBytes(SerialiserType &ser, Wrapped
     // (e.g. AS scratch/output). Recreate them on every seek through the same owned lifecycle.
     const bool frameBuffer = GetReplayEpoch() != 0 &&
         (!m_DescriptorCoverage || (m_DescriptorCoverage >= 8 && m_DescriptorFrameBuffers.count(Buffer)));
+    const bool byteFactory=MetalChunk(ser.ChunkMetadata().chunkID)==MetalChunk::MTLDevice_newBufferWithBytes;
     if(Buffer == ResourceId() || !length ||
+       (byteFactory?initialData.size()!=length:!initialData.empty()) ||
        (!initialData.empty() && (initialData.size() != length ||
         (uint64_t(options) & 0xf0ULL) >= uint64_t(MTL::ResourceStorageModePrivate))) ||
        (previous && !(frameBuffer && IsActiveReplaying(m_State) &&
@@ -2106,8 +2171,11 @@ WrappedMTLComputePipelineState *WrappedMTLDevice::newComputePipelineStateWithFun
     WrappedMTLFunction *computeFunction, NS::Error **error)
 {
   MTL::ComputePipelineState *realPipeline;
+  const MetalComputeCompileTrace trace = BeginComputeCompileTrace(
+      "function-sync", Unwrap(computeFunction), NULL, MTL::PipelineOptionNone);
   SERIALISE_TIME_CALL(realPipeline =
                           Unwrap(this)->newComputePipelineState(Unwrap(computeFunction), error));
+  MetalEndComputeCompileTrace(trace, realPipeline != NULL);
   if(!realPipeline)
     return NULL;
 
@@ -2139,7 +2207,9 @@ bool WrappedMTLDevice::Serialise_newTextureWithDescriptor(SerialiserType &ser,
   {
     const bool cube = descriptor.textureType == MTL::TextureTypeCube ||
                       descriptor.textureType == MTL::TextureTypeCubeArray;
-    if(!ValidTextureMipCount(descriptor.width, descriptor.height, descriptor.depth,
+    if(descriptor.pixelFormat == MTL::PixelFormatX32_Stencil8 ||
+       descriptor.pixelFormat == MTL::PixelFormatX24_Stencil8 ||
+       !ValidTextureMipCount(descriptor.width, descriptor.height, descriptor.depth,
                              descriptor.mipmapLevelCount) ||
        (cube && (descriptor.width != descriptor.height || descriptor.depth != 1 ||
                  !descriptor.arrayLength || descriptor.sampleCount != 1 ||
@@ -2439,8 +2509,9 @@ bool WrappedMTLDevice::supportsRenderDynamicLibraries()
 
 bool WrappedMTLDevice::supportsRaytracing()
 {
-  // RD device does not support ray tracing
-  return false;
+  // Compute RT capture/replay follows the physical device capability. Resource,
+  // address and submission recovery are validated independently of this query.
+  return Unwrap(this)->supportsRaytracing();
 }
 
 bool WrappedMTLDevice::supportsFunctionPointers()
@@ -2455,7 +2526,7 @@ bool WrappedMTLDevice::supportsFunctionPointersFromRender()
 
 bool WrappedMTLDevice::supportsRaytracingFromRender()
 {
-  // RD device does not support ray tracing
+  // Render-stage RT capture/replay has not passed its separate enablement gate.
   return false;
 }
 

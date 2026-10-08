@@ -60,7 +60,9 @@ kernel void initial_images(device uint *out [[buffer(0)]],const device ulong *ro
     const bool shared=getenv("RENDERDOC_METAL_SHARED_TEXTURE_INITIAL")!=nullptr;
     if(sourced&&shared)return 17;
     const bool placement=getenv("RENDERDOC_METAL_TEXTURE_INITIAL_PLACEMENT")!=nullptr;
-    const auto specs=InitialTextureSpecs(shared);NSMutableArray<id<MTLTexture>> *textures=[NSMutableArray new];
+    const bool uint16=getenv("RENDERDOC_METAL_UINT16_TEXTURE_INITIAL")!=nullptr;
+    if(uint16&&(sourced||shared))return 18;
+    const auto specs=InitialTextureSpecs(shared,uint16);NSMutableArray<id<MTLTexture>> *textures=[NSMutableArray new];
     NSMutableArray<MTLTextureDescriptor *> *descriptors=[NSMutableArray new];
     std::vector<NSUInteger> offsets;NSUInteger heapSize=0;
     for(const auto &s:specs)

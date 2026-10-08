@@ -48,7 +48,8 @@ def main():
         else:
             name,value={'command-zero':('command','0'),'command-other':('command','999999'),'encoder-zero':('encoder','0'),'encoder-other':('encoder','999999'),'pass-zero':('pass','0'),'pass-other':('pass','999999'),'buffer-zero':('buffer','0'),'buffer-other':('buffer','999999'),'offset-unaligned':('offset','17'),'offset-other':('offset','20'),'ordinal-over-limit':('ordinal','512'),'ordinal-duplicate':('ordinal','1'),'kind-wrong':('wordCount','5' if kind==4 else '4'),'writes-undeclared':('writesDeclared','false')}[label]
             field(first,name).text=value
-        for c in nodes:c.set('length','0')
+        # Keep skippable chunk budgets for forward-only metadata scanning.
+        for c in nodes:c.set('length',str(int(c.get('length','0'))+128))
         target=folder/(label+'.zip.xml');tree.write(target,encoding='utf-8',xml_declaration=True)
         with zipfile.ZipFile(target.with_suffix(''),'w',compression=zipfile.ZIP_DEFLATED) as z:
             for n,data in blobs.items():z.writestr(n,data)

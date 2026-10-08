@@ -12,6 +12,12 @@ public:
   WrappedMTLHeap(MTL::Heap *real, ResourceId id, WrappedMTLDevice *device);
 
   WrappedMTLBuffer *newBuffer(NS::UInteger length, MTL::ResourceOptions options);
+  WrappedMTLAccelerationStructure *newAccelerationStructure(NS::UInteger size,
+                                                            NS::UInteger offset, bool placement);
+  template <typename SerialiserType>
+  bool Serialise_newAccelerationStructure(SerialiserType &ser,
+      WrappedMTLAccelerationStructure *structure, NS::UInteger size,
+      NS::UInteger offset, bool placement);
   WrappedMTLBuffer *newBufferWithOffset(NS::UInteger length, MTL::ResourceOptions options,
                                         NS::UInteger offset);
   WrappedMTLTexture *newTexture(RDMTL::TextureDescriptor &descriptor);
@@ -34,7 +40,15 @@ public:
 
   enum { TypeEnum = eResHeap };
   void ResetFramePlacementRanges();
+  bool RecordCaptureAllocation(uint64_t offset, uint64_t size);
   bool CanImplicitlyAliasBuffers(uint64_t begin, uint64_t end, ResourceId after);
+  bool HasOtherPlacementOverlap(uint64_t begin, uint64_t end, ResourceId after) const
+  {
+    for(const PlacementRange &range : m_PlacementRanges)
+      if(range.resource != after && begin < range.end && range.begin < end)
+        return true;
+    return false;
+  }
   bool HasPlacementOverlap(uint64_t begin, uint64_t end) const
   {
     for(const PlacementRange &range : m_PlacementRanges)
@@ -51,4 +65,9 @@ private:
     bool frameResource;
   };
   rdcarray<PlacementRange> m_PlacementRanges;
+  // Allocation history belongs to the physical heap lifetime. Retiring an
+  // object must not turn previously owned backing into a fresh allocation.
+  Threading::CriticalSection m_CaptureAllocationLock;
+  std::map<uint64_t, uint64_t> m_CaptureAllocatedRanges;
+  bool m_CaptureAllocationHistoryComplete = true;
 };

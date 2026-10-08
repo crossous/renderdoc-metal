@@ -7,7 +7,7 @@
 #include "renderdoc/api/replay/renderdoc_replay.h"
 REPLAY_PROGRAM_MARKER()
 static void FindDraws(const rdcarray<ActionDescription> &actions,rdcarray<ActionDescription> &draws,unsigned &begins,unsigned &ends)
-{for(const auto &a:actions){if(a.flags&ActionFlags::Drawcall)draws.push_back(a);if(a.flags&ActionFlags::BeginPass)begins++;if(a.flags&ActionFlags::EndPass)ends++;FindDraws(a.children,draws,begins,ends);}}
+{for(const auto &a:actions){if(a.flags&ActionFlags::Drawcall)draws.push_back(a);if(!(a.flags&ActionFlags::CommandBufferBoundary)){if(a.flags&ActionFlags::BeginPass)begins++;if(a.flags&ActionFlags::EndPass)ends++;}FindDraws(a.children,draws,begins,ends);}}
 
 static void Find(const rdcarray<ActionDescription> &actions,rdcarray<uint32_t> &dispatches,uint32_t &last)
 {for(const auto &a:actions){if(a.eventId>last)last=a.eventId;if(a.flags&ActionFlags::Dispatch)dispatches.push_back(a.eventId);Find(a.children,dispatches,last);}}
@@ -21,6 +21,7 @@ int main(int argc,char **argv)
     const char *depthFormat=getenv("RENDERDOC_METAL_MRT_DEPTH_FORMAT");
     const bool depthPass=depthFormat!=nullptr; const bool stencilPass=depthPass && !strcmp(depthFormat,"d32s8");
     const bool depthOnlyPass=getenv("RENDERDOC_METAL_MRT_DEPTH_ONLY")!=nullptr;
+    const bool fragmentlessColor=getenv("RENDERDOC_METAL_MRT_FRAGMENTLESS_COLOR")!=nullptr;
     auto checkDepth=[&](IReplayController *replay,const MetalPipe::State *state,unsigned draw)->bool {
       if(!depthPass)return true;
       if(!state || state->depthTarget.resource==ResourceId() ||
@@ -144,19 +145,24 @@ int main(int argc,char **argv)
     if(depthOnlyPass) {
       if(draws.size()!=3 || draws[0].depthOut==ResourceId())return 51;
       depthOnlyDraw=draws[0];
-      for(ResourceId output:depthOnlyDraw.outputs)if(output!=ResourceId())return 52;
+      if(fragmentlessColor) {
+        if(depthOnlyDraw.outputs[0]==ResourceId())return 91;
+        for(unsigned i=1;i<depthOnlyDraw.outputs.size();i++)if(depthOnlyDraw.outputs[i]!=ResourceId())return 52;
+      } else for(ResourceId output:depthOnlyDraw.outputs)if(output!=ResourceId())return 52;
       draws.erase(0); const unsigned extra=getenv("RENDERDOC_METAL_PARALLEL_MRT")?2:1;
       if(begins<extra || ends<extra)return 53; begins-=extra;ends-=extra;
     }
     if(renderIndirect) { if(!begins || !ends)return 65;begins--;ends--; } // tail-zero blit
-    const bool fiveTargets=draws.size()==2 && draws[0].outputs[4]!=ResourceId();
+    unsigned targetCount=0;
+    if(draws.size()==2)for(const auto output:draws[0].outputs)targetCount+=output!=ResourceId();
+    if(targetCount<2 || targetCount>8)return 90;
     if(emptyDispatch) { if(!begins || !ends)return 74;begins--;ends--; } // extra zero-argument compute scope
     if(deadSlotTableBorrowDispatch) {if(!begins || !ends)return 89;begins--;ends--;}
     if(reusedDispatch) {if(!begins || !ends)return 83;begins--;ends--;}
     const bool parallelPass=begins==7;
     if(draws.size()!=2 || begins!=(parallelPass?7:5) || ends!=begins || draws[0].outputs[0]==ResourceId() || draws[0].outputs[1]==ResourceId() ||
-       draws[1].outputs[0]!=draws[0].outputs[0] || draws[1].outputs[1]!=ResourceId())return 21;
-    if(fiveTargets)for(unsigned slot=2;slot<5;slot++)
+       draws[1].outputs[0]!=draws[0].outputs[0] || draws[1].outputs[1]!=ResourceId()){fprintf(stderr,"MRT action layout mismatch: draws=%zu begins=%u ends=%u depthOnly=%d parallel=%d\n",draws.size(),begins,ends,depthOnlyPass,parallelPass);return 21;}
+    for(unsigned slot=2;slot<targetCount;slot++)
       if(draws[0].outputs[slot]==ResourceId() || draws[1].outputs[slot]!=ResourceId())return 28;
     if(renderIndirect)
       for(unsigned i=0;i<2;i++)
@@ -232,7 +238,16 @@ int main(int argc,char **argv)
         if(!depthOnlyState || depthOnlyState->fragmentShader.resourceId!=ResourceId() ||
            depthOnlyState->vertexShader.resourceId==ResourceId() ||
            depthOnlyState->depthTarget.resource!=depthOnlyDraw.depthOut || !checkDepth(controller,depthOnlyState,0))return 54;
-        for(const auto &target:depthOnlyState->colorTargets)if(target.resource!=ResourceId())return 55;
+        if(fragmentlessColor) {
+          if(depthOnlyState->colorTargets.empty() || depthOnlyState->colorTargets[0].resource!=depthOnlyDraw.outputs[0])return 92;
+          auto pixels=controller->GetTextureData(depthOnlyDraw.outputs[0],{0,0,0});
+          if(pixels.size()!=16)return 93;
+          for(unsigned i=0;i<16;i+=4)if(pixels[i]!=80 || pixels[i+1]!=64 || pixels[i+2]!=128 || pixels[i+3]!=255)return 94;
+          if(!controller->GetDescriptorAccess().empty()) {
+            for(const auto &access:controller->GetDescriptorAccess())
+              if(access.stage==ShaderStage::Fragment)return 95;
+          }
+        } else for(const auto &target:depthOnlyState->colorTargets)if(target.resource!=ResourceId())return 55;
       }
       controller->SetFrameEvent(draws[0].eventId,true);
       if(!checkVisibility(4))return 76;
@@ -249,7 +264,7 @@ int main(int argc,char **argv)
       const auto firstPixels=controller->GetTextureData(intermediate,{0,0,0});
       if(firstPixels.size()!=16)return 23;
       for(size_t i=0;i<firstPixels.size();i+=4)if(firstPixels[i]!=strtoul(argv[7],nullptr,10)||firstPixels[i+1]!=64||firstPixels[i+2]!=128||firstPixels[i+3]!=255)return 24;
-      if(fiveTargets)for(unsigned slot=2;slot<5;slot++)
+      for(unsigned slot=2;slot<targetCount;slot++)
       {
         if(state->colorTargets.size()<=slot || state->colorTargets[slot].resource!=draws[0].outputs[slot])return 29;
         const auto extra=controller->GetTextureData(draws[0].outputs[slot],{0,0,0});
@@ -314,7 +329,7 @@ int main(int argc,char **argv)
     if(pixels.size()!=16)return 14;
     for(size_t i=0;i<pixels.size();i+=4)if(pixels[i]!=128||pixels[i+1]!=64||pixels[i+2]!=strtoul(argv[7],nullptr,10)||pixels[i+3]!=255)return 15;
     controller->Shutdown();RENDERDOC_ShutdownReplay();
-    printf("PASS sourced MRT/cross-pass: targets=%u parallel=%u scopes=%u/%u GPU sampled 122/186, ordinary bytes, seeks and every attachment pixel\n",fiveTargets?5U:2U,parallelPass?1U:0U,begins,ends);
+    printf("PASS sourced MRT/cross-pass: targets=%u parallel=%u scopes=%u/%u GPU sampled 122/186, ordinary bytes, seeks and every attachment pixel\n",targetCount,parallelPass?1U:0U,begins,ends);
   }
   return 0;
 }

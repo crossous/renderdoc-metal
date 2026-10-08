@@ -58,20 +58,46 @@ static bool ValidTextureSubresource(WrappedMTLTexture *texture, NS::UInteger sli
          uint64_t(slice) < TextureSliceCount(real);
 }
 
+bool ValidateMetalTextureRegion(const RDMTL::TextureDescriptor &texture, uint64_t slice,
+    uint64_t level, const MTL::Origin &origin, const MTL::Size &size, uint64_t *footprint)
+{
+  if(level >= texture.mipmapLevelCount || level >= 64 || texture.sampleCount != 1)
+    return false;
+  uint64_t slices = RDCMAX(1ULL, uint64_t(texture.arrayLength));
+  if(texture.textureType == MTL::TextureTypeCube) slices = 6;
+  else if(texture.textureType == MTL::TextureTypeCubeArray)
+  { if(slices > UINT64_MAX / 6) return false; slices *= 6; }
+  const uint64_t width = RDCMAX(1ULL, uint64_t(texture.width) >> level);
+  const uint64_t height = RDCMAX(1ULL, uint64_t(texture.height) >> level);
+  const uint64_t depth = RDCMAX(1ULL, uint64_t(texture.depth) >> level);
+  uint32_t bw = 0, bh = 0, bytes = 0;
+  if(!texture.width || !texture.height || !texture.depth || slice >= slices ||
+     !size.width || !size.height || !size.depth || origin.x > width ||
+     size.width > width - origin.x || origin.y > height || size.height > height - origin.y ||
+     origin.z > depth || size.depth > depth - origin.z ||
+     !GetTextureDataBlockShape(texture.pixelFormat, bw, bh, bytes) ||
+     origin.x % bw || origin.y % bh ||
+     (size.width % bw && origin.x + size.width != width) ||
+     (size.height % bh && origin.y + size.height != height)) return false;
+  const uint64_t columns = size.width / bw + (size.width % bw != 0);
+  const uint64_t rows = size.height / bh + (size.height % bh != 0);
+  if(columns > UINT64_MAX / bytes || rows > UINT64_MAX / (columns * bytes) ||
+     size.depth > UINT64_MAX / (columns * bytes * rows)) return false;
+  if(footprint) *footprint = columns * bytes * rows * size.depth;
+  return true;
+}
+
 static bool ValidTextureRegion(WrappedMTLTexture *texture, NS::UInteger slice, NS::UInteger level,
                                const MTL::Origin &origin, const MTL::Size &size)
 {
-  if(!ValidTextureSubresource(texture, slice, level))
-    return false;
-
+  if(!ValidTextureSubresource(texture, slice, level)) return false;
   MTL::Texture *real = Unwrap(texture);
-  const uint64_t width = RDCMAX(1ULL, uint64_t(real->width()) >> level);
-  const uint64_t height = RDCMAX(1ULL, uint64_t(real->height()) >> level);
-  const uint64_t depth = RDCMAX(1ULL, uint64_t(real->depth()) >> level);
-  return size.width > 0 && size.height > 0 && size.depth > 0 &&
-         uint64_t(origin.x) <= width && uint64_t(size.width) <= width - uint64_t(origin.x) &&
-         uint64_t(origin.y) <= height && uint64_t(size.height) <= height - uint64_t(origin.y) &&
-         uint64_t(origin.z) <= depth && uint64_t(size.depth) <= depth - uint64_t(origin.z);
+  RDMTL::TextureDescriptor descriptor;
+  descriptor.textureType = real->textureType(); descriptor.pixelFormat = real->pixelFormat();
+  descriptor.width = real->width(); descriptor.height = real->height(); descriptor.depth = real->depth();
+  descriptor.mipmapLevelCount = real->mipmapLevelCount(); descriptor.arrayLength = real->arrayLength();
+  descriptor.sampleCount = real->sampleCount();
+  return ValidateMetalTextureRegion(descriptor, slice, level, origin, size);
 }
 
 // Keep linear transfers bounded before they reach the native driver. BC1/BC5 use 4x4
@@ -80,12 +106,41 @@ bool ValidateMetalLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger sli
                                     NS::UInteger level, const MTL::Origin &origin,
                                     const MTL::Size &size, uint64_t bufferLength,
                                     NS::UInteger offset, NS::UInteger rowPitch,
-                                    NS::UInteger imagePitch, MTL::BlitOption options)
+                                    NS::UInteger imagePitch, MTL::BlitOption options,
+                                    uint64_t *footprint)
 {
-  if(!ValidTextureRegion(texture, slice, level, origin, size) || !bufferLength ||
-     options != MTL::BlitOptionNone || Unwrap(texture)->sampleCount() != 1)
+  MTL::Texture *real=texture && texture->m_Type==eResTexture?Unwrap(texture):NULL;
+  if(!real)return false;
+  RDMTL::TextureDescriptor descriptor;
+  descriptor.textureType=real->textureType();descriptor.pixelFormat=real->pixelFormat();
+  descriptor.width=real->width();descriptor.height=real->height();descriptor.depth=real->depth();
+  descriptor.mipmapLevelCount=real->mipmapLevelCount();descriptor.sampleCount=real->sampleCount();
+  descriptor.arrayLength=real->arrayLength();
+  return ValidateMetalLinearTextureCopy(descriptor,slice,level,origin,size,bufferLength,
+      offset,rowPitch,imagePitch,options,footprint);
+}
+
+bool ValidateMetalLinearTextureCopy(const RDMTL::TextureDescriptor &texture, NS::UInteger slice,
+                                    NS::UInteger level, const MTL::Origin &origin,
+                                    const MTL::Size &size, uint64_t bufferLength,
+                                    NS::UInteger offset, NS::UInteger rowPitch,
+                                    NS::UInteger imagePitch, MTL::BlitOption options,
+                                    uint64_t *footprint)
+{
+  if(!bufferLength || options!=MTL::BlitOptionNone || texture.sampleCount!=1 ||
+     !texture.width || !texture.height || !texture.depth || level>=texture.mipmapLevelCount || level>=64)
     return false;
-  MTL::PixelFormat mtlFormat = Unwrap(texture)->pixelFormat();
+  uint64_t slices=RDCMAX(1ULL,uint64_t(texture.arrayLength));
+  if(texture.textureType==MTL::TextureTypeCube)slices=6;
+  else if(texture.textureType==MTL::TextureTypeCubeArray)
+  {if(slices>UINT64_MAX/6)return false;slices*=6;}
+  const uint64_t width=RDCMAX(1ULL,uint64_t(texture.width)>>level);
+  const uint64_t height=RDCMAX(1ULL,uint64_t(texture.height)>>level);
+  const uint64_t depth=RDCMAX(1ULL,uint64_t(texture.depth)>>level);
+  if(slice>=slices || !size.width || !size.height || !size.depth ||
+     origin.x>width || size.width>width-origin.x || origin.y>height || size.height>height-origin.y ||
+     origin.z>depth || size.depth>depth-origin.z)return false;
+  const MTL::PixelFormat mtlFormat=texture.pixelFormat;
   const bool bc1 = mtlFormat == MTL::PixelFormatBC1_RGBA ||
                    mtlFormat == MTL::PixelFormatBC1_RGBA_sRGB;
   const bool bc5 = mtlFormat == MTL::PixelFormatBC5_RGUnorm;
@@ -96,16 +151,15 @@ bool ValidateMetalLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger sli
     return false;
   const uint64_t pixelBytes = bc1 ? 8 : bc5 ? 16 :
                                uint64_t(format.compByteWidth) * format.compCount;
-  const uint64_t width = RDCMAX(1ULL, uint64_t(Unwrap(texture)->width()) >> level);
-  const uint64_t height = RDCMAX(1ULL, uint64_t(Unwrap(texture)->height()) >> level);
   if((bc1 || bc5) && (origin.x % 4 || origin.y % 4 ||
                       (size.width % 4 && origin.x + size.width != width) ||
                       (size.height % 4 && origin.y + size.height != height) ||
                       size.depth != 1))
     return false;
-  const uint64_t rowBytes = (bc1 || bc5) ? ((uint64_t(size.width) + 3) / 4) * pixelBytes :
-                                                  uint64_t(size.width) * pixelBytes;
-  const uint64_t rows = (bc1 || bc5) ? (uint64_t(size.height) + 3) / 4 : uint64_t(size.height);
+  const uint64_t columns=(bc1 || bc5)?size.width/4+(size.width%4!=0):size.width;
+  if(columns>UINT64_MAX/pixelBytes)return false;
+  const uint64_t rowBytes=columns*pixelBytes;
+  const uint64_t rows=(bc1 || bc5)?size.height/4+(size.height%4!=0):size.height;
   if(offset > bufferLength || offset % pixelBytes || rowPitch % pixelBytes ||
      rowPitch < rowBytes || rowBytes > bufferLength - offset)
     return false;
@@ -117,6 +171,7 @@ bool ValidateMetalLinearTextureCopy(WrappedMTLTexture *texture, NS::UInteger sli
      (imagePitch == 0 || imagePitch % rowPitch || rows > imagePitch / rowPitch ||
       size.depth - 1 > available / imagePitch))
     return false;
+  if(footprint)*footprint=(size.depth>1?(size.depth-1)*imagePitch:0)+(rows-1)*rowPitch+rowBytes;
   return true;
 }
 
@@ -405,13 +460,18 @@ bool WrappedMTLBlitCommandEncoder::Serialise_synchronizeResource(SerialiserType 
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  // TODO: implement RD MTL replay
   if(IsReplayingAndReading())
   {
+    auto object = (WrappedMTLObject *)resource;
     if(!BlitCommandEncoder || BlitCommandEncoder->m_Type != eResBlitCommandEncoder ||
        !BlitCommandEncoder->m_Real ||
-       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder))
+       BlitCommandEncoder != m_Device->GetReplayBlitCommandEncoder(BlitCommandEncoder) ||
+       !object || !object->m_Real || object->m_Device != m_Device ||
+       (object->m_Type != eResBuffer && object->m_Type != eResTexture) ||
+       Unwrap(resource)->storageMode() != MTL::StorageModeManaged)
       return false;
+    // Managed CPU/GPU coherency is an original encoded dependency, not a host wait.
+    Unwrap(BlitCommandEncoder)->synchronizeResource(Unwrap(resource));
   }
   return true;
 }
