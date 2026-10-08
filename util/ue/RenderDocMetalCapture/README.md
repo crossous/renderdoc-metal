@@ -1,6 +1,6 @@
 # RenderDoc Metal Capture for Unreal Editor
 
-[English project guide](../../../README.md) · [简体中文项目说明](../../../README-zh.md)
+[English project guide](https://github.com/crossous/renderdoc-metal/blob/metal-replay-v1.46/README.md) · [简体中文项目说明](https://github.com/crossous/renderdoc-metal/blob/metal-replay-v1.46/README-zh.md)
 
 A project plugin with **Project Settings → Plugins → RenderDoc Metal**, automatic startup attachment, and **Capture Metal Frame** in the viewport toolbar and Tools menu. Prefer the `.app` setting for the downloaded distribution; the optional `.dylib` setting takes precedence.
 
@@ -51,7 +51,7 @@ RENDERDOC_METAL_LIBRARY="/Applications/RenderDocMetal.app/Contents/lib/librender
 
 Loading RenderDoc is distinct from recovering GPU pointers. UE bindless and converted inline-ray-query workloads may need descriptor identities, layouts and publication timing from the exact engine's MetalRHI module. The **Matching MetalRHI provider** advanced setting preloads such an instrumented module after RenderDoc. It does not build, certify or substitute metadata automatically.
 
-The repository's [provider preparation](../prepare_ue_metal_provider.py) and [isolated module build](../build_ue_metal_module_macos.py) tools target the tested UE 5.8.3 source/ABI. Both refuse to patch the installed engine. The builder also requires the matching cached MetalRHI compile/link response files. An example developer workflow from the repository root:
+The repository's [provider preparation](https://github.com/crossous/renderdoc-metal/blob/metal-replay-v1.46/util/ue/prepare_ue_metal_provider.py) and [isolated module build](https://github.com/crossous/renderdoc-metal/blob/metal-replay-v1.46/util/ue/build_ue_metal_module_macos.py) tools target the tested UE 5.8.3 source/ABI. Both refuse to patch the installed engine. The builder also requires the matching cached MetalRHI compile/link response files. An example developer workflow from the repository root:
 
 ```sh
 python3 util/ue/prepare_ue_metal_provider.py \
@@ -80,6 +80,6 @@ A C++ project's own editor target may be named `<Project>Editor`; use that targe
 
 ## Validation scope
 
-The current modules compile and link on UE 5.8.3 arm64. An isolated **Null RHI** commandlet test passed configuration-driven `.app` startup attachment, one restart, both module loads and final RenderDoc API resolution; it exited normally. Native device-factory experiments separately verified effective preload interposition. The [release record](../../../docs/metal-replay/RELEASE_2026-10-08.md) records path-priority and startup-guard controls, exact binary hashes and preserved failures.
+The current modules compile and link on UE 5.8.3 arm64. An isolated **Null RHI** commandlet test passed configuration-driven `.app` startup attachment, one restart, both module loads and final RenderDoc API resolution; it exited normally. Native device-factory experiments separately verified effective preload interposition. The [release record](https://github.com/crossous/renderdoc-metal/blob/metal-replay-v1.46/docs/metal-replay/RELEASE_2026-10-08.md) records path-priority and startup-guard controls, exact binary hashes and preserved failures.
 
 The new automatic-attachment path has **not** yet been certified by a GPU capture from the project-settings UI or a full Release replay/output matrix. Existing capture-button and UE frame evidence is tied to the earlier recorded candidates. The supplied 1280×720 demo's Native image comparison still fails; installing this plugin does not establish arbitrary Lumen/Nanite/VSM correctness. Render-stage RT, RT shader stepping, AS internals and Pixel History remain outside the supported scope.
