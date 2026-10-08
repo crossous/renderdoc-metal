@@ -1,3 +1,5 @@
+2026-10-08 用户集成入口更新：[Project Settings 自动附加与 Capture 按钮指南](RenderDocMetalCapture/README.md)。优先下载app和UE5.8.3插件，填写app或dylib、开启startup attach。实际native late-load实验无hook，插件在RHI前一次re-exec；最终CPU启动/保护通过，新UI GPU捕获和Release整帧输出未验，历史调试launcher不代表新版本通过。详见[发布记录](../../docs/metal-replay/RELEASE_2026-10-08.md)。
+
 2026-10-06 UE RT诊断监督与重启取证见 [B495](../../docs/metal-replay/BATCH495_UE_RT_FREEZE_DIAGNOSTICS.md)。RT入口使用独立640×480启动INI、12s帧进展检测、bounded sample/owned group收尾；18项CPU失败注入测试通过。重启后未重新启动UE/GPU，具体全机停滞根因未修复；不得把监督器通过当作UE RT验收或直接重跑旧长测试。CPU验证入口：`python3 util/ue/test_ue_metal_capture_supervisor.py`。
 
 2026-10-05 B466：本 fork 的 shader tools 已内置 app 并自动注册，View 提供 AIR/MSL/HLSL/GLSL，Edit/Compiler 接入 Apple AIR/MSL 编译；release 打包检查固定源码、hash、架构与许可证，无用户路径配置/运行时 Homebrew 或 Rust 依赖，仅 Apple 工具依赖 Xcode。高层重建仅预览，Edit 严格限无资源/无特化的简单 FS；当前 UE3928 fptoui、3612 fptosi 尚不能高层反编译，AIR 可用。定向工具/搬迁/超时/打包 PASS；实际 UI AIR Apply/Remove 与三种源码 View PASS（公开 Qt 选择，非鼠标下拉验收）；同一 UE 两 shader 在06ae及随后匹配当前 API 的固定48afd5d3上均两轮写资源字节一致/恢复/fatal0。新头旧库混用追加 probe 失败不计 PASS；另一任务已更新 backend，本轮未重跑全量，06ae全量仅属于B464。详情见 [B466](../../docs/metal-replay/BATCH466_BUNDLED_SHADER_TOOLS.md)，未提交/推送。

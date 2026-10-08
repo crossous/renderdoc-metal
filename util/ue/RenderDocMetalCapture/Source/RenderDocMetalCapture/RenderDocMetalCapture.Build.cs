@@ -9,7 +9,7 @@ public class RenderDocMetalCapture : ModuleRules
         PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "ThirdParty", "RenderDoc"));
         PrivateDependencyModuleNames.AddRange(new[] {
             "Core", "CoreUObject", "Engine", "Projects", "RenderCore", "RHI", "Slate", "SlateCore",
-            "ToolMenus", "UnrealEd"
+            "ToolMenus", "UnrealEd", "RenderDocMetalBootstrap"
         });
         if (Target.Platform == UnrealTargetPlatform.Mac)
         {

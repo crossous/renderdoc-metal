@@ -1,18 +1,28 @@
 {
   "FileVersion": 3,
-  "Version": 1,
-  "VersionName": "0.1",
+  "Version": 2,
+  "VersionName": "0.2",
   "FriendlyName": "RenderDoc Metal Capture",
-  "Description": "One-frame RenderDoc Metal capture from the UE editor viewport.",
+  "Description": "Configure a macOS RenderDoc app, attach automatically before Metal initialization, and capture the editor viewport.",
   "Category": "Developer Tools",
   "EnabledByDefault": true,
   "CanContainContent": false,
   "Modules": [
     {
+      "Name": "RenderDocMetalBootstrap",
+      "Type": "Editor",
+      "LoadingPhase": "PostConfigInit",
+      "PlatformAllowList": [
+        "Mac"
+      ]
+    },
+    {
       "Name": "RenderDocMetalCapture",
       "Type": "Editor",
       "LoadingPhase": "PostEngineInit",
-      "PlatformAllowList": ["Mac"]
+      "PlatformAllowList": [
+        "Mac"
+      ]
     }
   ]
 }

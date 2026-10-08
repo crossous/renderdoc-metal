@@ -214,7 +214,7 @@ private:
     if(!Symbol)
     {
       UE_LOG(LogRenderDocMetalCapture, Warning,
-             TEXT("RENDERDOC_GetAPI is absent; start the editor with DYLD_INSERT_LIBRARIES"));
+             TEXT("RENDERDOC_GetAPI is absent; configure Project Settings > Plugins > RenderDoc Metal and restart, or launch with DYLD_INSERT_LIBRARIES"));
       return false;
     }
 
@@ -249,7 +249,7 @@ private:
   {
     if(!ResolveAPI())
     {
-      Notify(LOCTEXT("NoAPI", "RenderDoc Metal is not loaded; use the launch script."), true);
+      Notify(LOCTEXT("NoAPI", "RenderDoc Metal is not loaded; configure Project Settings > Plugins > RenderDoc Metal and restart."), true);
       return;
     }
     if(PollHandle.IsValid() || EndCaptureHandle.IsValid() || CaptureWarmupHandle.IsValid())
