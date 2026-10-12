@@ -1,5 +1,5 @@
 # Metal stage release — 2026-10-13
 
-Freeze production at the metal.2 release source. Revalidate the final version-stamped bundle, publish the exact source tag and verify remote assets/checksums. Original dirty work and rejected/unpromoted trials are preserved. After publication return to fixed 1cb8 UE difference diagnosis; no root-cause progress is claimed.
+Release publication complete: remote tag peels to build source, four asset digests/downloads and extracted bundle files/signature match. Resume fixed1cb8 from the release code; preserve excluded working copy and actual error-preserving subset. Earliest API violation/whole-frame cause UNKNOWN. No automatic next-stage commit/publish.
 
-[Release record](RELEASE_2026-10-13.md) · [Release](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
+[Final release record](RELEASE_2026-10-13.md) · [Release](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
