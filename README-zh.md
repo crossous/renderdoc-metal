@@ -27,7 +27,7 @@
 | --- | --- |
 | **`metal-replay-v1.46`** | 默认分支，持续开发 Metal 后端、测试与 macOS 集成。 |
 | `codex/ue58-safe-checkpoint` | 较早的 UE 集成检查点，保留作历史参考。 |
-| **`v1.46-metal.1`** | 优化构建的 macOS arm64 Release 应用，按开发预览版发布。 |
+| **`v1.46-metal.2`** | 优化构建的 macOS arm64 Release 应用，按开发预览版发布。 |
 
 ## 实际界面
 
@@ -44,11 +44,11 @@
 
 </details>
 
-> **当前验收状态：** 已记录的 Debug 候选完成三次整帧 GPU 重放及两次 EID 0 重置，但与同帧 Native UE 图像的比较仍失败；另一份新捕获存在背景 placement 恢复缺口。可下载的 Release 应用已通过构建、打包和运行时检查，其 GPU 输出及最终矩阵尚未认证。详见 [截帧 manifest](util/test/metal/captures/ue-lumen-nanite-vsm-720p/manifest.json) 与 [当前证据](docs/metal-replay/UE_UI_CAPTURE_2026-10-08.md)。
+> **当前验收状态：** metal.2 通过相关 API/compute RT、事件/EID0、此前匹配的 UE、GUI 与运行时检查。固定较大 UE capture 与同帧 Native 的完整图像比较仍失败。本次是阶段预览，不代表完整 UE/Lumen 光追回放已正确。详见 [发布证据](docs/metal-replay/RELEASE_2026-10-13.md)。
 
 ## 下载应用
 
-**[下载 Apple Silicon 版 RenderDocMetal.app](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.1/RenderDocMetal-v1.46-metal.1-macos-arm64.zip)** · [版本说明与校验值](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
+**[下载 Apple Silicon 版 RenderDocMetal.app](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.2/RenderDocMetal-v1.46-metal.2-macos-arm64.zip)** · [版本说明与校验值](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
 
 1. 解压 ZIP，将 **`RenderDocMetal.app`** 移到 `/Applications`。
 2. 打开应用。后端、命令行工具、Qt、Python 与固定版本 shader tools 均已打包，**运行不需要 Homebrew**。
@@ -74,7 +74,7 @@ open -n "/Applications/RenderDocMetal.app" --args "/path/to/UE-Lumen-Nanite-VSM-
 | 虚拟阴影贴图 | 搜索 **`VirtualShadow`** 或 **`Shadow`**，查看相应 draw/dispatch 与纹理。 |
 | 事件往返 | 在前后事件之间切换，再返回帧末，检查资源内容与绑定。自动化 EID 0 测试另有记录。 |
 
-此前 Debug 构建首次加载这份较大截帧约需三分钟；Release 加载速度尚未形成公开性能结论。这是 **UI 手工验收样例**，不是像素完全一致的认证结果。场景、比较方式与 SHA256 检查见 [样例说明](util/test/metal/captures/ue-lumen-nanite-vsm-720p/README.md)。
+此前 Debug 构建首次加载这份较大截帧约需三分钟；新 Release 的固定可比 capture 加载测量见 [阶段记录](docs/metal-replay/RELEASE_2026-10-13.md)，该测量不冒充本旧 demo 的耗时。这是 **UI 手工验收样例**，不是像素完全一致的认证结果。场景、比较方式与 SHA256 检查见 [样例说明](util/test/metal/captures/ue-lumen-nanite-vsm-720p/README.md)。
 
 ## Metal 图形能力
 
@@ -98,7 +98,7 @@ open -n "/Applications/RenderDocMetal.app" --args "/path/to/UE-Lumen-Nanite-VSM-
 
 项目级 **RenderDoc Metal Capture** 插件提供路径设置，以及视口 **Capture Metal Frame** 按钮 / Tools 菜单入口。
 
-1. 在 [Release 页面](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)下载 UE 插件，或将 [`util/ue/RenderDocMetalCapture`](util/ue/RenderDocMetalCapture)复制到 `<项目>/Plugins/RenderDocMetalCapture`。
+1. 在 [Release 页面](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.1)下载 UE 插件，或将 [`util/ue/RenderDocMetalCapture`](util/ue/RenderDocMetalCapture)复制到 `<项目>/Plugins/RenderDocMetalCapture`。
 2. 在 Plugins 中启用 **RenderDoc Metal Capture**。源代码插件应使用对应 UE 版本重新构建；本次集成按 **UE 5.8.3 / macOS arm64** 构建。
 3. 打开 **Project Settings → Plugins → RenderDoc Metal**。填写 **RenderDoc application (.app)**，或填写 **RenderDoc library (.dylib)**。两者同时填写时，优先使用 dylib。
 4. 开启 **Automatically attach on editor startup**，重启 UE。设置按用户和项目保存；默认不对 commandlet 或 Null RHI 运行进行附加。
@@ -126,7 +126,7 @@ bash util/buildscripts/scripts/build_metal_dev_macos.sh
 bash util/buildscripts/scripts/test_metal_ray_basics_macos.sh
 ```
 
-构建配置、哈希和真实测试范围见 [Metal 开发文档](docs/metal-replay/README.md)与 [Release 记录](docs/metal-replay/RELEASE_2026-10-08.md)。构建成功、GPU 执行完成、输出比较、整体验收分别记录，历史版本通过不能直接计为新二进制通过。
+构建配置、哈希和真实测试范围见 [Metal 开发文档](docs/metal-replay/README.md)与 [Release 记录](docs/metal-replay/RELEASE_2026-10-13.md)。构建成功、GPU 执行完成、输出比较、整体验收分别记录，历史版本通过不能直接计为新二进制通过。
 
 ## 致谢与许可证
 

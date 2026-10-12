@@ -1,3 +1,5 @@
+2026-10-13 本次阶段发布授权：已完成的当前实验冻结；本次 metal.2 相关提交、推送、GitHub Release 明确获人类授权，覆盖旧禁止发布口径。审查并保留工作、最终源码重建及相关 API/RT/UE/GUI/性能验收后发布精确 source tag。未解决完整 UE 差异保留为已知问题、不计修复，不扩大能力声明。发布后按原持续授权回固定锚点定位，下一阶段不自动提交或发布。详见 RELEASE_2026-10-13.md/STATUS/HANDOFF。
+
 # Metal 后端持续开发
 
 适用于本仓库 Metal 捕获、恢复、重放与测试。采用 `docs/metal-replay/EXECUTION_REVIEW_2026-10-08.md` 与配套 MAIN_THREAD_PROMPT；本规则明确替代冲突的历史场景许可、CPU producer/表达式准入和测试 oracle，不重做已完成事项。历史记录只代表对应候选证据。
