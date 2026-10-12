@@ -6,7 +6,7 @@
 <h1 align="center">RenderDoc Metal</h1>
 <p align="center"><strong>在 macOS 上捕获 Metal 帧，检查图形调用与资源。</strong></p>
 <p align="center">
-  <a href="https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.1"><img src="https://img.shields.io/badge/download-macOS_arm64-3bb779" alt="下载 macOS arm64 应用"></a>
+  <a href="https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2"><img src="https://img.shields.io/badge/download-macOS_arm64-3bb779" alt="下载 macOS arm64 应用"></a>
   <img src="https://img.shields.io/badge/API-Metal-555555" alt="Metal API">
   <img src="https://img.shields.io/badge/status-development_preview-d99a29" alt="开发预览">
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-4279bf" alt="MIT 许可证"></a>
@@ -48,7 +48,7 @@
 
 ## 下载应用
 
-**[下载 Apple Silicon 版 RenderDocMetal.app](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.1/RenderDocMetal-v1.46-metal.1-macos-arm64.zip)** · [版本说明与校验值](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.1)
+**[下载 Apple Silicon 版 RenderDocMetal.app](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.1/RenderDocMetal-v1.46-metal.1-macos-arm64.zip)** · [版本说明与校验值](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
 
 1. 解压 ZIP，将 **`RenderDocMetal.app`** 移到 `/Applications`。
 2. 打开应用。后端、命令行工具、Qt、Python 与固定版本 shader tools 均已打包，**运行不需要 Homebrew**。
@@ -98,7 +98,7 @@ open -n "/Applications/RenderDocMetal.app" --args "/path/to/UE-Lumen-Nanite-VSM-
 
 项目级 **RenderDoc Metal Capture** 插件提供路径设置，以及视口 **Capture Metal Frame** 按钮 / Tools 菜单入口。
 
-1. 在 [Release 页面](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.1)下载 UE 插件，或将 [`util/ue/RenderDocMetalCapture`](util/ue/RenderDocMetalCapture)复制到 `<项目>/Plugins/RenderDocMetalCapture`。
+1. 在 [Release 页面](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)下载 UE 插件，或将 [`util/ue/RenderDocMetalCapture`](util/ue/RenderDocMetalCapture)复制到 `<项目>/Plugins/RenderDocMetalCapture`。
 2. 在 Plugins 中启用 **RenderDoc Metal Capture**。源代码插件应使用对应 UE 版本重新构建；本次集成按 **UE 5.8.3 / macOS arm64** 构建。
 3. 打开 **Project Settings → Plugins → RenderDoc Metal**。填写 **RenderDoc application (.app)**，或填写 **RenderDoc library (.dylib)**。两者同时填写时，优先使用 dylib。
 4. 开启 **Automatically attach on editor startup**，重启 UE。设置按用户和项目保存；默认不对 commandlet 或 Null RHI 运行进行附加。

@@ -6,7 +6,7 @@
 <h1 align="center">RenderDoc Metal</h1>
 <p align="center"><strong>Metal frame capture and graphics inspection on macOS.</strong></p>
 <p align="center">
-  <a href="https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.1"><img src="https://img.shields.io/badge/download-macOS_arm64-3bb779" alt="macOS arm64 download"></a>
+  <a href="https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2"><img src="https://img.shields.io/badge/download-macOS_arm64-3bb779" alt="macOS arm64 download"></a>
   <img src="https://img.shields.io/badge/API-Metal-555555" alt="Metal API">
   <img src="https://img.shields.io/badge/status-development_preview-d99a29" alt="Development preview">
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-4279bf" alt="MIT license"></a>
@@ -48,7 +48,7 @@ The scene enables **Lumen hardware RT / inline ray queries, Nanite and Virtual S
 
 ## Download
 
-**[Download RenderDocMetal.app for Apple Silicon](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.1/RenderDocMetal-v1.46-metal.1-macos-arm64.zip)** · [Release notes & checksums](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.1)
+**[Download RenderDocMetal.app for Apple Silicon](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.1/RenderDocMetal-v1.46-metal.1-macos-arm64.zip)** · [Release notes & checksums](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
 
 1. Extract the ZIP and move **`RenderDocMetal.app`** to `/Applications`.
 2. Open the app. The bundle includes the backend, CLI, Qt, Python and pinned shader processors; **Homebrew is not required to run it**.
@@ -98,7 +98,7 @@ Initial loading of this large capture took about three minutes in the recorded D
 
 The project-level **RenderDoc Metal Capture** plugin adds path settings and a **Capture Metal Frame** viewport button / Tools menu entry.
 
-1. Download the [UE plugin package](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.1), or copy [`util/ue/RenderDocMetalCapture`](util/ue/RenderDocMetalCapture) into `<YourProject>/Plugins/RenderDocMetalCapture`.
+1. Download the [UE plugin package](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2), or copy [`util/ue/RenderDocMetalCapture`](util/ue/RenderDocMetalCapture) into `<YourProject>/Plugins/RenderDocMetalCapture`.
 2. Enable **RenderDoc Metal Capture** in the Plugins dialog. Rebuild the source plugin against your exact UE version when required; the included integration is built against **UE 5.8.3 / macOS arm64**.
 3. Open **Project Settings → Plugins → RenderDoc Metal**. Set the **RenderDoc application (.app)** path, or supply the **RenderDoc library (.dylib)** path instead. The dylib field takes precedence when both are set.
 4. Enable **Automatically attach on editor startup**, then restart UE. Settings are stored per user/project. Commandlets and Null RHI runs are skipped by default.

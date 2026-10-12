@@ -1,5 +1,5 @@
 # Metal stage release — 2026-10-13
 
-Frozen recovery batch → final-source build → API/RT/UE/GUI/performance acceptance → GitHub metal.2 prerelease → return to fixed UE difference diagnosis.
+Current recovery batch closed → final tagged artifact checks and GitHub release → resume the preserved fixed UE anchor. Matched UE and API/compute RT checks pass; full UE viewport remains FAIL; larger first-open timings still exceed 10 seconds. No render-stage RT/Metal 3/AS internals certification.
 
-See [release scope](RELEASE_2026-10-13.md); final detailed evidence is in the Release manifest.
+[Release record](RELEASE_2026-10-13.md) · [Release](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)

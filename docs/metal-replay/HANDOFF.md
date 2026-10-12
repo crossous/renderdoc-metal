@@ -1,5 +1,5 @@
 # Metal stage release — 2026-10-13
 
-Review selected recovery source against metal.1, rebuild final bundle, run the related matrix and GUI/performance comparison, then tag/publish the exact build source. Experimental working copy remains preserved.
+Freeze production at the metal.2 release source. Revalidate the final version-stamped bundle, publish the exact source tag and verify remote assets/checksums. Original dirty work and rejected/unpromoted trials are preserved. After publication return to fixed 1cb8 UE difference diagnosis; no root-cause progress is claimed.
 
-See [release scope](RELEASE_2026-10-13.md); final detailed evidence is in the Release manifest.
+[Release record](RELEASE_2026-10-13.md) · [Release](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
