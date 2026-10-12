@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 #include "metal_core.h"
+#include "metal_load_profile.h"
 #include "serialise/rdcfile.h"
 #include "metal_blit_command_encoder.h"
 #include "metal_argument_encoder.h"
@@ -46,6 +47,8 @@
 #include "metal_heap.h"
 #include "metal_rate_map.h"
 #include "metal_texture.h"
+#include "metal_render_indirect_readback.h"
+#include "metal_cpu_write_watch.h"
 
 static Threading::CriticalSection s_DrawableTexturesLock;
 static rdcflatmap<MTL::Drawable *, WrappedMTLTexture *> s_DrawableTextures;
@@ -1621,6 +1624,7 @@ static bool FindMetalFrameDiagnosticBoundary(StreamReader *reader, uint64_t vers
 
 RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBuffers)
 {
+  MetalLoadProfile::Scope profile("load", true);
   int sectionIdx = rdc->SectionIndex(SectionType::FrameCapture);
   if(sectionIdx < 0)
     RETURN_ERROR_RESULT(ResultCode::FileCorrupted, "File does not contain captured API data");
@@ -1695,7 +1699,14 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
             "Metal pre-submit diagnostic rejected background GPU operation %s",name.c_str());
     }
 
-    bool success = ProcessChunk(ser, chunk);
+    const rdcstr chunkName=MetalLoadProfile::Enabled()?GetChunkName((uint32_t)chunk):rdcstr();
+    const char *phase=(chunkName.contains("PipelineState") || chunkName.beginsWith("MTLLibrary::") ||
+        chunkName.contains("newLibrary"))?"native_library_function_PSO":
+        (chunkName.contains("newBuffer") || chunkName.contains("newTexture") ||
+         chunkName.contains("newHeap") || chunkName.contains("newAccelerationStructure"))?
+        "resource_factory":"other_load_chunks";
+    bool success;
+    {MetalLoadProfile::Scope chunkProfile(phase);success=ProcessChunk(ser,chunk);}
     ser.EndChunk();
 
     if(reader->IsErrored())
@@ -1786,6 +1797,50 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
           if(end < offset || end > m_FrameReader->GetSize())
             RETURN_ERROR_RESULT(ResultCode::APIDataCorrupted,
                                 "Invalid Metal frame chunk length during purge scan");
+          // Ordinary byte payloads are not serialized object identities. A
+          // uint64 value equal to an unrelated retired ResourceId does not
+          // reference that resource. Decode the actual API identity fields
+          // before excluding these contents from the conservative fallback.
+          // Address/typed relocation and defined input ranges are still
+          // validated independently by the full descriptor preflight.
+          if(candidate == MetalChunk::MTLBuffer_CaptureHeapBirthContents ||
+             candidate == MetalChunk::MTLBuffer_CaptureHeapBirthUnspecified ||
+             candidate == MetalChunk::MTLBuffer_InternalModifyCPUContents ||
+             candidate == MetalChunk::MTLDevice_newBufferWithBytes ||
+             candidate == MetalChunk::MTLDevice_newBufferWithLength)
+          {
+            ResourceId buffer, heap;
+            uint64_t start = 0, size = 0;
+            bytebuf data;
+            if(candidate == MetalChunk::MTLBuffer_CaptureHeapBirthContents ||
+               candidate == MetalChunk::MTLBuffer_CaptureHeapBirthUnspecified)
+            {
+              safetyScan.Serialise("buffer"_lit, buffer);
+              safetyScan.Serialise("heap"_lit, heap);
+              safetyScan.Serialise("offset"_lit, start);
+              safetyScan.Serialise("data"_lit, data);
+            }
+            else if(candidate == MetalChunk::MTLBuffer_InternalModifyCPUContents)
+            {
+              safetyScan.Serialise("Buffer"_lit, buffer);
+              safetyScan.Serialise("start"_lit, start);
+              safetyScan.Serialise("size"_lit, size);
+              safetyScan.Serialise("data"_lit, data);
+            }
+            else
+            {
+              MTL::ResourceOptions options;
+              safetyScan.Serialise("Buffer"_lit, buffer);
+              safetyScan.Serialise("initialData"_lit, data);
+              safetyScan.Serialise("length"_lit, size);
+              safetyScan.Serialise("options"_lit, options);
+            }
+            for(ResourceId identity : {buffer, heap})
+              if(purgeOffsets.count(identity) && offset > purgeOffsets[identity])
+                RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+                                    "Metal buffer is referenced after Empty (%s)",
+                                    ToStr(identity).c_str());
+          }
           if(!purgeOffsets.empty())
           {
             bytebuf bytes;
@@ -1826,6 +1881,9 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
         m_FrameReader->SetOffset(0);
       }
 
+      if(!ValidateReplayBackgroundBufferAliases())
+        RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
+            "Inconsistent Metal background buffer physical initial state or address mapping");
       if(!PrepareDescriptorTables())
         RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid or unsupported explicit Metal descriptor initial data");
       if(!ValidateDescriptorFrame())
@@ -1913,7 +1971,9 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
       }
       m_FrameReader->SetOffset(0);
 
-      RDResult status = ContextReplayLog(m_State, ~0U, eReplay_Full,prefixEndOffset);
+      RDResult status;
+      {MetalLoadProfile::Scope frameProfile("first_frame_native");
+        status=ContextReplayLog(m_State, ~0U, eReplay_Full,prefixEndOffset);}
       if(status != ResultCode::Succeeded)
       {
         // A rejected chunk can leave an encoder open. Complete the command buffer while its
@@ -1937,7 +1997,7 @@ RDResult WrappedMTLDevice::ReadLogInitialisation(RDCFile *rdc, bool storeStructu
                               "Invalid Metal compute indirect per-use execution state");
         if(!GetReplay()->ResolvePendingRenderIndirectActions())
           RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,
-                              "Metal render indirect execution-point arguments do not match capture");
+                              "Invalid Metal render indirect actual arguments or restored input bounds");
       }
       if(prefixCoverage)
       {
@@ -2223,6 +2283,36 @@ RDResult WrappedMTLDevice::ContextReplayLog(CaptureState readType, uint32_t endE
   return result;
 }
 
+bool WrappedMTLDevice::ReplaySubmissionsHaveDisjointResources(ResourceId before, ResourceId after)
+{
+  const auto a = m_DescriptorSubmissionResources.find(before);
+  const auto b = m_DescriptorSubmissionResources.find(after);
+  if(a == m_DescriptorSubmissionResources.end() || b == m_DescriptorSubmissionResources.end())
+    return false;
+  // Only an actual live allocation/physical-footprint proof can remove a cross-
+  // queue prefix obligation. Unknown/future objects stay conservative. Sharing
+  // an object or heap range retains the original producer dependency, including
+  // a different logical view of the same backing. No shader-value proof is used.
+  for(ResourceId left : a->second)
+  {
+    auto l = GetResourceManager()->GetResource(left, true);
+    if(!l || !l->m_Real || (l->m_Type != eResBuffer && l->m_Type != eResTexture)) return false;
+    const auto lf = GetMetalIndirectWriteFootprint(Unwrap((WrappedMTLResource *)l), l->m_Type == eResTexture);
+    if(!lf.valid) return false;
+    for(ResourceId right : b->second)
+    {
+      if(left == right) return false;
+      auto r = GetResourceManager()->GetResource(right, true);
+      if(!r || !r->m_Real || (r->m_Type != eResBuffer && r->m_Type != eResTexture)) return false;
+      const auto rf = GetMetalIndirectWriteFootprint(Unwrap((WrappedMTLResource *)r), r->m_Type == eResTexture);
+      if(!rf.valid || lf.owner.get() == rf.owner.get() ||
+         (lf.heap && lf.heap.get() == rf.heap.get() && lf.begin < rf.end && rf.begin < lf.end) ||
+         (!lf.heap && !rf.heap && lf.buffer && rf.buffer && lf.begin < rf.end && rf.begin < lf.end)) return false;
+    }
+  }
+  return true;
+}
+
 bool WrappedMTLDevice::ReplayMissingCopySubmissionPrefix(WrappedMTLCommandBuffer *target)
 {
   if(m_DescriptorCoverage < 52 || !IsActiveReplaying(m_State)) return true;
@@ -2240,22 +2330,29 @@ bool WrappedMTLDevice::ReplayMissingCopySubmissionPrefix(WrappedMTLCommandBuffer
   };
   // Like D3D12/Vulkan submission replay, retain every earlier GPU submission in
   // the prefix, even when its encoding appears later than this event in the file.
-  // Reconstruct only fully preflighted ordinary copies and timeline signals. Vulkan
+  // Reconstruct only fully preflighted ordinary copies/fills and timeline signals. Vulkan
   // queue replay likewise handles submission synchronization separately from draw encoding.
   for(ResourceId prior : m_DescriptorSubmissionOrder)
   {
     if(prior == targetID) break;
+    const auto priorQueue = m_DescriptorSubmissionQueues.find(prior);
+    const auto targetQueue = m_DescriptorSubmissionQueues.find(targetID);
+    if(m_DescriptorCoverage >= 65 && priorQueue != m_DescriptorSubmissionQueues.end() &&
+       targetQueue != m_DescriptorSubmissionQueues.end() && priorQueue->second != targetQueue->second &&
+       ReplaySubmissionsHaveDisjointResources(prior, targetID)) continue;
     const auto state = m_ReplayCommandBuffers.find(prior);
     if(state != m_ReplayCommandBuffers.end() && state->second.committed) continue;
     const auto planned = m_DescriptorPartialCopySubmissions.find(prior);
     if(planned == m_DescriptorPartialCopySubmissions.end() || !planned->second.valid ||
-       (!planned->second.copies && !planned->second.signals) ||
+       (!planned->second.copies && !planned->second.fills && !planned->second.signals) ||
        (state != m_ReplayCommandBuffers.end() && state->second.encoded))
     {
       RDCERR("Unsupported missing Metal submission prefix %s before %s", ToStr(prior).c_str(), ToStr(targetID).c_str());
       success = false; break;
     }
-    if(Unwrap(target)->status() != MTL::CommandBufferStatusNotEnqueued)
+    if(Unwrap(target)->status() != MTL::CommandBufferStatusNotEnqueued &&
+       (priorQueue == m_DescriptorSubmissionQueues.end() ||
+        targetQueue == m_DescriptorSubmissionQueues.end() || priorQueue->second == targetQueue->second))
     {
       RDCERR("Cannot replay a missing producer behind a reserved consumer"); success = false; break;
     }
@@ -2423,6 +2520,9 @@ bool WrappedMTLDevice::FinishReplayCommands()
   if(success && m_OverlayPreservePass == ResourceId() && !ApplyTerminalReplayBufferPurges())
     success = false;
   m_ReplayCommandBuffers.clear();
+  m_ReplayCopyAddressFields.clear();
+  m_ReplayCopyAddressBudget = MetalReplayPreflightBudget();
+  m_ReplayASInputObservations.clear();
   m_ReplayCommandBufferOrder.clear();
   m_ReplayCommandBufferQueueOrder.clear();
   m_PendingReplayCPUBufferUpdates.clear();
@@ -2440,7 +2540,8 @@ bool WrappedMTLDevice::FinishReplayCommands()
 
 bool WrappedMTLDevice::BeginOverlayReplayPrefix(ResourceId encoder)
 {
-  if(m_OverlayPreservePass != ResourceId() || m_OverlayReplayEncoder || encoder == ResourceId())
+  if(m_OverlayPreservePass != ResourceId() || m_OverlayReplayEncoder ||
+     m_DiagnosticReplayComputeEncoder || encoder == ResourceId())
     return false;
   if(!FinishReplayCommands()) return false;
   m_OverlayPreservePass = encoder;
@@ -2449,11 +2550,71 @@ bool WrappedMTLDevice::BeginOverlayReplayPrefix(ResourceId encoder)
 
 bool WrappedMTLDevice::FinishOverlayReplayPrefix(ResourceId encoder)
 {
-  if(encoder == ResourceId() || encoder != m_OverlayPreservePass || m_OverlayReplayEncoder)
+  if(encoder == ResourceId() || encoder != m_OverlayPreservePass || m_OverlayReplayEncoder ||
+     m_DiagnosticReplayComputeEncoder)
     return false;
   const bool success = FinishReplayCommands();
   m_OverlayPreservePass = ResourceId();
   return success;
+}
+
+bool WrappedMTLDevice::ReadOverlayRenderPass(uint32_t eventId, ResourceId &command,
+                                            RDMTL::RenderPassDescriptor &descriptor)
+{
+  // Diagnostic reconstruction only. Deserialize the original API descriptor,
+  // never reconstruct its formats, views or counters from a shader name.
+  const APIEvent *event = GetReplay()->GetEvent(eventId);
+  if(!event || event->chunkIndex >= m_StructuredFile->chunks.size()) return false;
+  const auto draw = m_StructuredFile->chunks[event->chunkIndex];
+  const auto field = draw->FindChild("RenderCommandEncoder");
+  if(!field) return false;
+  const ResourceId encoder = field->AsResourceId();
+  const APIEvent *factory = NULL;
+  for(uint32_t i = 1; i < eventId; ++i)
+  {
+    const APIEvent *previous = GetReplay()->GetEvent(i);
+    if(!previous || previous->chunkIndex >= m_StructuredFile->chunks.size()) continue;
+    const SDChunk *chunk = m_StructuredFile->chunks[previous->chunkIndex];
+    const auto source = chunk->FindChild("RenderCommandEncoder");
+    if(source && source->AsResourceId() == encoder &&
+       MetalChunk(chunk->metadata.chunkID) == MetalChunk::MTLCommandBuffer_renderCommandEncoderWithDescriptor)
+      factory = previous;
+  }
+  if(!factory) return false;
+  const uint64_t saved = m_FrameReader->GetOffset();
+  m_FrameReader->SetOffset(factory->fileOffset);
+  ReadSerialiser ser(m_FrameReader, Ownership::Nothing);
+  ser.SetVersion(m_SectionVersion); ser.SetUserData(GetResourceManager());
+  const auto kind = ser.ReadChunk<MetalChunk>();
+  ResourceId actualEncoder;
+  ser.Serialise("CommandBuffer"_lit, command);
+  ser.Serialise("RenderCommandEncoder"_lit, actualEncoder);
+  ser.Serialise("descriptor"_lit, descriptor);
+  ser.EndChunk();
+  const bool valid = !ser.IsErrored() && actualEncoder == encoder &&
+      kind == MetalChunk::MTLCommandBuffer_renderCommandEncoderWithDescriptor;
+  m_FrameReader->SetOffset(saved);
+  if(!valid) return false;
+  // Resolve the application's deferred stores, retaining their actual values.
+  // The bounded sequence diagnostic accepts defined colour output only.
+  for(uint32_t i = eventId + 1; ; ++i)
+  {
+    const APIEvent *next = GetReplay()->GetEvent(i);
+    if(!next || next->eventId != i || next->chunkIndex >= m_StructuredFile->chunks.size()) break;
+    const SDChunk *chunk = m_StructuredFile->chunks[next->chunkIndex];
+    const auto source = chunk->FindChild("RenderCommandEncoder");
+    if(!source || source->AsResourceId() != encoder) continue;
+    const auto operation = MetalChunk(chunk->metadata.chunkID);
+    if(operation == MetalChunk::MTLRenderCommandEncoder_endEncoding) break;
+    if(operation == MetalChunk::MTLRenderCommandEncoder_setColorStoreAction)
+    {
+      const auto action = chunk->FindChild("storeAction");
+      const auto index = chunk->FindChild("colorAttachmentIndex");
+      if(!action || !index || index->data.basic.u >= descriptor.colorAttachments.size()) return false;
+      descriptor.colorAttachments[index->data.basic.u].storeAction = MTL::StoreAction(action->data.basic.u);
+    }
+  }
+  return true;
 }
 
 bool WrappedMTLDevice::ReplayOverlayDraw(
@@ -2566,6 +2727,311 @@ bool WrappedMTLDevice::ReplayOverlayDraw(
   return success;
 }
 
+bool WrappedMTLDevice::ReplayOriginalDispatch(uint32_t eventId, MTL::ComputeCommandEncoder *nativeEncoder)
+{
+  return ReplayOriginalDispatches({eventId}, nativeEncoder);
+}
+
+bool WrappedMTLDevice::ReplayOriginalDispatches(const rdcarray<uint32_t> &events,
+                                               MTL::ComputeCommandEncoder *nativeEncoder,
+                                               MTL::Buffer *diagnosticArguments,
+                                               bool diagnosticInterDispatchBarrier,
+                                               const rdcarray<MTL::Buffer *> *diagnosticSequenceArguments,
+                                               MTL::ComputePipelineState *diagnosticPipeline,
+                                               const std::map<ResourceId, MTL::Buffer *> *diagnosticCarriers)
+{
+  // A diagnostic reduction is bounded by the captured command stream, not by
+  // a particular sample's dispatch count. Validate one encoder's ascending,
+  // contiguous dispatch sequence below; omitted dependencies remain errors.
+  if(events.empty() || events.size() > m_StructuredFile->chunks.size()) return false;
+  const uint32_t eventId = events.back();
+  const APIEvent *event = GetReplay()->GetEvent(eventId);
+  if(!event || !nativeEncoder || m_DiagnosticReplayComputeEncoder || m_OverlayReplayEncoder || !IsActiveReplaying(m_State) ||
+     event->chunkIndex >= m_StructuredFile->chunks.size()) return false;
+  const SDChunk *draw = m_StructuredFile->chunks[event->chunkIndex];
+  const SDObject *field = draw->FindChild("ComputeCommandEncoder");
+  const MetalChunk kind = MetalChunk(draw->metadata.chunkID);
+  auto dispatch = [](MetalChunk chunk) {
+    return chunk == MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups ||
+           chunk == MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups_indirect;
+  };
+  if(!field || !dispatch(kind)) return false;
+  if(diagnosticArguments && (events.size() != 1 ||
+      kind != MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups_indirect ||
+      diagnosticArguments->length() != sizeof(MTL::DispatchThreadgroupsIndirectArguments) ||
+      !draw->FindChild("indirectBuffer") || !draw->FindChild("indirectBufferOffset")))
+    return false;
+  if(diagnosticPipeline && (!diagnosticArguments || events.size() != 1)) return false;
+  if(diagnosticSequenceArguments && (diagnosticArguments ||
+     diagnosticSequenceArguments->size() != events.size())) return false;
+  if(diagnosticCarriers && (events.size() != 1 || !diagnosticSequenceArguments ||
+      diagnosticCarriers->empty() || diagnosticCarriers->size() > 8)) return false;
+  const ResourceId sourceID = field->AsResourceId();
+  uint32_t prior = 0;
+  for(uint32_t id : events)
+  {
+    const APIEvent *selected = GetReplay()->GetEvent(id);
+    if(id <= prior || !selected || selected->chunkIndex >= m_StructuredFile->chunks.size()) return false;
+    const auto chunk = m_StructuredFile->chunks[selected->chunkIndex];
+    const auto encoder = chunk->FindChild("ComputeCommandEncoder");
+    if(!encoder || encoder->AsResourceId() != sourceID ||
+       !dispatch(MetalChunk(chunk->metadata.chunkID)))
+      return false;
+    if(diagnosticSequenceArguments &&
+       (MetalChunk(chunk->metadata.chunkID) != MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups_indirect ||
+        !(*diagnosticSequenceArguments)[events.indexOf(id)] ||
+        (*diagnosticSequenceArguments)[events.indexOf(id)]->length() != sizeof(MTL::DispatchThreadgroupsIndirectArguments) ||
+        !chunk->FindChild("indirectBuffer") || !chunk->FindChild("indirectBufferOffset"))) return false;
+    prior = id;
+  }
+  const bool trace = !Process::GetEnvVariable("RENDERDOC_METAL_TRACE_OVERLAY").empty();
+  auto object = GetResourceManager()->GetResource(sourceID, true);
+  if(!object || object->m_Type != eResComputeCommandEncoder || !object->m_Real) return false;
+  auto source = (WrappedMTLComputeCommandEncoder *)object;
+
+  // Reuse original compute setters, residency and typed inline relocation.
+  // Only explicitly selected dispatches execute. Preserve their original
+  // intra-encoder barriers. A caller-owned pipeline is allowed only for the
+  // bounded single-dispatch Native workload-reduction diagnostic.
+  // This encoding scope is diagnostic only; normal dispatch qualification and
+  // resource/address validation still use the original serializers.
+  rdcarray<uint64_t> setters;
+  for(uint32_t i = 1; i < eventId; i++)
+  {
+    const APIEvent *previous = GetReplay()->GetEvent(i);
+    if(!previous || previous->chunkIndex >= m_StructuredFile->chunks.size()) continue;
+    const SDChunk *chunk = m_StructuredFile->chunks[previous->chunkIndex];
+    const SDObject *encoder = chunk->FindChild("ComputeCommandEncoder");
+    if(!encoder || encoder->AsResourceId() != sourceID) continue;
+    const rdcstr &name = chunk->name;
+    const bool selectedDispatch = events.contains(i);
+    const bool barrier = i >= events.front() && name.beginsWith("MTLComputeCommandEncoder::memoryBarrier");
+    // An omitted dispatch between selected commands would lose a dependency.
+    // The tool may reduce a complete encoder prefix, never silently skip work.
+    if(i >= events.front() && name.beginsWith("MTLComputeCommandEncoder::dispatch") &&
+       !selectedDispatch) return false;
+    if(!name.beginsWith("MTLComputeCommandEncoder::set") &&
+       !name.beginsWith("MTLComputeCommandEncoder::use") && !selectedDispatch && !barrier) continue;
+    if(setters.empty() || setters.back() != previous->fileOffset)
+      setters.push_back(previous->fileOffset);
+  }
+  const uint64_t savedOffset = m_FrameReader->GetOffset(), savedChunk = m_CurChunkOffset;
+  // Inline pointer layouts/bindings are one-shot annotations consumed by the
+  // ordinary setter. Replay them with that setter, retaining capture order.
+  // They do not create API events, so obtain their offsets from the frame stream.
+  rdcarray<uint64_t> commands;
+  m_FrameReader->SetOffset(0);
+  ReadSerialiser scan(m_FrameReader, Ownership::Nothing);
+  scan.SetVersion(m_SectionVersion);
+  while(!m_FrameReader->AtEnd() && m_FrameReader->GetOffset() < event->fileOffset && !scan.IsErrored())
+  {
+    const uint64_t offset = m_FrameReader->GetOffset();
+    const MetalChunk chunk = scan.ReadChunk<MetalChunk>();
+    bool selected = setters.contains(offset);
+    if(chunk == MetalChunk::MTLCommandEncoder_DescriptorInlineLayout ||
+       chunk == MetalChunk::MTLCommandEncoder_DescriptorInlineBinding)
+    {
+      ResourceId encoder;
+      scan.Serialise("encoder"_lit, encoder);
+      selected = encoder == sourceID;
+    }
+    if(selected) commands.push_back(offset);
+    scan.EndChunk();
+  }
+  m_FrameReader->SetOffset(savedOffset);
+  if(scan.IsErrored()) return false;
+  const auto savedState = GetReplay()->SaveEncoderState();
+  const auto savedInlineShadow = m_DescriptorInlineShadow;
+  void *savedReal = source->m_Real;
+  const bool savedGPUWork = m_ReplayChunkIsGPUWork;
+  const auto savedDispatches = m_DescriptorDispatches;
+  m_DiagnosticReplayComputeEncoder = source;
+  m_DiagnosticIndirectArguments = diagnosticArguments;
+  if(diagnosticArguments)
+  {
+    m_DiagnosticIndirectSource = draw->FindChild("indirectBuffer")->AsResourceId();
+    m_DiagnosticIndirectOffset = draw->FindChild("indirectBufferOffset")->data.basic.u;
+  }
+  // Borrow only for this synchronous encoding scope; ownership never changes.
+  source->m_Real = nativeEncoder;
+  bool success = true;
+  size_t diagnosticArgumentOrdinal = 0;
+  std::map<uint32_t, DescriptorInlineShadow> diagnosticCarrierLayouts;
+  auto replay = [&](uint64_t offset) {
+    m_FrameReader->SetOffset(offset);
+    m_CurChunkOffset = offset;
+    ReadSerialiser ser(m_FrameReader, Ownership::Nothing);
+    ser.SetVersion(m_SectionVersion);
+    ser.SetUserData(GetResourceManager());
+    const MetalChunk chunk = ser.ReadChunk<MetalChunk>();
+    if(diagnosticSequenceArguments && dispatch(chunk))
+    {
+      if(diagnosticArgumentOrdinal >= events.size()) return false;
+      const auto selected = GetReplay()->GetEvent(events[diagnosticArgumentOrdinal]);
+      if(!selected || selected->fileOffset != offset) return false;
+      const auto metadata = m_StructuredFile->chunks[selected->chunkIndex];
+      m_DiagnosticIndirectArguments = (*diagnosticSequenceArguments)[diagnosticArgumentOrdinal++];
+      m_DiagnosticIndirectSource = metadata->FindChild("indirectBuffer")->AsResourceId();
+      m_DiagnosticIndirectOffset = metadata->FindChild("indirectBufferOffset")->data.basic.u;
+    }
+    if(diagnosticPipeline && dispatch(chunk))
+      nativeEncoder->setComputePipelineState(diagnosticPipeline);
+    if(diagnosticCarriers && dispatch(chunk))
+    {
+      // Temporary Native bindings only. ResourceManager identities and the
+      // ordinary replay state/validation remain original. Relocate explicitly
+      // typed roots; never classify arbitrary shader bytes as GPU pointers.
+      const auto state = GetReplay()->SaveEncoderState();
+      std::set<ResourceId> referenced;
+      for(const auto &entry : *diagnosticCarriers)
+      {
+        auto object = GetResourceManager()->GetResource(entry.first, true);
+        auto original = object && object->m_Type == eResBuffer && object->m_Real ?
+            Unwrap((WrappedMTLBuffer *)object) : NULL;
+        if(!original || !entry.second || original->length() != entry.second->length()) return false;
+        nativeEncoder->useResource(entry.second, MTL::ResourceUsageRead);
+      }
+      for(size_t index = 0; index < state.pipeline.computeBuffers.size(); index++)
+      {
+        const auto &binding = state.pipeline.computeBuffers[index];
+        auto replacement = diagnosticCarriers->find(binding.resourceId);
+        if(replacement == diagnosticCarriers->end()) continue;
+        if(binding.byteOffset >= replacement->second->length()) return false;
+        nativeEncoder->setBuffer(replacement->second, binding.byteOffset, index);
+        referenced.insert(binding.resourceId);
+        fprintf(stderr, "Metal diagnostic carrier direct: slot=%zu resource=%s offset=%llu address=%llu length=%llu\n",
+            index, ToStr(binding.resourceId).c_str(), (unsigned long long)binding.byteOffset,
+            (unsigned long long)replacement->second->gpuAddress(), (unsigned long long)replacement->second->length());
+      }
+      for(const auto &inlineData : state.computeInlineData)
+      {
+        auto layout = diagnosticCarrierLayouts.find(inlineData.first);
+        if(layout == diagnosticCarrierLayouts.end()) continue;
+        auto data = inlineData.second;
+        bool changed = false;
+        for(const auto &pointer : layout->second.sources)
+        {
+          auto replacement = diagnosticCarriers->find(pointer.second.resource);
+          if(replacement == diagnosticCarriers->end()) continue;
+          auto object = GetResourceManager()->GetResource(pointer.second.resource, true);
+          auto original = object && object->m_Type == eResBuffer && object->m_Real ?
+              Unwrap((WrappedMTLBuffer *)object) : NULL;
+          const uint64_t position = pointer.first * layout->second.stride;
+          if(!original || position > data.size() || 8 > data.size() - position ||
+             pointer.second.offset >= replacement->second->length()) return false;
+          uint64_t value = 0; memcpy(&value, data.data() + position, 8);
+          if(value != original->gpuAddress() + pointer.second.offset) return false;
+          value = replacement->second->gpuAddress() + pointer.second.offset;
+          memcpy(data.data() + position, &value, 8); changed = true;
+          referenced.insert(pointer.second.resource);
+          fprintf(stderr, "Metal diagnostic carrier root: slot=%u byte=%llu resource=%s offset=%llu address=%llu\n",
+              inlineData.first, (unsigned long long)position, ToStr(pointer.second.resource).c_str(),
+              (unsigned long long)pointer.second.offset, (unsigned long long)value);
+        }
+        if(changed) nativeEncoder->setBytes(data.data(), data.size(), inlineData.first);
+      }
+      if(referenced.size() != diagnosticCarriers->size()) return false;
+    }
+    // Explicit diagnostic packet only: observe the bindings immediately before
+    // the selected Native call, without GPU copies, waits or qualification.
+    // The CSV selects bounded CPU-visible descriptors or buffer identities;
+    // it is never interpreted by ordinary replay.
+    const rdcstr packet = dispatch(chunk) ? Process::GetEnvVariable(
+        "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_NATIVE_PACKET") : rdcstr();
+    if(!packet.empty())
+    {
+      const auto bindingState = GetReplay()->SaveEncoderState();
+      fprintf(stderr, "Metal Native packet begin: chunkOffset=%llu overridePipeline=%d\n",
+          (unsigned long long)offset, diagnosticPipeline != NULL);
+      for(const auto &inlineData : bindingState.computeInlineData)
+        for(size_t entry = 0; entry + 8 <= inlineData.second.size(); entry += 8)
+        {
+          uint64_t value = 0;
+          memcpy(&value, inlineData.second.data() + entry, 8);
+          fprintf(stderr, "Metal Native packet inline: index=%u byteOffset=%zu value=%llu\n",
+              inlineData.first, entry, (unsigned long long)value);
+        }
+      FILE *selection = fopen(packet.c_str(), "rb");
+      if(!selection) return false;
+      char line[256]; unsigned count = 0;
+      while(fgets(line, sizeof(line), selection) && count++ < 64)
+      {
+        char type = 0; unsigned long long number = 0, position = 0, bytes = 0;
+        if(sscanf(line, "%c,%llu,%llu,%llu", &type, &number, &position, &bytes) != 4)
+          continue;
+        ResourceId id; memcpy(&id, &number, sizeof(id));
+        auto resource = GetResourceManager()->GetResource(id, true);
+        auto buffer = resource && resource->m_Type == eResBuffer && resource->m_Real ?
+            Unwrap((WrappedMTLBuffer *)resource) : NULL;
+        if(!buffer || position > buffer->length() || bytes > buffer->length() - position)
+          continue;
+        if(type == 'b')
+          fprintf(stderr, "Metal Native packet buffer: resource=%llu offset=%llu bytes=%llu address=%llu length=%llu storage=%u\n",
+              number, position, bytes, (unsigned long long)(buffer->gpuAddress() + position),
+              (unsigned long long)buffer->length(), unsigned(buffer->storageMode()));
+        if(type != 'd' || bytes != 24 || buffer->storageMode() != MTL::StorageModeShared ||
+           !buffer->contents()) continue;
+        uint64_t words[3] = {}; memcpy(words, (byte *)buffer->contents() + position, 24);
+        const auto slot = m_DescriptorSlotShadow.find({id, position});
+        bytebuf expected;
+        const bool patched = slot != m_DescriptorSlotShadow.end() &&
+            PatchDescriptorSlot(slot->second, expected) && expected.size() == 24;
+        fprintf(stderr, "Metal Native packet descriptor: table=%llu offset=%llu words=%llu,%llu,%llu shadowMatch=%d\n",
+            number, position, (unsigned long long)words[0], (unsigned long long)words[1],
+            (unsigned long long)words[2], patched && !memcmp(expected.data(), words, 24));
+        if(slot == m_DescriptorSlotShadow.end()) continue;
+        for(const auto &sourceField : slot->second.sources)
+        {
+          auto sourceObject = GetResourceManager()->GetResource(sourceField.second.resource, true);
+          if(sourceField.first != 1 || !sourceObject || sourceObject->m_Type != eResTexture ||
+             !sourceObject->m_Real) continue;
+          auto texture = Unwrap((WrappedMTLTexture *)sourceObject);
+          fprintf(stderr, "Metal Native packet texture: table=%llu offset=%llu resource=%s handle=%llu type=%u format=%u width=%llu height=%llu mips=%llu slices=%llu parent=%d buffer=%d\n",
+              number, position, ToStr(sourceField.second.resource).c_str(),
+              (unsigned long long)texture->gpuResourceID()._impl, unsigned(texture->textureType()),
+              unsigned(texture->pixelFormat()), (unsigned long long)texture->width(),
+              (unsigned long long)texture->height(), (unsigned long long)texture->mipmapLevelCount(),
+              (unsigned long long)texture->arrayLength(), texture->parentTexture() != NULL,
+              texture->buffer() != NULL);
+        }
+      }
+      fclose(selection);
+      fprintf(stderr, "Metal Native packet end: no GPU copy/wait or binding modification\n");
+    }
+    // Inline layouts are consumed by setBytes. Keep only their diagnostic
+    // typed binding identity before the ordinary setter consumes them.
+    if(diagnosticCarriers && chunk == MetalChunk::MTLComputeCommandEncoder_setBytes)
+      for(const auto &layout : m_DescriptorInlineShadow)
+        if(layout.first.first == sourceID && (layout.first.second >> 32) == 0)
+          diagnosticCarrierLayouts[uint32_t(layout.first.second)] = layout.second;
+    const bool result = !ser.IsErrored() && ProcessChunk(ser, chunk);
+    ser.EndChunk();
+    // A scoped causal intervention, never a normal replay synchronization fix.
+    // Keep the captured barriers as well, and avoid changing any CPU wait or binding.
+    if(result && !ser.IsErrored() && diagnosticInterDispatchBarrier && dispatch(chunk) &&
+       offset != event->fileOffset)
+      nativeEncoder->memoryBarrier(MTL::BarrierScope(MTL::BarrierScopeBuffers | MTL::BarrierScopeTextures));
+    if(trace && (!result || ser.IsErrored()))
+      fprintf(stderr, "Metal overlay failed chunk=%u offset=%llu\n", uint32_t(chunk), offset);
+    return result && !ser.IsErrored();
+  };
+  for(uint64_t offset : commands)
+    if(!replay(offset)) { success = false; break; }
+  if(success) success = replay(event->fileOffset);
+  source->m_Real = savedReal;
+  m_DiagnosticReplayComputeEncoder = NULL;
+  m_DiagnosticIndirectArguments = NULL;
+  m_DiagnosticIndirectSource = ResourceId();
+  m_DiagnosticIndirectOffset = 0;
+  m_ReplayChunkIsGPUWork = savedGPUWork;
+  m_DescriptorInlineShadow = savedInlineShadow;
+  m_DescriptorDispatches = savedDispatches;
+  GetReplay()->RestoreEncoderState(savedState);
+  m_FrameReader->SetOffset(savedOffset);
+  m_CurChunkOffset = savedChunk;
+  return success;
+}
+
 RDResult WrappedMTLDevice::ReplayClearBeforePass(uint32_t eventId, ResourceId encoder,
                                                FloatVector color, double depthClear)
 {
@@ -2648,7 +3114,8 @@ bool WrappedMTLDevice::CanReplayImplicitBufferAlias(ResourceId before, ResourceI
   for(const DescriptorTable &table : m_DescriptorTables)
     if(table.buffer == before || table.buffer == after)
       if(m_DescriptorCoverage < 25 ||
-         !m_ValidatedDescriptorBackingAliases.count(make_rdcpair(before, after))) return false;
+         (!m_ValidatedDescriptorBackingAliases.count(make_rdcpair(before, after)) &&
+          !m_DescriptorCoexistingBackingViews.count(make_rdcpair(before, after)))) return false;
   for(const auto &entry : m_ReplayCommandBuffers)
   {
     const ReplayCommandBufferState &state = entry.second;
@@ -2838,8 +3305,17 @@ bool WrappedMTLDevice::IsReplayCommandBufferCommitted(WrappedMTLCommandBuffer *b
          (m_ReplayCommandBuffer == buffer && m_ReplayCommandBufferCommitted);
 }
 
+bool WrappedMTLDevice::HasCommittedReplaySubmission(ResourceId command) const
+{
+  const auto state = m_ReplayCommandBuffers.find(command);
+  return state != m_ReplayCommandBuffers.end() &&
+      (state->second.committed ||
+       (m_ReplayCommandBuffer == state->second.buffer && m_ReplayCommandBufferCommitted));
+}
+
 bool WrappedMTLDevice::WaitReplayCommandBuffer(WrappedMTLCommandBuffer *buffer, const char *reason)
 {
+  MetalLoadProfile::Scope profile("GPU_wait");
   if(!buffer || !buffer->m_Real) return false;
   auto state = m_ReplayCommandBuffers.find(GetResID(buffer));
   // Native Metal waits include CPU callbacks. Replay never installs capture callbacks,
@@ -2905,6 +3381,8 @@ WrappedMTLBlitCommandEncoder *WrappedMTLDevice::GetReplayBlitCommandEncoder(
 WrappedMTLComputeCommandEncoder *WrappedMTLDevice::GetReplayComputeCommandEncoder(
     WrappedMTLComputeCommandEncoder *encoder)
 {
+  if(encoder && encoder == m_DiagnosticReplayComputeEncoder)
+    return encoder;
   if(encoder && encoder->m_Type == eResComputeCommandEncoder &&
      SelectReplayCommandBuffer(encoder->GetCommandBuffer()))
     return m_ReplayComputeCommandEncoder;
@@ -3118,15 +3596,18 @@ bool WrappedMTLDevice::ApplyReplayCPUBufferUpdates(WrappedMTLCommandBuffer *buff
       bytebuf patched;
       if(!native || !native->contents() || slot.first.second > native->length() ||
          24 > native->length() - slot.first.second || !PatchDescriptorSlot(slot.second, patched) ||
-         memcmp((byte *)native->contents() + slot.first.second, patched.data(), 24))
+         // Ordinary metadata is restored by original initial/CPU publications;
+         // it need not equal an earlier annotation's scalar value.
+         memcmp((byte *)native->contents() + slot.first.second, patched.data(), 16))
       {
-        RDCERR("Metal live descriptor bytes do not match the logical source before submission: command=%s buffer=%s offset=%llu generation=%llu sources=%zu",
+        RDCERR("Metal live descriptor identity bytes do not match the logical source before submission: command=%s buffer=%s offset=%llu generation=%llu sources=%zu",
                ToStr(GetResID(buffer)).c_str(), ToStr(slot.first.first).c_str(),
                (unsigned long long)slot.first.second,
                (unsigned long long)slot.second.generation, slot.second.sources.size());
         return false;
       }
     }
+  if(!ValidateReplayCopyAddressFields(GetResID(buffer))) return false;
   state->second.cpuUpdatesApplied = true;
   return true;
 }
@@ -3145,8 +3626,63 @@ bool WrappedMTLDevice::RecordReplayBufferInitialContents(ResourceId id, const by
   return true;
 }
 
+bool WrappedMTLDevice::ValidateReplayBackgroundBufferAliases()
+{
+  MetalLoadProfile::Scope profile("background_buffer_physical_state");
+  for(const auto &pair:m_ReplayBackgroundBufferAliases)
+  {
+    auto a=GetResourceManager()->GetResource(pair.first,true);
+    auto b=GetResourceManager()->GetResource(pair.second,true);
+    if(!a || !b || a->m_Type!=eResBuffer || b->m_Type!=eResBuffer || !a->m_Real || !b->m_Real)
+      return false;
+    auto first=Unwrap((WrappedMTLBuffer *)a),second=Unwrap((WrappedMTLBuffer *)b);
+    if(!first->heap() || first->heap()!=second->heap() ||
+       first->storageMode()!=second->storageMode() ||
+       (first->storageMode()!=MTL::StorageModePrivate && first->storageMode()!=MTL::StorageModeShared) ||
+       first->length()>UINT64_MAX-first->heapOffset() ||
+       second->length()>UINT64_MAX-second->heapOffset())return false;
+    const uint64_t begin=RDCMAX(first->heapOffset(),second->heapOffset());
+    const uint64_t end=RDCMIN(first->heapOffset()+first->length(),second->heapOffset()+second->length());
+    // Allocation padding is opaque. Only logical buffer windows carry captured
+    // ordinary bytes; padding overlap does not impose an input-byte obligation.
+    if(begin>=end)continue;
+    const uint64_t firstOffset=begin-first->heapOffset(),secondOffset=begin-second->heapOffset();
+    if(!first->gpuAddress() || !second->gpuAddress() ||
+       first->gpuAddress()>UINT64_MAX-firstOffset || second->gpuAddress()>UINT64_MAX-secondOffset ||
+       first->gpuAddress()+firstOffset!=second->gpuAddress()+secondOffset)return false;
+    const auto capturedA=m_ReplayGPUIdentities.find(pair.first),capturedB=m_ReplayGPUIdentities.find(pair.second);
+    if(capturedA!=m_ReplayGPUIdentities.end() && capturedB!=m_ReplayGPUIdentities.end() &&
+       (capturedA->second.kind!=0 || capturedB->second.kind!=0 ||
+        capturedA->second.value>UINT64_MAX-firstOffset || capturedB->second.value>UINT64_MAX-secondOffset ||
+        capturedA->second.value+firstOffset!=capturedB->second.value+secondOffset))
+    {
+      fprintf(stderr,"Metal background alias address mapping disagrees: %s / %s\n",
+          ToStr(pair.first).c_str(),ToStr(pair.second).c_str());return false;
+    }
+    auto initialA=m_ReplayBufferInitialContents.find(pair.first),initialB=m_ReplayBufferInitialContents.find(pair.second);
+    if(initialA!=m_ReplayBufferInitialContents.end() && initialB!=m_ReplayBufferInitialContents.end())
+    {
+      if(initialA->second.size()!=first->length() || initialB->second.size()!=second->length() ||
+         memcmp(initialA->second.data()+firstOffset,initialB->second.data()+secondOffset,end-begin))
+      {
+        // This is conflicting declared frame-start input, not a comparison with
+        // unspecified Native bytes or proof of every ordinary shader producer.
+        fprintf(stderr,"Metal background alias has conflicting captured initial windows: %s / %s\n",
+            ToStr(pair.first).c_str(),ToStr(pair.second).c_str());return false;
+      }
+    }
+    // An absent logical snapshot is not necessarily absent physical input. The
+    // frame restoration map projects captured windows into shared heap coordinates.
+    // It provides covering input without copying or zero-filling a missing logical
+    // snapshot; uncovered bytes remain uncovered.
+
+  }
+  return true;
+}
+
 bool WrappedMTLDevice::RestoreReplayPrivateBufferInitialContents()
 {
+  MetalLoadProfile::Scope profile("initial_private_buffers");
   // D3D12 and Vulkan restore GPU-local initial state before executing the frame. Metal's
   // Initial Contents chunks were only cached; contents() cannot write a Private buffer.
   // Reuse a bounded Shared staging buffer so a large frame does not duplicate all captured
@@ -3275,8 +3811,9 @@ bool WrappedMTLDevice::ReplayCPUBufferUpdate(WrappedMTLBuffer *wrapped, uint64_t
   if(m_DescriptorCoverage >= 12)
   {
     // As in D3D12/Vulkan submit replay, serialize CPU snapshot restoration against
-    // previously committed GPU work. Preflight proves one queue and excludes waits on event/fence
-    // dependencies in a future submission, so these waits cannot target reservations.
+    // previously committed GPU work on its actual Native queues. Preflight proves
+    // queue-local reservations precede each commit and excludes dependencies on
+    // future submissions, so these waits cannot target an unsubmitted reservation.
     for(const auto &entry : m_ReplayCommandBuffers)
       if(entry.second.buffer && IsReplayCommandBufferCommitted(entry.second.buffer) &&
          !WaitReplayCommandBuffer(entry.second.buffer, "CPU snapshot restoration")) return false;
@@ -3302,6 +3839,7 @@ bool WrappedMTLDevice::ReplayCPUBufferUpdate(WrappedMTLBuffer *wrapped, uint64_t
 
 bool WrappedMTLDevice::ResetReplayCPUUpdatedBuffers()
 {
+  MetalLoadProfile::Scope profile("initial_shared_buffers");
   m_RayASHeaderCurrent=m_RayASHeaders;
   m_RayASHeaderFrameCursor=0;
   if(m_DescriptorCoverage >= 4)
@@ -3343,12 +3881,22 @@ bool WrappedMTLDevice::ResetReplayCPUUpdatedBuffers()
       return false;
     }
     memcpy(buffer->contents(), it->second.data(), it->second.size());
+    if(m_DescriptorRawContents.count(id)) m_DescriptorRawContents[id] = it->second;
+  }
+  // Physical state and logical identities have different owners. A later
+  // Shared alias upload must never undo an earlier descriptor relocation.
+  // Restore every validated byte window, then relocate all typed views.
+  for(ResourceId id : m_ReplayCPUUpdatedBuffers)
+  {
+    if(IsFramePlacementResource(id)) continue;
+    auto object = GetResourceManager()->GetResource(id, true);
+    if(!object || object->m_Type != eResBuffer || !object->m_Real) return false;
+    auto buffer = Unwrap((WrappedMTLBuffer *)object);
     if(m_DescriptorCoverage >= 4 && !OverlayDescriptorSlotBuffer(id, true))
       return false;
     if(m_DescriptorRawContents.count(id))
     {
-      m_DescriptorRawContents[id] = it->second;
-      if(!RestoreDescriptorTable(id, it->second))
+      if(!RestoreDescriptorTable(id, m_DescriptorRawContents.at(id), 0, ~0ULL, true))
         return false;
     }
     if(!GetReplay()->RestoreArgumentBufferResources(id))
@@ -3469,6 +4017,39 @@ bool WrappedMTLDevice::Serialise_BeginCaptureFrame(SerialiserType &ser)
   return true;
 }
 
+void WrappedMTLDevice::StartDiagnosticNativeTrace()
+{
+  const rdcstr path = Process::GetEnvVariable("RENDERDOC_METAL_NATIVE_TRACE_OUTPUT");
+  if(path.empty()) return;
+  // A trace belongs to this controlled frame, not another user's capture. Never
+  // replace an existing trace or stop a capture already owned by another tool.
+  auto manager = MTL::CaptureManager::sharedCaptureManager();
+  if(m_OwnsDiagnosticNativeTrace || !manager || manager->isCapturing() ||
+     path[0] != '/' || !path.endsWith(".gputrace") || FileIO::exists(path) ||
+     !manager->supportsDestination(MTL::CaptureDestinationGPUTraceDocument))
+  {
+    fprintf(stderr, "Metal Native trace unavailable or destination/ownership invalid: %s\n", path.c_str());
+    return;
+  }
+  auto descriptor = NS::TransferPtr(MTL::CaptureDescriptor::alloc()->init());
+  descriptor->setCaptureObject((id)Unwrap(this));
+  descriptor->setDestination(MTL::CaptureDestinationGPUTraceDocument);
+  descriptor->setOutputURL(NS::URL::fileURLWithPath(NS::String::string(path.c_str(), NS::UTF8StringEncoding)));
+  NS::Error *error = NULL;
+  m_OwnsDiagnosticNativeTrace = manager->startCapture(descriptor.get(), &error);
+  fprintf(stderr, "Metal Native trace start: success=%d path=%s error=%s\n",
+      m_OwnsDiagnosticNativeTrace ? 1 : 0, path.c_str(),
+      error ? error->localizedDescription()->utf8String() : "none");
+}
+
+void WrappedMTLDevice::StopDiagnosticNativeTrace()
+{
+  if(!m_OwnsDiagnosticNativeTrace) return;
+  MTL::CaptureManager::sharedCaptureManager()->stopCapture();
+  m_OwnsDiagnosticNativeTrace = false;
+  fprintf(stderr, "Metal Native trace stopped after controlled frame\n");
+}
+
 void WrappedMTLDevice::StartFrameCapture(DeviceOwnedWindow devWnd)
 {
   if(!IsBackgroundCapturing(m_State))
@@ -3519,6 +4100,11 @@ void WrappedMTLDevice::StartFrameCapture(DeviceOwnedWindow devWnd)
     m_FrameCaptureRecord->DeleteChunks();
     SnapshotDescriptorHistory();
     m_CapturedBackbuffer.store(NULL);
+    // Initial-state acquisition is outside the Native frame trace. Begin under
+    // the same cutoff before application commands can enter the captured frame.
+    StartDiagnosticNativeTrace();
+    if(MetalDiagnosticCPUWriteWatch::Enabled())
+      MetalDiagnosticCPUWriteWatch::Get().Begin(this);
     m_State = CaptureState::ActiveCapturing;
     // ResourceManager ignores frame references in background capture mode.
     // Publish Header recipe dependencies after entering the active frame so
@@ -3650,6 +4236,13 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
   }
   if(submitted.empty())
     WaitForGPU();
+
+  // End before thumbnail/readback work. No extra GPU copy or wait is introduced
+  // by this diagnostic; Apple capture instrumentation can still affect timing.
+  StopDiagnosticNativeTrace();
+
+  if(MetalDiagnosticCPUWriteWatch::Enabled())
+    MetalDiagnosticCPUWriteWatch::Get().End(this);
 
   RenderDoc::FramePixels fp;
 
@@ -3910,6 +4503,9 @@ bool WrappedMTLDevice::EndFrameCapture(DeviceOwnedWindow devWnd)
 
 bool WrappedMTLDevice::DiscardFrameCapture(DeviceOwnedWindow devWnd)
 {
+  StopDiagnosticNativeTrace();
+  if(MetalDiagnosticCPUWriteWatch::Enabled())
+    MetalDiagnosticCPUWriteWatch::Get().End(this);
   if(!IsActiveCapturing(m_State))
     return true;
 
@@ -3994,6 +4590,20 @@ void WrappedMTLDevice::CaptureCmdBufCPUWrites(MetalResourceRecord *record)
         MetalBufferInfo *bufInfo = refRecord->bufInfo;
         if(bufInfo->storageMode == MTL::StorageModeShared)
         {
+          // Keep its first pre-use baseline for event/reset restoration. A
+          // standalone copied/allocated buffer cannot receive implicit CPU
+          // writes until its storage is exposed to the application. Native GPU
+          // writes must stay GPU-produced; serialising their diff as an upload
+          // can break correlations with other GPU outputs on replay. Heap
+          // storage is also unexposed until any alias exposes its backing;
+          // retain that exposure for the whole physical heap lifetime.
+          // Explicit CPU API writes retain
+          // their own recorded commands independently of this diff detector.
+          if(!bufInfo->baseSnapshot.isEmpty() &&
+             !Atomic::CmpExch32(&bufInfo->cpuMapExposed, 0, 0) &&
+             !GetResourceManager()->HasHeapCPUStorageExposure(
+                 Unwrap((WrappedMTLBuffer *)refRecord->m_Resource)->heap()))
+            continue;
           size_t diffStart = 0;
           size_t diffEnd = bufInfo->length;
           bool foundDifference = true;
@@ -4012,6 +4622,10 @@ void WrappedMTLDevice::CaptureCmdBufCPUWrites(MetalResourceRecord *record)
               RDCERR("Writing buffer memory %s that is NULL", ToStr(id).c_str());
               continue;
             }
+            if(MetalDiagnosticCPUWriteWatch::Enabled())
+              MetalDiagnosticCPUWriteWatch::Get().Report(
+                  this, ToStr(id).c_str(), bufInfo->data, diffStart, diffEnd,
+                  bufInfo->baseSnapshot.isEmpty());
             Chunk *chunk = NULL;
             {
               CACHE_THREAD_SERIALISER();
@@ -4021,6 +4635,16 @@ void WrappedMTLDevice::CaptureCmdBufCPUWrites(MetalResourceRecord *record)
               chunk = scope.Get();
             }
             record->AddChunk(chunk);
+          }
+          if(MetalDiagnosticCPUWriteWatch::Enabled())
+          {
+            MTL::Buffer *native = Unwrap((WrappedMTLBuffer *)refRecord->m_Resource);
+            native->retain();
+            if(!MetalDiagnosticCPUWriteWatch::Get().Track(
+                   this, ToStr(id).c_str(), native,
+                   [](void *buffer) { ((MTL::Buffer *)buffer)->release(); },
+                   bufInfo->data, bufInfo->length))
+              native->release();
           }
         }
       }

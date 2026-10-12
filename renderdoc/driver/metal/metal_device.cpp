@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 #include "metal_device.h"
+#include "metal_cpu_write_watch.h"
 #include "metal_blit_command_encoder.h"
 #include "metal_argument_encoder.h"
 #include "metal_buffer.h"
@@ -581,6 +582,9 @@ WrappedMTLDevice::WrappedMTLDevice(MTL::Device *realMTLDevice, ResourceId objId)
 
 WrappedMTLDevice::~WrappedMTLDevice()
 {
+  StopDiagnosticNativeTrace();
+  if(MetalDiagnosticCPUWriteWatch::Enabled())
+    MetalDiagnosticCPUWriteWatch::Get().End(this);
   for(MTL::CommandBuffer *buffer : m_CapturePendingGPU)
     buffer->release();
   m_CapturePendingGPU.clear();
@@ -646,10 +650,29 @@ uint64_t WrappedMTLDevice::g_nextDrawableTLSSlot;
 // An inherited hook must resolve its ancestor's original rather than be saved
 // as an original implementation itself.
 static Threading::CriticalSection s_ObjcDrawableHooksLock;
+static uint64_t s_NativeDrawableCallTLSSlot;
+// Native presentation may call the public texture getter again (e.g. Apple's capture
+// layer obtains texture.device). That recursive query must preserve Native identity,
+// without changing the application-visible drawable or the layer's device globally.
+struct ScopedNativeDrawableCall
+{
+  void *previous;
+  ScopedNativeDrawableCall()
+  {
+    previous = Threading::GetTLSValue(s_NativeDrawableCallTLSSlot);
+    Threading::SetTLSValue(s_NativeDrawableCallTLSSlot, (void *)(uintptr_t)true);
+  }
+  ~ScopedNativeDrawableCall()
+  {
+    Threading::SetTLSValue(s_NativeDrawableCallTLSSlot, previous);
+  }
+};
 struct MetalDrawableOriginals
 {
   IMP texture = NULL;
   IMP present = NULL;
+  IMP presentAtTime = NULL;
+  IMP presentAfterMinimumDuration = NULL;
 };
 static std::map<Class, MetalDrawableOriginals> s_DrawableOriginals;
 
@@ -667,7 +690,7 @@ static MetalDrawableOriginals DrawableOriginals(Class cls)
 MTL::Texture *hooked_CAMetalDrawable_texture(id self, SEL _cmd)
 {
   WrappedMTLTexture *texture = WrappedMTLDevice::GetDrawableTexture((MTL::Drawable *)self);
-  if(texture)
+  if(texture && !Threading::GetTLSValue(s_NativeDrawableCallTLSSlot))
     return (MTL::Texture *)texture;
 
   const IMP original = DrawableOriginals(object_getClass(self)).texture;
@@ -677,12 +700,44 @@ MTL::Texture *hooked_CAMetalDrawable_texture(id self, SEL _cmd)
 
 void hooked_CAMetalDrawable_present(id self, SEL _cmd)
 {
-  WrappedMTLTexture *texture = WrappedMTLDevice::GetDrawableTexture((MTL::Drawable *)self);
+  WrappedMTLTexture *texture = Threading::GetTLSValue(s_NativeDrawableCallTLSSlot) ? NULL :
+      WrappedMTLDevice::GetDrawableTexture((MTL::Drawable *)self);
   const IMP original = DrawableOriginals(object_getClass(self)).present;
   RDCASSERT(original && original != (IMP)hooked_CAMetalDrawable_present);
-  ((void (*)(id, SEL))original)(self, _cmd);
+  {
+    ScopedNativeDrawableCall nativeCall;
+    ((void (*)(id, SEL))original)(self, _cmd);
+  }
   // commandBuffer.presentDrawable already records its presentation and removes this
   // drawable from the lookup. Only handle applications that call drawable.present().
+  if(texture)
+    texture->m_Device->PresentDrawable((CA::MetalDrawable *)self);
+}
+
+void hooked_CAMetalDrawable_presentAtTime(id self, SEL _cmd, double time)
+{
+  WrappedMTLTexture *texture = Threading::GetTLSValue(s_NativeDrawableCallTLSSlot) ? NULL :
+      WrappedMTLDevice::GetDrawableTexture((MTL::Drawable *)self);
+  const IMP original = DrawableOriginals(object_getClass(self)).presentAtTime;
+  RDCASSERT(original && original != (IMP)hooked_CAMetalDrawable_presentAtTime);
+  {
+    ScopedNativeDrawableCall nativeCall;
+    ((void (*)(id, SEL, double))original)(self, _cmd, time);
+  }
+  if(texture)
+    texture->m_Device->PresentDrawable((CA::MetalDrawable *)self);
+}
+
+void hooked_CAMetalDrawable_presentAfterMinimumDuration(id self, SEL _cmd, double duration)
+{
+  WrappedMTLTexture *texture = Threading::GetTLSValue(s_NativeDrawableCallTLSSlot) ? NULL :
+      WrappedMTLDevice::GetDrawableTexture((MTL::Drawable *)self);
+  const IMP original = DrawableOriginals(object_getClass(self)).presentAfterMinimumDuration;
+  RDCASSERT(original && original != (IMP)hooked_CAMetalDrawable_presentAfterMinimumDuration);
+  {
+    ScopedNativeDrawableCall nativeCall;
+    ((void (*)(id, SEL, double))original)(self, _cmd, duration);
+  }
   if(texture)
     texture->m_Device->PresentDrawable((CA::MetalDrawable *)self);
 }
@@ -742,8 +797,26 @@ CA::MetalDrawable *hooked_CAMetalLayer_nextDrawable(id self, SEL _cmd)
         if(!class_addMethod(cls, presentSelector, (IMP)hooked_CAMetalDrawable_present,
                             method_getTypeEncoding(presentMethod)))
           method_setImplementation(class_getInstanceMethod(cls, presentSelector), (IMP)hooked_CAMetalDrawable_present);
+        const SEL timedSelectors[] = {sel_registerName("presentAtTime:"),
+                                      sel_registerName("presentAfterMinimumDuration:")};
+        const IMP timedHooks[] = {(IMP)hooked_CAMetalDrawable_presentAtTime,
+                                 (IMP)hooked_CAMetalDrawable_presentAfterMinimumDuration};
+        IMP *timedOriginals[] = {&originals.presentAtTime, &originals.presentAfterMinimumDuration};
+        const IMP inheritedTimed[] = {inherited.presentAtTime, inherited.presentAfterMinimumDuration};
+        for(size_t i = 0; i < 2; i++)
+        {
+          Method method = class_getInstanceMethod(cls, timedSelectors[i]);
+          if(!method) continue;
+          *timedOriginals[i] = method_getImplementation(method);
+          if(*timedOriginals[i] == timedHooks[i]) *timedOriginals[i] = inheritedTimed[i];
+          RDCASSERT(*timedOriginals[i] && *timedOriginals[i] != timedHooks[i]);
+          // Publish before replacement, including inherited overrides.
+          s_DrawableOriginals[cls] = originals;
+          if(!class_addMethod(cls, timedSelectors[i], timedHooks[i], method_getTypeEncoding(method)))
+            method_setImplementation(class_getInstanceMethod(cls, timedSelectors[i]), timedHooks[i]);
+        }
       }
-      else originals = found->second;
+        else originals = found->second;
     }
 
     MTL::Texture *realTexture =
@@ -763,6 +836,7 @@ void WrappedMTLDevice::MTLHookObjcMethods()
     return;
 
   g_nextDrawableTLSSlot = Threading::AllocateTLSSlot();
+  s_NativeDrawableCallTLSSlot = Threading::AllocateTLSSlot();
   Threading::SetTLSValue(WrappedMTLDevice::g_nextDrawableTLSSlot, (void *)(uintptr_t) false);
 
   Method m =
@@ -1292,6 +1366,9 @@ WrappedMTLBuffer *WrappedMTLDevice::WrapNewBufferNoCopy(MTL::Buffer *real, const
     MetalResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped);
     record->AddChunk(scope.Get());
     record->bufInfo = new MetalBufferInfo(real->storageMode());
+    // The application already owns this allocation's CPU pointer, even if it
+    // never calls the public buffer contents() method.
+    record->bufInfo->cpuMapExposed = 1;
     if(real->storageMode() == MTL::StorageModeShared)
     {
       record->bufInfo->data = (byte *)real->contents();

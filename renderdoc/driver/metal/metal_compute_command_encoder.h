@@ -36,6 +36,23 @@ public:
 
   void SetCommandBuffer(WrappedMTLCommandBuffer *commandBuffer) { m_CommandBuffer = commandBuffer; }
   WrappedMTLCommandBuffer *GetCommandBuffer() const { return m_CommandBuffer; }
+  struct DiagnosticIndirectState
+  {
+    uint64_t epoch;
+    uint32_t ordinal;
+  };
+  DiagnosticIndirectState BeginDiagnosticIndirectReplay(uint32_t ordinal)
+  {
+    DiagnosticIndirectState saved = {m_IndirectReplayEpoch, m_IndirectReplayOrdinal};
+    m_IndirectReplayEpoch = m_Device->GetReplayEpoch();
+    m_IndirectReplayOrdinal = ordinal;
+    return saved;
+  }
+  void EndDiagnosticIndirectReplay(DiagnosticIndirectState saved)
+  {
+    m_IndirectReplayEpoch = saved.epoch;
+    m_IndirectReplayOrdinal = saved.ordinal;
+  }
   DECLARE_FUNCTION_SERIALISED(void, endEncoding);
   DECLARE_FUNCTION_SERIALISED(void, updateFence, WrappedMTLFence *fence);
   DECLARE_FUNCTION_SERIALISED(void, waitForFence, WrappedMTLFence *fence);
@@ -112,6 +129,7 @@ public:
 private:
   WrappedMTLCommandBuffer *m_CommandBuffer = NULL;
   WrappedMTLComputePipelineState *m_Pipeline = NULL;
+  rdcstr m_DiagnosticPipelineLabel;
   WrappedMTLVisibleFunctionTable *m_VisibleTables[31] = {};
   WrappedMTLIntersectionFunctionTable *m_IntersectionTables[31] = {};
   bool ValidateFunctionTableBindings() const;
@@ -120,5 +138,13 @@ private:
   uint64_t m_IndirectReplayEpoch = ~0ULL;
   uint32_t m_IndirectReplayOrdinal = 0;
   MetalComputeIndirectCapture m_IndirectCapture;
+  void TrackInputSnapshotResources(const rdcarray<WrappedMTLResource *> &resources,
+                                   MTL::ResourceUsage usage);
+  void SnapshotSelectedInputs(uint32_t ordinal);
+  std::map<ResourceId, uint64_t> m_InputSnapshotResources;
+  uint64_t m_InputSnapshotEpoch = ~0ULL;
+  bool m_InputSnapshotDone = false;
+  rdcarray<ResourceId> m_EndSnapshotResources;
+  uint64_t m_EndSnapshotEpoch = ~0ULL;
 
 };

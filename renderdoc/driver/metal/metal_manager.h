@@ -149,6 +149,27 @@ public:
       }
     }
   }
+  void MarkHeapCPUStorageExposed(MTL::Heap *heap)
+  {
+    if(!heap) return;
+    SCOPED_LOCK(m_Lock);
+    for(const auto &entry : m_ResourceMap)
+      if(entry.second && entry.second->m_Type == eResHeap && entry.second->m_Real == heap)
+      {
+        Atomic::CmpExch32(&entry.second->m_CapturedHeapCPUStorageExposed, 0, 1);
+        return;
+      }
+  }
+  bool HasHeapCPUStorageExposure(MTL::Heap *heap)
+  {
+    if(!heap) return false;
+    SCOPED_LOCK(m_Lock);
+    for(const auto &entry : m_ResourceMap)
+      if(entry.second && entry.second->m_Type == eResHeap && entry.second->m_Real == heap)
+        return Atomic::CmpExch32(&entry.second->m_CapturedHeapCPUStorageExposed, 0, 0) != 0;
+    // An untracked heap must not be used as evidence that host writes are impossible.
+    return true;
+  }
   void MarkCapturedTextureViewsRetired(WrappedMTLObject *source)
   {
     if(!source || source->m_Type != eResTexture || !source->m_Real) return;

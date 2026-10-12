@@ -47,6 +47,15 @@ static MTL::PrimitiveAccelerationStructureDescriptor *TriangleDescriptor(
   return descriptor;
 }
 
+// Residency is a Native object-graph obligation, not an AIR access proof.
+static void TrackInstanceChildren(WrappedMTLAccelerationStructure *structure,
+                                  const rdcarray<WrappedMTLAccelerationStructure *> &children)
+{
+  structure->m_LastInstanceChildren.clear();
+  for(auto child : children)
+    structure->m_LastInstanceChildren.push_back(GetResID(child));
+}
+
 static bool ValidFormattedTriangleBuild(WrappedMTLAccelerationStructure *structure,
     WrappedMTLBuffer *vertices, NS::UInteger vertexOffset, NS::UInteger vertexStride,
     MTL::AttributeFormat vertexFormat, NS::UInteger count, WrappedMTLBuffer *scratch,
@@ -1572,6 +1581,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildInstance(
     structure->m_LastBuildKind = 5;
     structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
     structure->m_LastInstanceChild = GetResID(child);
+    TrackInstanceChildren(structure, {child});
     structure->m_LastInstanceBuffer = GetResID(instances);
     if(IsLoading(m_State))
     {
@@ -1602,6 +1612,7 @@ void WrappedMTLAccelerationStructureCommandEncoder::buildInstance(
   structure->m_LastBuildKind = 5;
   structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
   structure->m_LastInstanceChild = GetResID(child);
+  TrackInstanceChildren(structure, {child});
   structure->m_LastInstanceBuffer = GetResID(instances);
   if(IsCaptureMode(m_State))
   {
@@ -1661,6 +1672,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildInstances(
     structure->m_LastBuildKind = 5;
     structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
     structure->m_LastInstanceChild = GetResID(child);
+    TrackInstanceChildren(structure, {child});
     structure->m_LastInstanceBuffer = GetResID(instances);
     if(IsLoading(m_State))
     {
@@ -1693,6 +1705,7 @@ void WrappedMTLAccelerationStructureCommandEncoder::buildInstances(
   structure->m_LastBuildKind = 5;
   structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
   structure->m_LastInstanceChild = GetResID(child);
+  TrackInstanceChildren(structure, {child});
   structure->m_LastInstanceBuffer = GetResID(instances);
   if(IsCaptureMode(m_State))
   {
@@ -1810,6 +1823,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildDistinctInsta
     structure->m_LastBuildKind = 5;
     structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
     structure->m_LastInstanceChild = GetResID(child0);
+    TrackInstanceChildren(structure, {child0, child1});
     structure->m_LastInstanceBuffer = GetResID(instances);
     if(IsLoading(m_State))
     {
@@ -1841,6 +1855,7 @@ void WrappedMTLAccelerationStructureCommandEncoder::buildDistinctInstances(
   structure->m_LastBuildKind = 5;
   structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
   structure->m_LastInstanceChild = GetResID(child0);
+  TrackInstanceChildren(structure, {child0, child1});
   structure->m_LastInstanceBuffer = GetResID(instances);
   if(IsCaptureMode(m_State))
   {
@@ -1970,6 +1985,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildMultipleDisti
     structure->m_LastBuildKind = 5;
     structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
     structure->m_LastInstanceChild = GetResID(children[0]);
+    TrackInstanceChildren(structure, children);
     structure->m_LastInstanceBuffer = GetResID(instances);
     if(IsLoading(m_State))
     {
@@ -2002,6 +2018,7 @@ void WrappedMTLAccelerationStructureCommandEncoder::buildMultipleDistinctInstanc
   structure->m_LastBuildKind = 5;
   structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
   structure->m_LastInstanceChild = GetResID(children[0]);
+  TrackInstanceChildren(structure, children);
   structure->m_LastInstanceBuffer = GetResID(instances);
   if(IsCaptureMode(m_State))
   {
@@ -2069,6 +2086,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildRepeatedDisti
     structure->m_LastBuildKind = 5;
     structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
     structure->m_LastInstanceChild = GetResID(children[0]);
+    TrackInstanceChildren(structure, children);
     structure->m_LastInstanceBuffer = GetResID(instances);
     if(IsLoading(m_State))
     {
@@ -2103,6 +2121,7 @@ void WrappedMTLAccelerationStructureCommandEncoder::buildRepeatedDistinctInstanc
   structure->m_LastBuildKind = 5;
   structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
   structure->m_LastInstanceChild = GetResID(children[0]);
+  TrackInstanceChildren(structure, children);
   structure->m_LastInstanceBuffer = GetResID(instances);
   if(IsCaptureMode(m_State))
   {
@@ -2208,6 +2227,7 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildUserIDInstanc
     structure->m_LastBuildKind = 5;
     structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
     structure->m_LastInstanceChild = GetResID(children[0]);
+    TrackInstanceChildren(structure, children);
     structure->m_LastInstanceBuffer = GetResID(instances);
     if(IsLoading(m_State))
     {
@@ -2242,6 +2262,7 @@ void WrappedMTLAccelerationStructureCommandEncoder::buildUserIDInstances(
   structure->m_LastBuildKind = 5;
   structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
   structure->m_LastInstanceChild = GetResID(children[0]);
+  TrackInstanceChildren(structure, children);
   structure->m_LastInstanceBuffer = GetResID(instances);
   if(IsCaptureMode(m_State))
   {
@@ -2442,11 +2463,15 @@ bool WrappedMTLAccelerationStructureCommandEncoder::Serialise_buildIndirectInsta
             privateSnapshot ? inactiveParameters : parameters) :
          UserIDInstanceDescriptor(staging.get(), children, packedParameters)), Unwrap(scratch), scratchOffset);
     if(privateSnapshot) m_Device->RecordReplayFrozenASInput(GetResID(instances));
+    if(privateSnapshot)
+      m_Device->RegisterReplayASInputObservation(Encoder->m_CommandBuffer, instances,
+          parameters, descriptorBytes, children);
     // The callback retains only the native staging allocation, not a wrapper.
     Unwrap(Encoder->m_CommandBuffer)->addCompletedHandler([staging](MTL::CommandBuffer *) {});
     structure->m_LastBuildKind = 5;
     structure->m_LastBuildCommandBuffer = GetResID(Encoder->m_CommandBuffer);
     structure->m_LastInstanceChild = children.empty() ? ResourceId() : GetResID(children[0]); structure->m_LastInstanceBuffer = GetResID(instances);
+    TrackInstanceChildren(structure, children);
     if(IsLoading(m_State))
     {
       AddEvent(); ActionDescription action;
@@ -2513,6 +2538,7 @@ void WrappedMTLAccelerationStructureCommandEncoder::buildIndirectInstances(
   SERIALISE_TIME_CALL(Unwrap(this)->buildAccelerationStructure(Unwrap(structure), descriptor, Unwrap(scratch), scratchOffset));
   structure->m_LastBuildKind = 5; structure->m_LastBuildCommandBuffer = GetResID(m_CommandBuffer);
   structure->m_LastInstanceChild = children.empty() ? ResourceId() : GetResID(children[0]); structure->m_LastInstanceBuffer = GetResID(instances);
+  TrackInstanceChildren(structure, children);
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();
@@ -3898,6 +3924,7 @@ static void CopyAccelerationStructureBuildMetadata(WrappedMTLAccelerationStructu
   destination->m_LastBoxTableOffset = source->m_LastBoxTableOffset;
   destination->m_LastBoxOpaque = source->m_LastBoxOpaque;
   destination->m_LastInstanceChild = source->m_LastInstanceChild;
+  destination->m_LastInstanceChildren = source->m_LastInstanceChildren;
   destination->m_LastInstanceBuffer = source->m_LastInstanceBuffer;
   destination->m_LastCompactedSizeBuffer = ResourceId();
   destination->m_LastCompactedSizeOffset = 0;

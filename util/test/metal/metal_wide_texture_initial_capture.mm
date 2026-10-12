@@ -87,6 +87,11 @@ kernel void wide_initial(texture2d<uint, access::read> image [[texture(0)]],
     RENDERDOC_API_1_7_0 *api = nullptr;
     auto get = (pRENDERDOC_GetAPI)dlsym(RTLD_DEFAULT, "RENDERDOC_GetAPI");
     if(get && get(eRENDERDOC_API_Version_1_7_0, (void **)&api) != 1) return 7;
+    if(const char *path = getenv("RENDERDOC_METAL_CAPTURE_PATH"))
+    {
+      if(!api) return 7;
+      api->SetCaptureFilePathTemplate(path);
+    }
     if(api) api->StartFrameCapture(nullptr, nullptr);
     id<MTLCommandBuffer> command = [queue commandBuffer];
     id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];

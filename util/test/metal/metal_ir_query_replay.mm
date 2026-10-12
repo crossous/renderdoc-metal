@@ -6,11 +6,14 @@
 #include <cstring>
 #include <functional>
 #include <algorithm>
+#include <dlfcn.h>
 REPLAY_PROGRAM_MARKER()
 
 int main(int argc,char **argv)
 {
   if(argc<2 || argc>4)return 1;
+  Dl_info loaded={};dladdr((void *)&RENDERDOC_InitialiseReplay,&loaded);
+  printf("Loaded backend: %s\n",loaded.dli_fname?loaded.dli_fname:"unknown");
   const char *mode=argc>=3?argv[2]:"default";
   const unsigned instanceCount=argc==4?strtoul(argv[3],nullptr,10):1;
   const bool frame=strstr(mode,"frame");
@@ -120,6 +123,24 @@ int main(int argc,char **argv)
     }
     auto replay=file->OpenCapture({},nullptr);IReplayController *controller=replay.second;
     if(replay.first.code!=ResultCode::Succeeded){fprintf(stderr,"OpenCapture %s\n",replay.first.internal_msg?replay.first.internal_msg->c_str():"unknown");file->Shutdown();return 4;}
+    if(getenv("RENDERDOC_IR_QUERY_INSPECT_UNUSED"))
+    {
+      unsigned inspected=0;rdcstr previous;
+      for(const auto &resource:controller->GetResources())
+        for(const auto &entry:controller->GetShaderEntryPoints(resource.resourceId))
+          if(entry.name=="unused_probe")
+          {
+            const auto reflection=controller->GetShader(ResourceId(),resource.resourceId,entry);
+            if(!reflection)return 45;
+            const auto text=controller->DisassembleShader(ResourceId(),reflection,"Metal AIR (Apple toolchain)");
+            if(!text.contains("define ") || !text.contains("unused_probe") ||
+               (!previous.empty() && text!=previous))return 45;
+            if(text!=controller->DisassembleShader(ResourceId(),reflection,"Metal AIR (Apple toolchain)"))return 45;
+            previous=text;inspected++;
+          }
+      if(!inspected)return 45;
+      printf("PASS demand-only unused AIR inspection: %u shader objects, repeated/duplicate output identical\n",inspected);
+    }
     for(const auto &resource:controller->GetResources()) {
       if(resource.name=="IR query results")output=resource.resourceId;
       if(resource.name=="IR query AS header")header=resource.resourceId;

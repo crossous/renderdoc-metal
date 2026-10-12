@@ -294,6 +294,28 @@ int main(int argc, char **argv)
       api->SetCaptureFilePathTemplate(argv[1]);
       api->StartFrameCapture(nullptr,nullptr);
     }
+    // Independent residency variants keep the same shader/API contract while
+    // changing child count, placement offsets and Native declaration method.
+    const char *placementText=getenv("METAL_TEST_AS_PLACEMENT");
+    const unsigned placementMultiple=placementText?strtoul(placementText,nullptr,10):0;
+    if(placementText && (!placementMultiple || placementMultiple>8)) return 33;
+    const bool childHeapDeclarations=getenv("METAL_TEST_AS_CHILD_HEAPS")!=nullptr;
+    auto testAccelerationHeaps=[NSMutableArray new];
+    auto allocateTestAS = [&](NSUInteger size) -> id<MTLAccelerationStructure> {
+      if(!placementMultiple) return [d newAccelerationStructureWithSize:size];
+      const auto layout=[d heapAccelerationStructureSizeAndAlignWithSize:size];
+      if(!layout.align || !layout.size) return nil;
+      const NSUInteger offset=layout.align*placementMultiple;
+      auto hd=[MTLHeapDescriptor new]; hd.type=MTLHeapTypePlacement;
+      hd.storageMode=MTLStorageModePrivate;
+      hd.hazardTrackingMode=MTLHazardTrackingModeTracked;
+      hd.size=(offset+layout.size+4095)&~NSUInteger(4095);
+      auto heap=[d newHeapWithDescriptor:hd];
+      auto result=[heap newAccelerationStructureWithSize:size offset:offset];
+      if(!result || result.heap!=heap || result.heapOffset!=offset) return nil;
+      [testAccelerationHeaps addObject:heap];
+      return result;
+    };
     id<MTLAccelerationStructure> structure=nil;
     id<MTLBuffer> rebuildUpload=nil, rebuildScratch=nil;
     MTLInstanceAccelerationStructureDescriptor *rebuildDescriptor=nil;
@@ -312,7 +334,7 @@ int main(int argc, char **argv)
       if(!structure || structure.heap!=accelerationHeap ||
          (!automaticHeap && structure.heapOffset!=layout.align)) return 15;
     }
-    else structure=[d newAccelerationStructureWithSize:sizes.accelerationStructureSize];
+    else structure=allocateTestAS(sizes.accelerationStructureSize);
     structure.label=@"Ray query structure";
     auto second=(repeated || unusedBuiltInstance)?[d newAccelerationStructureWithSize:sizes.accelerationStructureSize]:nil;
     auto manyStructures=[NSMutableArray new];
@@ -376,7 +398,7 @@ int main(int argc, char **argv)
     if(second) [as buildAccelerationStructure:second descriptor:descriptor scratchBuffer:scratch scratchBufferOffset:0];
     for(unsigned i=1;i<manyChildren;i++)
     {
-      auto extra=[d newAccelerationStructureWithSize:sizes.accelerationStructureSize];
+      auto extra=allocateTestAS(sizes.accelerationStructureSize);
       extra.label=[NSString stringWithFormat:@"Ray many initial BLAS %u",i];
       [manyStructures addObject:extra];
       float data[9]={-1,-1,0, 1,-1,0, 0,1,0};
@@ -550,7 +572,7 @@ int main(int argc, char **argv)
             (unsigned long)ts.accelerationStructureSize, (unsigned long)ts.buildScratchBufferSize,
             (unsigned long)ts.refitScratchBufferSize, (unsigned long)heap.size, (unsigned long)heap.align);
       }
-      structure=[d newAccelerationStructureWithSize:ts.accelerationStructureSize];
+      structure=allocateTestAS(ts.accelerationStructureSize);
       structure.label=@"Ray query structure";
       auto temporary=[d newBufferWithLength:ts.buildScratchBufferSize options:MTLResourceStorageModePrivate];
       if(frameRebuild) {rebuildUpload=indirectUpload; rebuildScratch=temporary; rebuildDescriptor=td;}
@@ -683,7 +705,16 @@ int main(int argc, char **argv)
       {
         std::vector<id<MTLResource>> resources;
         for(id<MTLAccelerationStructure> extra in manyStructures) resources.push_back(extra);
-        [cs useResources:resources.data() count:resources.size() usage:MTLResourceUsageRead];
+        if(childHeapDeclarations)
+        {
+          for(id<MTLAccelerationStructure> extra in manyStructures)
+          {
+            if(!extra.heap) return 34;
+            [cs useHeap:extra.heap];
+          }
+          [cs useHeap:structure.heap];
+        }
+        else [cs useResources:resources.data() count:resources.size() usage:MTLResourceUsageRead];
       }
       [cs setBuffer:output offset:i*4 atIndex:1];
       if(largeVisible)

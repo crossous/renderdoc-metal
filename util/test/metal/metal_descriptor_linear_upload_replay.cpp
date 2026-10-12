@@ -14,9 +14,12 @@ int main(int argc,char**argv){if(argc!=4)return 2;const unsigned bpp=strtoul(arg
   unsigned expected=patched&&x>=1&&x<3&&y>=1&&y<3?patch:base;
   if(data[(y*8+x)*bpp+component]!=expected)return false;
  }return true;};
+ ResourceId lateOutput;for(const auto&resource:c->GetResources())if(resource.name=="Ordinary payload after purge")lateOutput=resource.resourceId;
+ auto checkLate=[&](){if(lateOutput==ResourceId())return true;auto bytes=c->GetBufferData(lateOutput,0,4096);if(bytes.size()!=4096)return false;
+  for(unsigned n=0;n<512;n++){uint64_t value=0;memcpy(&value,bytes.data()+n*8,8);if(value!=(n==511?0x12345678ULL+frame:n+1))return false;}return true;};
  for(unsigned i=0;i<4;i++){
   c->SetFrameEvent(copies[0],true);if(!check(0x40+frame*16,0,false))return 11;
-  c->SetFrameEvent(last,true);if(!check(0x40+frame*16,0x90+frame*16,true))return 8;
+  c->SetFrameEvent(last,true);if(!check(0x40+frame*16,0x90+frame*16,true)||!checkLate())return 8;
   c->SetFrameEvent(0,true);if(!check(frame?0x40:0,frame?0x90:0,frame))return 9;
   printf("PASS linear texture upload cycle=%u all32pixels/firstcopy/partialpatch/initial\n",i);
  }

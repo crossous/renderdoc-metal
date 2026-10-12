@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 #include "metal_buffer.h"
+#include "metal_load_profile.h"
 #include "metal_heap.h"
 #include "metal_common.h"
 #include "metal_device.h"
@@ -254,10 +255,73 @@ bool WrappedMTLDevice::Serialise_CaptureHeapBirthContents(SerialiserType &ser,
       if(entry.second.committed &&
          !WaitReplayCommandBuffer(entry.second.buffer,"heap birth input boundary"))return false;
     InitialTextureAutoreleasePool pool;
+    // Observe the existing physical bytes at the already-required completed
+    // prefix. This is diagnostic only: differences may be Native addresses,
+    // unspecified bytes or recomputed data, and are not a replay oracle.
+    // A byte mismatch never grants permission to discard an input. An existing
+    // validated coexisting carrier is preserved independently of these bytes:
+    // the allocation API did not upload this observed GPU result over it.
+    if(getenv("RENDERDOC_METAL_TRACE_HEAP_BIRTH_RESTORE"))
+    {
+      auto before=NS::TransferPtr(Unwrap(this)->newBuffer(data.size(),MTL::ResourceStorageModeShared));
+      auto observation=m_mtlCommandQueue->commandBuffer();
+      auto reader=observation && before?observation->blitCommandEncoder():NULL;
+      if(!reader)return false;
+      reader->copyFromBuffer(native,0,before.get(),0,data.size());reader->endEncoding();
+      observation->commit();observation->waitUntilCompleted();
+      if(observation->status()!=MTL::CommandBufferStatusCompleted || observation->error() ||
+         !before->contents())return false;
+      uint64_t changed=0;
+      const byte *existing=(const byte *)before->contents();
+      for(size_t i=0;i<data.size();i++)changed+=existing[i]!=data[i];
+      uint64_t encoded=0,committed=0;
+      for(const auto &entry:m_ReplayCommandBuffers)
+        if(entry.second.committed)committed++;else encoded++;
+      fprintf(stderr,"Metal heap birth restore epoch=%llu buffer=%s heap=%s offset=%llu bytes=%llu changed=%llu committed=%llu encoded=%llu\n",
+             (unsigned long long)GetReplayEpoch(),ToStr(buffer).c_str(),
+             ToStr(heap).c_str(),(unsigned long long)offset,
+             (unsigned long long)data.size(),(unsigned long long)changed,
+             (unsigned long long)committed,(unsigned long long)encoded);
+      // Optional exact evidence for comparing reset epochs outside the backend.
+      // The path is supplied by the diagnostic runner, never by capture data.
+      if(const char *dump=getenv("RENDERDOC_METAL_HEAP_BIRTH_DUMP"))
+      {
+        uint64_t record[5]={GetReplayEpoch(),0,0,offset,uint64_t(data.size())};
+        static_assert(sizeof(ResourceId)==sizeof(uint64_t),"Diagnostic resource identity");
+        memcpy(record+1,&buffer,sizeof(buffer));memcpy(record+2,&heap,sizeof(heap));
+        FILE *file=fopen(dump,"ab");
+        const bool saved=file && fwrite(record,sizeof(record),1,file)==1 &&
+            fwrite(existing,1,data.size(),file)==data.size();
+        if(file)fclose(file);
+        if(!saved)fprintf(stderr,"Metal heap birth diagnostic evidence write failed\n");
+      }
+    }
+    rdcarray<rdcpair<uint64_t,uint64_t>> preserved;
+    if(!((WrappedMTLHeap *)parent)->GetCoexistingBirthRanges(buffer,offset,data.size(),preserved))
+      return false;
+    uint64_t uploaded=0,cursor=0;
+    for(const auto &range:preserved)
+    {
+      if(range.first<cursor || range.first>=range.second || range.second>data.size())return false;
+      uploaded+=range.first-cursor;cursor=range.second;
+    }
+    uploaded+=data.size()-cursor;
+    if(getenv("RENDERDOC_METAL_TRACE_HEAP_BIRTH_RESTORE"))
+      fprintf(stderr,"Metal heap birth carrier preservation: buffer=%s heap=%s bytes=%llu observedUpload=%llu preserved=%llu ranges=%zu\n",
+          ToStr(buffer).c_str(),ToStr(heap).c_str(),(unsigned long long)data.size(),
+          (unsigned long long)uploaded,(unsigned long long)(data.size()-uploaded),preserved.size());
+    if(!uploaded)return true;
     auto upload=NS::TransferPtr(Unwrap(this)->newBuffer(data.data(),data.size(),MTL::ResourceStorageModeShared));
     auto command=m_mtlCommandQueue->commandBuffer();auto blit=command && upload?command->blitCommandEncoder():NULL;
     if(!blit)return false;
-    blit->copyFromBuffer(upload.get(),0,native,0,data.size());blit->endEncoding();
+    cursor=0;
+    for(const auto &range:preserved)
+    {
+      if(cursor<range.first)blit->copyFromBuffer(upload.get(),cursor,native,cursor,range.first-cursor);
+      cursor=range.second;
+    }
+    if(cursor<data.size())blit->copyFromBuffer(upload.get(),cursor,native,cursor,data.size()-cursor);
+    blit->endEncoding();
     command->commit();command->waitUntilCompleted();
     return command->status()==MTL::CommandBufferStatusCompleted && !command->error();
   }
@@ -856,8 +920,73 @@ bool WrappedMTLDevice::RecordRayIRIndirectASBuild(ResourceId structure,
       m_RayIRASCurrentContents, scratch, scratchOffset);
 }
 
+bool WrappedMTLDevice::DeclareReplayASDependencies(MTL::ComputeCommandEncoder *encoder,
+                                                  const rdcarray<ResourceId> &roots)
+{
+  if(!encoder || encoder->device() != Unwrap(this)) return false;
+  std::set<ResourceId> visited;
+  rdcarray<ResourceId> pending = roots;
+  rdcarray<MTL::Resource *> dependencies;
+  for(size_t next = 0; next < pending.size(); next++)
+  {
+    const ResourceId id = pending[next];
+    if(!visited.insert(id).second) continue;
+    auto object = GetResourceManager()->GetResource(id, true);
+    if(!object || object->m_Type != eResAccelerationStructure || !object->m_Real ||
+       object->m_Device != this || object->m_CapturedAliasable)
+    {
+      RDCERR("Missing or retired Metal acceleration structure residency dependency %s", ToStr(id).c_str());
+      return false;
+    }
+    auto structure = (WrappedMTLAccelerationStructure *)object;
+    // Declaring an allocated root before its build is legal. It has no current
+    // child graph yet; a referenced child, in contrast, must already be built.
+    if(!structure->m_LastBuildKind && roots.contains(id)) continue;
+    if(!structure->m_LastBuildKind || structure->m_LastBuildCommandBuffer == ResourceId())
+    {
+      RDCERR("Unbuilt Metal acceleration structure residency dependency %s", ToStr(id).c_str());
+      return false;
+    }
+    // A heap declaration covers its own allocations, not the referents in an
+    // instance AS. Reconstructed TLAS contents contain the current Native child
+    // identities, whose pages and lifetime must accompany the consuming pass.
+    // The original queue/fence dependency checks remain separate and unchanged.
+    if(!roots.contains(id)) dependencies.push_back(Unwrap(structure));
+    if(structure->m_LastBuildKind == 5)
+      for(ResourceId child : structure->m_LastInstanceChildren)
+      {
+        if(child == id) return false;
+        pending.push_back(child);
+      }
+  }
+  if(!dependencies.empty())
+    encoder->useResources(dependencies.data(), dependencies.size(), MTL::ResourceUsageRead);
+  return true;
+}
+
+bool WrappedMTLDevice::DeclareReplayASHeapDependencies(MTL::ComputeCommandEncoder *encoder,
+                                                      const rdcarray<WrappedMTLHeap *> &heaps)
+{
+  rdcarray<ResourceId> roots;
+  for(auto object : GetResourceManager()->GetAccelerationStructures())
+  {
+    auto structure = (WrappedMTLAccelerationStructure *)object;
+    // Merely allocating an unbuilt AS in a declared heap does not create an
+    // execution input. Only existing instance builds have known referents.
+    if(!structure->m_Real || structure->m_CapturedAliasable || structure->m_LastBuildKind != 5) continue;
+    for(auto heap : heaps)
+      if(Unwrap(structure)->heap() == Unwrap(heap))
+      {
+        roots.push_back(GetResID(structure));
+        break;
+      }
+  }
+  return DeclareReplayASDependencies(encoder, roots);
+}
+
 bool WrappedMTLDevice::RestoreReplayASInitialContents()
 {
+  MetalLoadProfile::Scope profile("initial_AS");
   m_RayIRASCurrentContents = m_ReplayASInitialContents;
   m_ReplayFrozenASInputs.clear();
   // Creation chunks are loaded once, including frame-created refit destinations.
@@ -867,6 +996,7 @@ bool WrappedMTLDevice::RestoreReplayASInitialContents()
   {
     auto structure = (WrappedMTLAccelerationStructure *)object;
     structure->m_LastBuildKind = 0;
+    structure->m_LastInstanceChildren.clear();
     structure->m_LastTriangleCount = 0;
     structure->m_LastBuildCommandBuffer = ResourceId();
     structure->m_LastCompactedSizeBuffer = ResourceId();
@@ -959,6 +1089,7 @@ bool WrappedMTLDevice::RestoreReplayASInitialContents()
     structure->m_LastTriangleCount = kind == 1 || (kind == 2 && p[7]) ? p[3] : 0;
     structure->m_LastInstanceBuffer = kind == 5 || kind == 9 || kind == 10 || kind == 11 ? build.source : ResourceId();
     structure->m_LastInstanceChild = kind == 5 || kind == 9 ? build.children[0] : ResourceId();
+    structure->m_LastInstanceChildren = build.children;
     structure->m_LastVertexStride = p[1];
     structure->m_LastVertexFormat = MTL::AttributeFormat(p[2]);
     structure->m_LastVertices = build.source;
@@ -1011,6 +1142,7 @@ bool WrappedMTLDevice::RecordReplayTextureInitialContents(ResourceId id, const b
 
 bool WrappedMTLDevice::RestoreReplayTextureInitialContents()
 {
+  MetalLoadProfile::Scope profile("initial_textures");
   MTL::Device *device = Unwrap(this);
   for(const auto &entry : m_ReplayTextureInitialContents)
   {

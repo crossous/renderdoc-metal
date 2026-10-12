@@ -56,6 +56,10 @@ public:
         return true;
     return false;
   }
+  // Allocation observations must not be uploaded over a validated existing
+  // Native carrier. These ranges describe physical coexistence, not contents.
+  bool GetCoexistingBirthRanges(ResourceId after, uint64_t begin, uint64_t length,
+                               rdcarray<rdcpair<uint64_t, uint64_t>> &ranges);
 
 private:
   struct PlacementRange

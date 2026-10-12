@@ -579,7 +579,7 @@ bool WrappedMTLBlitCommandEncoder::Serialise_copyFromBuffer(
     }
 
     if(!m_Device->TrackDescriptorGPUCopy(GetResID(sourceBuffer), sourceOffset,
-          GetResID(destinationBuffer), destinationOffset, size))
+          GetResID(destinationBuffer), destinationOffset, size, GetResID(BlitCommandEncoder->GetCommandBuffer())))
       return false;
 
     Unwrap(BlitCommandEncoder)

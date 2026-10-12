@@ -10,7 +10,12 @@ static void Find(const rdcarray<ActionDescription> &actions,rdcarray<uint32_t> &
 {for(const auto &a:actions){if(a.eventId>last)last=a.eventId;if(a.flags&ActionFlags::Dispatch)dispatches.push_back(a.eventId);Find(a.children,dispatches,last);}}
 int main(int argc,char **argv)
 {
-    if(argc!=8 && argc!=9)return 2;
+    if(argc!=8 && argc!=9 && argc!=10 && argc!=11)return 2;
+    const bool dynamic=argc>=10 && !strcmp(argv[8],"dynamic");
+    const bool dynamicSampler=argc==11;
+    const unsigned samplerRow=dynamicSampler?unsigned(strtoul(argv[10],nullptr,10)):0;
+    const unsigned selected=dynamic?unsigned(strtoul(argv[9],nullptr,10)):0;
+    const uint64_t tableBytes=dynamic?48:24;
     const bool frameSources=argc==9 && !strcmp(argv[8],"frame");
   @autoreleasepool
   {
@@ -30,20 +35,20 @@ int main(int argc,char **argv)
     for(const auto &b:controller->GetBuffers())
     {
       if(b.length==8)output=b.resourceId;
-      if(b.length!=24)continue;
+      if(b.length!=24 && b.length!=tableBytes)continue;
       const auto bytes=controller->GetBufferData(b.resourceId,0,24);uint64_t words[3]={};
       if(bytes.size()!=24)return 6;memcpy(words,bytes.data(),24);
       if(words[2]==0x1111111111111111ULL)bufferTable=b.resourceId;
       // Both tables have the same packet metadata; this fixture creates the GPU
       // destination before the payload. Use the original captured identity order.
-      if(words[2]==0x2222222222222222ULL &&
+      if(words[2]==0x2222222222222222ULL && (!dynamic || b.length==48) &&
          (textureTable==ResourceId() || b.resourceId<textureTable))textureTable=b.resourceId;
 
       if(words[2]==0x3333333333333333ULL)samplerTable=b.resourceId;
     }
     for(const auto &t:controller->GetTextures())if(t.width==2&&t.height==2)backbuffer=t.resourceId;
     rdcarray<uint32_t> dispatches;uint32_t last=0;Find(controller->GetRootActions(),dispatches,last);
-    if(dispatches.size()!=3||output==ResourceId()||bufferTable==ResourceId()||textureTable==ResourceId()||samplerTable==ResourceId())
+    if(dispatches.size()!=(dynamic?1:3)||output==ResourceId()||bufferTable==ResourceId()||textureTable==ResourceId()||samplerTable==ResourceId())
     {
       fprintf(stderr,"Missing replay fixture: dispatches=%zu output=%d buffer=%d texture=%d sampler=%d\n",dispatches.size(),output!=ResourceId(),bufferTable!=ResourceId(),textureTable!=ResourceId(),samplerTable!=ResourceId());
       for(const auto &r:controller->GetResources())fprintf(stderr,"resource name=%s\n",r.name.c_str());
@@ -53,14 +58,18 @@ int main(int argc,char **argv)
     for(int cycle=0;cycle<4;cycle++)
     {
       controller->SetFrameEvent(dispatches[0],true);
-      auto before=controller->GetBufferData(output,0,8);uint32_t oldResult=0;
+      auto before=controller->GetBufferData(output,0,8);uint32_t oldResult=0,oldMarker=0;
       if(before.size()!=8)return 16;memcpy(&oldResult,before.data(),4);
-      if(oldResult!=strtoul(argv[6],nullptr,10))return 17;
+      memcpy(&oldMarker,before.data()+4,4);
+      if(oldResult!=strtoul(argv[6],nullptr,10)||oldMarker!=0xdeadbeefU)return 17;
+      if(!dynamic)
+      {
       controller->SetFrameEvent(dispatches[1],true);
-      const auto written=controller->GetBufferData(textureTable,0,24);uint64_t produced[3]={};
+      const auto written=controller->GetBufferData(textureTable,selected*24,24);uint64_t produced[3]={};
       if(written.size()!=24)return 18;memcpy(produced,written.data(),24);
       if(produced[0]||!produced[1]||produced[2]!=0x2222222222222222ULL)return 19;
       controller->SetFrameEvent(dispatches[2],true);
+      }
       const auto bytes=controller->GetBufferData(output,0,8);uint32_t words[2]={};
       if(bytes.size()!=8)return 8;memcpy(words,bytes.data(),8);
       if(words[0]!=strtoul(argv[7],nullptr,10)||words[1]!=0xdeadbeefU)return 9;
@@ -69,11 +78,24 @@ int main(int argc,char **argv)
       const uint64_t newVA=packet[0];
       if(previousVA && newVA!=previousVA)frameVAChanged=true;
       previousVA=newVA;
-      const auto t=controller->GetBufferData(textureTable,0,24);memcpy(packet,t.data(),24);
+      const auto t=controller->GetBufferData(textureTable,selected*24,24);memcpy(packet,t.data(),24);
       if(packet[0]||!packet[1]||packet[1]==strtoull(argv[4],nullptr,10)||packet[2]!=0x2222222222222222ULL)return 11;
       const uint64_t newTexture=packet[1];
-      const auto s=controller->GetBufferData(samplerTable,0,24);memcpy(packet,s.data(),24);
+      if(dynamic)
+      {
+        const auto complete=controller->GetBufferData(textureTable,0,48);uint64_t other[3]={};
+        if(complete.size()!=48)return 22;memcpy(other,complete.data()+(1-selected)*24,24);
+        if(other[0] || !other[1] || other[2]!=0x2222222222222222ULL)return 23;
+      }
+      const auto s=controller->GetBufferData(samplerTable,samplerRow*24,24);if(s.size()!=24)return 24;memcpy(packet,s.data(),24);
       if(!packet[0]||packet[1]!=0x123456789abcdef0ULL||packet[2]!=0x3333333333333333ULL)return 12;
+      if(dynamicSampler)
+      {
+        const auto samplers=controller->GetBufferData(samplerTable,0,48);uint64_t all[6]={};
+        if(samplers.size()!=48)return 25;memcpy(all,samplers.data(),48);
+        if(!all[0] || !all[3] || all[0]==all[3] || all[1]!=0x123456789abcdef0ULL ||
+           all[4]!=all[1] || all[2]!=0x3333333333333333ULL || all[5]!=all[2])return 26;
+      }
       printf("GPU PASS cycle=%d before=%u after=%u newVA=%llu textureID=%llu samplerID=%llu capturedSamplerID=%s\n",cycle,oldResult,words[0],(unsigned long long)newVA,(unsigned long long)newTexture,(unsigned long long)packet[0],argv[5]);
       controller->SetFrameEvent(0,true);
       const auto reset=controller->GetBufferData(textureTable,0,24);memcpy(packet,reset.data(),24);
@@ -92,7 +114,7 @@ int main(int argc,char **argv)
     if(pixels.size()!=16)return 14;
     for(size_t i=0;i<pixels.size();i+=4)if(pixels[i]!=128||pixels[i+1]!=64||pixels[i+2]!=32||pixels[i+3]!=255)return 15;
     controller->Shutdown();RENDERDOC_ShutdownReplay();
-    puts("PASS sourced Texture4 compute copy: GPU sampled 122/186, expected/source associations, ordinary bytes, seeks and pixels");
+    puts("PASS sourced Texture4 compute copy (16 event/EID0 checks): GPU sampled 122/186, expected/source associations, ordinary bytes, seeks and pixels");
   }
   return 0;
 }

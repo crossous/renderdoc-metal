@@ -88,6 +88,8 @@ kernel void copy_resource(const device CopyRoot &root [[buffer(0)]], device uint
     const bool signals=getenv("RENDERDOC_METAL_SIGNALS_ONLY")!=nullptr;
     const bool sharedSignals=getenv("RENDERDOC_METAL_SHARED_SIGNALS")!=nullptr;
     const bool interleaved=getenv("RENDERDOC_METAL_INTERLEAVED_SUBMISSIONS")!=nullptr;
+    const bool futureEncoded=getenv("RENDERDOC_METAL_FUTURE_ENCODED_PUBLICATION")!=nullptr;
+    if(futureEncoded && !interleaved)return 1;
     const bool retirement=getenv("RENDERDOC_METAL_PRELUDE_RETIREMENT")!=nullptr;
     const bool retirementGPU=getenv("RENDERDOC_METAL_PRELUDE_GPU_WRITES")!=nullptr;
     const bool mixedRetirement=getenv("RENDERDOC_METAL_MIXED_PRELUDE_RETIREMENT")!=nullptr;
@@ -100,7 +102,7 @@ kernel void copy_resource(const device CopyRoot &root [[buffer(0)]], device uint
       auto get=(pRENDERDOC_GetAPI)dlsym(RTLD_DEFAULT,"RENDERDOC_GetAPI");
       if(!get || !get(eRENDERDOC_API_Version_1_7_0,(void **)&api)) return 4;
       api->SetCaptureFilePathTemplate(path);
-      RENDERDOC_AnnotationValue coverage={}; coverage.uint32=textureRetirement?31:blitRetirement?30:mixedRetirement?29:signals?19:(retirement?16:(interleaved?15:12));
+      RENDERDOC_AnnotationValue coverage={}; coverage.uint32=futureEncoded?65:textureRetirement?31:blitRetirement?30:mixedRetirement?29:signals?19:(retirement?16:(interleaved?15:12));
       if(api->SetObjectAnnotation((__bridge void *)device,(__bridge void *)device,"metal.descriptorCoverage",eRENDERDOC_UInt32,0,&coverage)) return 5;
     }
     auto annotation=[&](id object,const char *key,uint64_t a,uint64_t b,uint64_t c,uint64_t d) {
@@ -259,13 +261,15 @@ kernel void copy_resource(const device CopyRoot &root [[buffer(0)]], device uint
       };
       if(!consume())return 14;
       if(signals)[command encodeSignalEvent:signalEvent value:signalBase+1];
-      [command commit];
-      for(id<MTLCommandBuffer> empty in emptyCommands) [empty commit];
-      // Match the real UE frame: 75 births overall, peak 11 outstanding creations.
-      // Holding all 75 before committing exceeds Metal's default queue reservation pool.
-      if(interleaved)
-        for(unsigned i=0;i<64;i++) [[queue commandBuffer] commit];
-      if(command.error)return 24;
+      id<MTLCommandBuffer> earlier=command;
+      auto submitEarlier=[&]() {
+        [earlier commit];
+        for(id<MTLCommandBuffer> empty in emptyCommands) [empty commit];
+        if(interleaved && !futureEncoded)
+          for(unsigned i=0;i<64;i++) [[queue commandBuffer] commit];
+      };
+      if(!futureEncoded)submitEarlier();
+      if(earlier.error)return 24;
       nextImage=capture==0?other:image;
       payloadBytes[1]=capture==0?otherID:textureBytes[1];
       const NSUInteger payloadOffset=capture*((payloadLayout.size+payloadLayout.align-1)/payloadLayout.align*payloadLayout.align);
@@ -292,7 +296,11 @@ kernel void copy_resource(const device CopyRoot &root [[buffer(0)]], device uint
         if(api->SetObjectAnnotation((__bridge void *)device,(__bridge void *)textureTable,"metal.descriptorSlotGPUValue",eRENDERDOC_UInt64,4,&value))return 17;
       }
       if(annotation(textureTable,"metal.descriptorSlotBinding",0,1,(uint64_t)(__bridge void *)nextImage,0))return 18;
-      [producer endEncoding];if(!consume())return 19;
+      [producer endEncoding];
+      // A later command's expected annotation may be encoded before an earlier
+      // consumer is submitted. Native still consumes the preceding publication.
+      if(futureEncoded)submitEarlier();
+      if(!consume())return 19;
       id<CAMetalDrawable> drawable=[layer nextDrawable];MTLRenderPassDescriptor *pass=[MTLRenderPassDescriptor renderPassDescriptor];
       pass.colorAttachments[0].texture=drawable.texture;pass.colorAttachments[0].loadAction=MTLLoadActionClear;
       pass.colorAttachments[0].storeAction=MTLStoreActionStore;pass.colorAttachments[0].clearColor=MTLClearColorMake(0.125,0.25,0.5,1);
@@ -313,6 +321,10 @@ kernel void copy_resource(const device CopyRoot &root [[buffer(0)]], device uint
       [render drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];[render endEncoding];
       if(signals)[command encodeSignalEvent:signalEvent value:signalBase+2];
       [command presentDrawable:drawable];[command commit];
+      // The future buffer has reserved queue order. Submit it before creating
+      // extra empty buffers, which otherwise exhaust the reservation pool.
+      if(futureEncoded)
+        for(unsigned i=0;i<64;i++) [[queue commandBuffer] commit];
       if(api && !api->EndFrameCapture(nullptr,nullptr))return 10;
       [command waitUntilCompleted];
       if(sharedSignals && ((id<MTLSharedEvent>)signalEvent).signaledValue!=signalBase+2)return 32;

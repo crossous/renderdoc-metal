@@ -28,6 +28,7 @@
 #include "metal_core.h"
 #include "metal_manager.h"
 #include "metal_ir_compute_abi.h"
+#include "metal_replay_budget.h"
 #include <functional>
 
 bool ValidateMetalPipelineFunction(WrappedMTLFunction *function, MTL::FunctionType type);
@@ -335,6 +336,10 @@ public:
       const rdcarray<ResourceId> &children, ResourceId indexSource, const bytebuf &indices,
       bool compacted, ResourceId sizeSource, const rdcarray<uint64_t> &sizeParameters);
   bool RestoreReplayASInitialContents();
+  bool DeclareReplayASDependencies(MTL::ComputeCommandEncoder *encoder,
+                                  const rdcarray<ResourceId> &roots);
+  bool DeclareReplayASHeapDependencies(MTL::ComputeCommandEncoder *encoder,
+                                      const rdcarray<WrappedMTLHeap *> &heaps);
   bool RecordRayIRGeometryASBuild(ResourceId structure, ResourceId vertices, ResourceId indices,
       uint32_t kind, const rdcarray<uint64_t> &parameters, ResourceId scratch, uint64_t scratchOffset,
       const bytebuf &vertexBytes, const bytebuf &indexBytes);
@@ -355,6 +360,10 @@ public:
   void CacheReplaySubmissionChunks(const rdcarray<APIEvent> &events);
   const std::map<uint64_t, ResourceId> &GetReplayChunkOwners() const { return m_ReplayChunkOwners; }
   const rdcarray<ResourceId> &GetReplaySubmissionOrder() const { return m_DescriptorSubmissionOrder; }
+  bool HasCommittedReplaySubmission(ResourceId command) const;
+  // Scoped diagnostic observer only. Ordinary replay never installs it; an
+  // isolated content intervention must not become a restoration mechanism.
+  std::function<bool(WrappedMTLCommandBuffer *)> m_DiagnosticCommitObserver;
 
   bool BeginOverlayReplayPrefix(ResourceId encoder);
   bool PreserveOverlayPass(ResourceId encoder) const { return encoder == m_OverlayPreservePass; }
@@ -370,6 +379,26 @@ public:
   bool ReplayOverlayDraw(uint32_t eventId, MTL::RenderCommandEncoder *nativeEncoder,
                          const std::function<void(MTL::RenderCommandEncoder *)> &prepare,
                          bool originalPipeline = false);
+  // Isolated redispatch diagnostic, preserving captured setters and Native shader.
+  bool ReplayOriginalDispatch(uint32_t eventId, MTL::ComputeCommandEncoder *nativeEncoder);
+  bool ReplayOriginalDispatches(const rdcarray<uint32_t> &events,
+                               MTL::ComputeCommandEncoder *nativeEncoder,
+                               MTL::Buffer *diagnosticArguments = NULL,
+                               bool diagnosticInterDispatchBarrier = false,
+                               const rdcarray<MTL::Buffer *> *diagnosticSequenceArguments = NULL,
+                               MTL::ComputePipelineState *diagnosticPipeline = NULL,
+                               const std::map<ResourceId, MTL::Buffer *> *diagnosticCarriers = NULL);
+  // Only a bounded, isolated redispatch can borrow prevalidated GPU arguments.
+  // Environment flags never select this path during ordinary replay.
+  MTL::Buffer *GetDiagnosticIndirectArguments(WrappedMTLComputeCommandEncoder *encoder,
+                                              ResourceId buffer, uint64_t offset) const
+  {
+    return encoder == m_DiagnosticReplayComputeEncoder &&
+        buffer == m_DiagnosticIndirectSource && offset == m_DiagnosticIndirectOffset ?
+        m_DiagnosticIndirectArguments : NULL;
+  }
+  bool ReadOverlayRenderPass(uint32_t eventId, ResourceId &command,
+                             RDMTL::RenderPassDescriptor &descriptor);
   RDResult ReplayClearBeforePass(uint32_t eventId, ResourceId encoder, FloatVector color,
                                 double depthClear);
   void ApplyReplayPassClear(ResourceId encoder, MTL::RenderPassDescriptor *descriptor) const;
@@ -479,6 +508,7 @@ public:
     uint64_t offset = 0, count = 0, stride = 0;
     uint32_t schema = 0;
   };
+  const rdcarray<DescriptorTable> &GetDeclaredDescriptorTables() const { return m_DescriptorTables; }
   // IR runtime v1: visible-function shader indices, CPU-authored Shared records.
   // Every GPU field has a descriptor layout; the dispatch declaration covers the ABI closure.
   struct RayIRDispatch
@@ -622,7 +652,7 @@ public:
   struct IRRuntimeDescriptorAccess
   {
     ResourceId pipeline;
-    uint64_t object=0,offset=0,descriptorObject=0,descriptorOffset=0;
+    uint64_t object=0,offset=0,descriptorObject=0,descriptorOffset=0,byteSize=0;
     uint32_t kind=0;
     bool write=false,resourceOnly=false;
   };
@@ -701,6 +731,9 @@ public:
     // have been validated for initial restoration; frame publications clear it.
     bool initialRestored = false;
     DescriptorSource gpuCopySource;
+    // Encoding publishes expected metadata before the owning submission runs.
+    ResourceId gpuCopyCommand;
+    bytebuf gpuCopyPreviousValue; // Opt-in diagnostic of an already published predecessor.
     std::map<uint32_t, DescriptorSource> sources, gpuCopySources;
     bytebuf data;
     DescriptorSource source;
@@ -712,6 +745,25 @@ public:
   std::map<DescriptorSlotKey, std::map<uint32_t, ResourceId>> m_CapturedDescriptorSlotSources;
   std::set<ResourceId> m_CaptureRetiredDescriptorBackings;
   std::map<DescriptorSlotKey, DescriptorSlotShadow> m_DescriptorPreludeRetirements;
+  // Ordinary byte reads through a distinct physical view do not consume the
+  // original logical descriptor. Preserve that initial physical payload when
+  // its exact generation is otherwise proven unused before retirement.
+  std::set<DescriptorSlotKey> m_DescriptorPreludeRawAliasSlots;
+  // A distinct placement view can coexist with the original logical backing.
+  // Unlike a retirement transition, its creation invalidates no source object.
+  std::set<rdcpair<ResourceId, ResourceId>> m_DescriptorCoexistingBackingViews;
+  // Captured physical identity is shared by initial retirement and ordinary
+  // writes. A declared table is not a lifetime-long reservation of every byte.
+  struct DescriptorBufferStorage
+  {
+    ResourceId heap;
+    uint64_t length = 0, offset = 0;
+    bool independent = false, placed = false;
+  };
+  std::map<ResourceId, DescriptorBufferStorage> m_DescriptorBufferStorage;
+  std::map<ResourceId, rdcarray<ResourceId>> m_DescriptorHeapBuffers;
+  rdcarray<ResourceId> m_DescriptorBorrowedBuffers;
+  bool IsDescriptorOrdinaryWriteRange(ResourceId buffer, uint64_t offset, uint64_t size) const;
   struct DescriptorPreludeBufferCopy
   {
     ResourceId source, destination;
@@ -739,7 +791,19 @@ public:
   std::map<DescriptorSlotKey, DescriptorSlotShadow> m_DescriptorGPUCopyExpected;
   std::map<ResourceId, uint32_t> m_DescriptorDispatches;
   bool TrackDescriptorGPUCopy(ResourceId source, uint64_t sourceOffset,
-      ResourceId destination, uint64_t destinationOffset, uint64_t size);
+      ResourceId destination, uint64_t destinationOffset, uint64_t size,
+      ResourceId command = ResourceId(),
+      const std::function<bool(ResourceId, uint64_t, uint64_t)> &capturedField = {});
+  // Actual encoded copy reads, rechecked after CPU publication before Native commit.
+  struct ReplayCopyAddressField
+  {
+    uint64_t captured = 0, slotOffset = 0, generation = 0;
+    uint32_t kind = 0, type = 0;
+    DescriptorSource source;
+  };
+  std::map<ResourceId, std::map<DescriptorSlotKey, ReplayCopyAddressField>> m_ReplayCopyAddressFields;
+  MetalReplayPreflightBudget m_ReplayCopyAddressBudget;
+  bool ValidateReplayCopyAddressFields(ResourceId command);
   bool OverlayDescriptorSlotBuffer(ResourceId buffer, bool initialRestore = false,
                                    uint64_t start = 0, uint64_t size = ~0ULL);
   bool IsRetiredDescriptorBacking(ResourceId buffer) const;
@@ -757,7 +821,7 @@ public:
   RDResult ScanDescriptorMetadata(RDCFile *rdc, int section, uint32_t diagnosticCoverage = 0);
   bool PrepareDescriptorTables();
   bool RestoreDescriptorTable(ResourceId buffer, const bytebuf &raw, uint64_t start = 0,
-                                uint64_t size = ~0ULL);
+                              uint64_t size = ~0ULL, bool identitiesOnly = false);
   bool ValidDescriptorCPUWrite(ResourceId buffer, uint64_t start, uint64_t size) const;
   bool ApplyDescriptorCPUUpdate(ResourceId buffer, uint64_t start, const bytebuf &data);
   bool ValidateDescriptorFrame();
@@ -786,6 +850,11 @@ public:
   bool CanReplayFrozenASInputAlias(ResourceId before, ResourceId after) const;
   void RecordReplayFrozenASInput(ResourceId input) { m_ReplayFrozenASInputs.insert(input); }
   bool CanReplayRetiredTextureAlias(ResourceId before, ResourceId after);
+  bool CanReplayCoexistingTextureAlias(ResourceId before, ResourceId after) const
+  {
+    return m_DescriptorCoverage >= 65 &&
+        m_DescriptorCoexistingTextureViews.count(make_rdcpair(before, after)) != 0;
+  }
   uint64_t DescriptorPlacementAliasLimit() const
   {
     return m_DescriptorCoverage >= 42 ? 128ULL * 1024 : 64ULL * 1024;
@@ -857,6 +926,10 @@ public:
   bool WaitForShaderReplacement() { return FinishReplayCommands(); }
   bool ReplayCPUBufferUpdate(WrappedMTLBuffer *buffer, uint64_t start, const bytebuf &data,
       bool submissionSnapshot = false);
+  void RegisterReplayBackgroundBufferAlias(ResourceId before,ResourceId after)
+  { m_ReplayBackgroundBufferAliases.insert(make_rdcpair(before,after)); }
+  bool ValidateReplayBackgroundBufferAliases();
+  std::set<rdcpair<ResourceId,ResourceId>> m_ReplayBackgroundBufferAliases;
   bool RecordReplayBufferInitialContents(ResourceId id, const bytebuf &contents);
   bool RestoreReplayPrivateBufferInitialContents();
   void RegisterReplayTextureViewParent(ResourceId view, ResourceId parent)
@@ -936,6 +1009,12 @@ public:
   void MarkReplayCommandBufferCommitted();
   void AssignPendingReplayCPUBufferUpdates(WrappedMTLCommandBuffer *buffer);
   bool ApplyReplayCPUBufferUpdates(WrappedMTLCommandBuffer *buffer);
+  void TraceReplaySubmissionPublications(WrappedMTLCommandBuffer *buffer);
+  void TraceReplayGPUDescriptorPublications(WrappedMTLCommandBuffer *buffer);
+  void RegisterReplayASInputObservation(WrappedMTLCommandBuffer *command,
+      WrappedMTLBuffer *input, const rdcarray<uint64_t> &parameters, const bytebuf &snapshot,
+      const rdcarray<WrappedMTLAccelerationStructure *> &children);
+  void TraceReplayASBuildInputs(WrappedMTLCommandBuffer *command);
   bool ReplayMissingCopySubmissionPrefix(WrappedMTLCommandBuffer *buffer);
 
   enum
@@ -983,6 +1062,10 @@ private:
   MetalResourceManager *m_ResourceManager = NULL;
   uint64_t m_ReplayEpoch = 0;
   uint64_t m_CaptureEpoch = 0;
+  // Opt-in independent Native trace oracle. Never controls replay eligibility.
+  bool m_OwnsDiagnosticNativeTrace = false;
+  void StartDiagnosticNativeTrace();
+  void StopDiagnosticNativeTrace();
   Threading::CriticalSection m_CapturedFrameResourcesLock;
   std::set<ResourceId> m_CapturedFrameResources;
   std::map<ResourceId, WrappedMTLHeap *> m_FramePlacementResources;
@@ -1058,6 +1141,15 @@ private:
     bool encoded = false;
   };
   std::map<ResourceId, ReplayCommandBufferState> m_ReplayCommandBuffers;
+  struct ReplayASInputObservation
+  {
+    ResourceId command, input;
+    NS::SharedPtr<MTL::Buffer> native;
+    rdcarray<uint64_t> parameters;
+    bytebuf snapshot;
+    std::map<uint64_t, uint64_t> nativeToCaptured;
+  };
+  rdcarray<ReplayASInputObservation> m_ReplayASInputObservations;
   rdcarray<ResourceId> m_ReplayCommandBufferOrder;
   rdcarray<ResourceId> m_ReplayCommandBufferQueueOrder;
   // A terminal Empty has no later reference in the frame stream. Execute it only after every
@@ -1090,14 +1182,24 @@ private:
     std::set<ResourceId> buffers;
     bool valid = true;
     uint32_t copies = 0;
+    uint32_t fills = 0;
     uint32_t signals = 0;
   };
   std::map<ResourceId, PartialCopySubmissionPlan> m_DescriptorPartialCopySubmissions;
   std::map<ResourceId, uint64_t> m_DescriptorFrameBufferBirthOffsets;
   rdcarray<ResourceId> m_DescriptorSubmissionOrder;
+  // Capture facts, not cached replay qualification. Queue ownership and the
+  // resource closure distinguish a missing producer from an unrelated submit.
+  std::map<ResourceId, ResourceId> m_DescriptorSubmissionQueues;
+  std::map<ResourceId, std::set<ResourceId>> m_DescriptorSubmissionResources;
+  bool ReplaySubmissionsHaveDisjointResources(ResourceId before, ResourceId after);
   std::map<uint64_t, ResourceId> m_ReplayChunkOwners;
   ResourceId m_OverlayPreservePass;
   WrappedMTLRenderCommandEncoder *m_OverlayReplayEncoder = NULL;
+  WrappedMTLComputeCommandEncoder *m_DiagnosticReplayComputeEncoder = NULL;
+  MTL::Buffer *m_DiagnosticIndirectArguments = NULL;
+  ResourceId m_DiagnosticIndirectSource;
+  uint64_t m_DiagnosticIndirectOffset = 0;
   bool m_OverlayReplayOriginalPipeline = false;
   ResourceId m_ClearBeforePass;
   FloatVector m_ClearBeforeColor;
@@ -1150,6 +1252,7 @@ private:
   std::set<ResourceId> m_DescriptorPreflightAliasedBuffers;
   std::set<rdcpair<ResourceId, ResourceId>> m_ValidatedDescriptorBackingAliases;
   std::map<rdcpair<ResourceId, ResourceId>, std::set<ResourceId>> m_RetiredTextureAliasConsumers;
+  std::set<rdcpair<ResourceId, ResourceId>> m_DescriptorCoexistingTextureViews;
   std::map<rdcpair<ResourceId, ResourceId>, std::set<ResourceId>> m_DescriptorBackingAliasConsumers;
   std::set<ResourceId> m_DescriptorPreflightLiveViews;
   std::map<ResourceId, std::map<uint64_t, DescriptorTable>> m_DescriptorBytes;

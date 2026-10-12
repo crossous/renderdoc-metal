@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "metal_device.h"
+#include "metal_acceleration_structure.h"
 #include "metal_render_command_encoder.h"
 #include "metal_buffer.h"
 #include "metal_texture.h"
@@ -72,7 +73,8 @@ static uint64_t DescriptorTableBufferLimit(uint32_t)
   return 32ULL * 1024 * 1024;
 }
 
-static uint64_t DescriptorPlainCopyLimit(uint32_t)
+// Optional dense scalar observation, independent of Native API copy extent.
+static uint64_t DescriptorScalarObservationLimit(uint32_t)
 {
   return 1024ULL * 1024;
 }
@@ -391,7 +393,8 @@ uint32_t WrappedMTLDevice::AnnotateDescriptorTable(void *object, const char *key
       const uint64_t count = constants ? 0 : value->vector.uint64[2];
       const uint64_t stride = constants ? value->vector.uint64[2] : value->vector.uint64[3];
       if(constants ? (!ValidInlineDrawConstants((uint32_t)stage, index, stride) || value->vector.uint64[3]) :
-          (!ValidDescriptorLayout(0, count, stride, 0) || count * stride > 4096))
+          (count ? (!ValidDescriptorLayout(0, count, stride, 0) || count * stride > 4096) :
+           (m_DescriptorCoverage < 67 || !stride || stride > 4096)))
         return 2;
       SCOPED_SERIALISE_CHUNK(MetalChunk::MTLCommandEncoder_DescriptorInlineLayout);
       Serialise_DescriptorInlineLayout(ser, GetResID(wrapped), (uint32_t)stage,
@@ -561,7 +564,7 @@ uint32_t WrappedMTLDevice::AnnotateDescriptorTable(void *object, const char *key
   if(!strcmp(key, "metal.descriptorCoverage"))
   {
     if(object != this || type != eRENDERDOC_UInt32 || width != 0 ||
-       (value->uint32 < 1 || value->uint32 > 66))
+       (value->uint32 < 1 || value->uint32 > 67))
       return 2;
     if(m_DescriptorCoverage)
       return m_DescriptorCoverage == value->uint32 ? 0 : 2;
@@ -709,7 +712,7 @@ bool WrappedMTLDevice::Serialise_DeclareDescriptorCoverage(SerialiserType &ser, 
 {
   SERIALISE_ELEMENT(version).Important();
   SERIALISE_CHECK_READ_ERRORS();
-  return IsStructuredExporting(m_State) || (version >= 1 && version <= 66);
+  return IsStructuredExporting(m_State) || (version >= 1 && version <= 67);
 }
 
 template <typename SerialiserType>
@@ -825,7 +828,8 @@ bool WrappedMTLDevice::Serialise_DescriptorInlineLayout(SerialiserType &ser, Res
     const auto key = make_rdcpair(encoder, uint64_t(stage) << 32 | index);
     if(!m_DescriptorShadowFrame || (stage != 0 && (m_DescriptorCoverage < 9 || stage > (m_DescriptorCoverage >= 66 ? 4U : 2U))) || index >= 31 ||
        (count ? (!ValidDescriptorLayout(0, count, stride, 0) || count * stride > 4096) :
-        (m_DescriptorCoverage < 14 || !ValidInlineDrawConstants(stage, index, stride))) ||
+        (m_DescriptorCoverage >= 67 ? (!stride || stride > 4096) :
+         (m_DescriptorCoverage < 14 || !ValidInlineDrawConstants(stage, index, stride)))) ||
        m_DescriptorInlineShadow.count(key))
       return false;
     m_DescriptorInlineShadow[key] = {count, stride, {}};
@@ -855,7 +859,7 @@ bool WrappedMTLDevice::Serialise_DescriptorInlineBinding(SerialiserType &ser, Re
     const auto key = make_rdcpair(encoder, uint64_t(stage) << 32 | index);
     auto layout = m_DescriptorInlineShadow.find(key);
     if((stage != 0 && (m_DescriptorCoverage < 9 || stage > (m_DescriptorCoverage >= 66 ? 4U : 2U))) || layout == m_DescriptorInlineShadow.end() || entry >= layout->second.count ||
-       resource == ResourceId() || layout->second.sources.count(entry))
+       !layout->second.count || resource == ResourceId() || layout->second.sources.count(entry))
       return false;
     layout->second.sources[entry] = {resource, memberOffset};
     return true;
@@ -945,8 +949,29 @@ bool WrappedMTLDevice::RelocateDescriptorBytes(ResourceId encoder, uint64_t inde
 
 RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uint32_t diagnosticCoverage)
 {
+  MetalLoadProfile::Scope profile("metadata_scan");
   if(IsStructuredExporting(m_State))
     return ResultCode::Succeeded;
+  // Initial descriptor retirement must be proved against physical storage,
+  // not just object IDs. This metadata is needed before initial-state loading
+  // has created Native resources. Index all declarations (including later
+  // frame declarations) so an alias cannot evade the proof by declaration order.
+  using RetirementBufferStorage = DescriptorBufferStorage;
+  auto &retirementStorage = m_DescriptorBufferStorage;
+  retirementStorage.clear();
+  struct RetirementTextureStorage
+  {
+    ResourceId parent, heap;
+    bool independent = false;
+    bool bufferView = false;
+    bool capturedRange = false;
+    uint64_t allocationSize = 0, allocationAlignment = 0;
+    uint64_t offset = 0, pitch = 0, rowBytes = 0, rows = 0;
+  };
+  std::map<ResourceId, RetirementTextureStorage> retirementTextures;
+  std::map<ResourceId, uint64_t> retirementHeapSizes;
+  m_DescriptorHeapBuffers.clear();
+  m_DescriptorBorrowedBuffers.clear();
   // Preserve the distinction between an explicit null unbind and a missing
   // nonzero captured object. Pointer deserialisation otherwise loses this fact.
   // Unlike Vulkan's unused descriptor updates, these Metal binds retain every
@@ -961,6 +986,140 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
     while(!objects.GetReader()->AtEnd() && !objects.IsErrored())
     {
       const MetalChunk chunk = objects.ReadChunk<MetalChunk>();
+      if(chunk == MetalChunk::MTLDevice_newHeapWithDescriptor)
+      {
+        ResourceId heap;
+        uint64_t size = 0;
+        objects.Serialise("Heap"_lit, heap);
+        objects.Serialise("size"_lit, size);
+        uint64_t physicalSize = size;
+        if(objects.VersionAtLeast(0x12))
+        {
+          MTL::StorageMode storageMode; MTL::CPUCacheMode cacheMode;
+          MTL::HazardTrackingMode hazardMode; uint32_t type = 0;
+          objects.Serialise("storageMode"_lit, storageMode); objects.Serialise("cacheMode"_lit, cacheMode);
+          objects.Serialise("hazardMode"_lit, hazardMode); objects.Serialise("type"_lit, type);
+          objects.Serialise("capturedHeapSize"_lit, physicalSize);
+        }
+        if(heap == ResourceId() || !size || physicalSize < size || physicalSize > 576ULL * 1024 * 1024 ||
+           !objectBudget.Consume(sizeof(heap) + sizeof(physicalSize)) ||
+           !retirementHeapSizes.insert({heap, physicalSize}).second)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement heap identity or size");
+      }
+
+      if(chunk == MetalChunk::MTLDevice_newTextureWithDescriptor ||
+         chunk == MetalChunk::MTLHeap_newTexture ||
+         chunk == MetalChunk::MTLHeap_newTextureWithOffset ||
+         chunk == MetalChunk::MTLBuffer_newTextureWithDescriptor ||
+         chunk == MetalChunk::MTLTexture_newTextureViewWithPixelFormat ||
+         chunk == MetalChunk::MTLTexture_newTextureViewWithPixelFormat_subset ||
+         chunk == MetalChunk::MTLTexture_newTextureViewWithPixelFormat_subset_swizzle)
+      {
+        ResourceId texture;
+        RetirementTextureStorage storage;
+        storage.independent = chunk == MetalChunk::MTLDevice_newTextureWithDescriptor;
+        if(chunk == MetalChunk::MTLHeap_newTexture || chunk == MetalChunk::MTLHeap_newTextureWithOffset)
+        {
+          RDMTL::TextureDescriptor descriptor;
+          objects.Serialise("Heap"_lit, storage.heap);
+          objects.Serialise("Texture"_lit, texture);
+          objects.Serialise("descriptor"_lit, descriptor);
+          if(chunk == MetalChunk::MTLHeap_newTextureWithOffset)
+          {
+            objects.Serialise("offset"_lit, storage.offset);
+            if(objects.VersionAtLeast(0x11))
+            {
+              objects.Serialise("capturedAllocationSize"_lit, storage.allocationSize);
+              objects.Serialise("capturedAllocationAlignment"_lit, storage.allocationAlignment);
+              const auto heap = retirementHeapSizes.find(storage.heap);
+              if(!storage.allocationSize || !storage.allocationAlignment ||
+                 storage.offset % storage.allocationAlignment || heap == retirementHeapSizes.end() ||
+                 storage.offset > heap->second || storage.allocationSize > heap->second - storage.offset)
+                RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Missing or invalid Metal captured texture physical range");
+              storage.capturedRange = true;
+            }
+          }
+          // Only capture-device allocation metadata qualifies a physical range.
+          // Legacy/automatic textures remain opaque. No texture footprint proves
+          // restored ordinary buffer bytes, even when its range is known.
+          if(storage.heap == ResourceId())
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Missing Metal retirement texture heap identity");
+        }
+        else if(chunk == MetalChunk::MTLBuffer_newTextureWithDescriptor)
+        {
+          RDMTL::TextureDescriptor descriptor;
+          objects.Serialise("Buffer"_lit, storage.parent);
+          objects.Serialise("Texture"_lit, texture);
+          objects.Serialise("descriptor"_lit, descriptor);
+          objects.Serialise("offset"_lit, storage.offset);
+          objects.Serialise("bytesPerRow"_lit, storage.pitch);
+          uint32_t bw=0,bh=0,bytes=0;
+          storage.bufferView =
+              (descriptor.textureType == MTL::TextureType2D ||
+               descriptor.textureType == MTL::TextureTypeTextureBuffer) &&
+              descriptor.width && descriptor.height && descriptor.depth == 1 &&
+              descriptor.mipmapLevelCount == 1 && descriptor.arrayLength == 1 &&
+              descriptor.sampleCount == 1 &&
+              GetTextureDataBlockShape(descriptor.pixelFormat,bw,bh,bytes) &&
+              bw == 1 && bh == 1 && bytes && descriptor.width <= UINT64_MAX/bytes;
+          if(storage.bufferView)
+          {
+            if(descriptor.height > UINT64_MAX/sizeof(uint64_t) ||
+               !objectBudget.Consume(descriptor.height*sizeof(uint64_t)))
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal buffer texture metadata budget exceeded");
+            storage.rowBytes = descriptor.width * bytes;
+            storage.rows = descriptor.height;
+            storage.bufferView = storage.pitch >= storage.rowBytes && storage.pitch &&
+                storage.rows - 1 <= (UINT64_MAX-storage.offset)/storage.pitch &&
+                storage.rowBytes <= UINT64_MAX-storage.offset-(storage.rows-1)*storage.pitch;
+          }
+        }
+        else if(!storage.independent)
+        {
+          objects.Serialise("Source"_lit, storage.parent);
+          objects.Serialise("View"_lit, texture);
+        }
+        else objects.Serialise("Texture"_lit, texture);
+        if(texture == ResourceId() || (!storage.independent && storage.parent == ResourceId() &&
+           storage.heap == ResourceId()) ||
+           !objectBudget.Consume(sizeof(texture) + sizeof(storage)) ||
+           !retirementTextures.insert({texture, storage}).second)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement texture storage identity");
+        // Ordinary owned texture allocations cannot alias application buffer
+        // storage. Views inherit their owner's allocation. Buffer views retain
+        // their real parent and pixel rows; unknown heap textures stay conservative.
+      }
+      if(chunk == MetalChunk::MTLDevice_newBufferWithLength ||
+         chunk == MetalChunk::MTLDevice_newBufferWithBytes ||
+         chunk == MetalChunk::MTLDevice_newBufferWithBytesNoCopy ||
+         chunk == MetalChunk::MTLHeap_newBuffer ||
+         chunk == MetalChunk::MTLHeap_newBufferWithOffset)
+      {
+        ResourceId buffer;
+        RetirementBufferStorage storage;
+        const bool heap = chunk == MetalChunk::MTLHeap_newBuffer ||
+                          chunk == MetalChunk::MTLHeap_newBufferWithOffset;
+        if(heap) objects.Serialise("Heap"_lit, storage.heap);
+        objects.Serialise("Buffer"_lit, buffer);
+        bytebuf initial;
+        if(!heap) objects.Serialise("initialData"_lit, initial);
+        uint64_t options = 0;
+        objects.Serialise("length"_lit, storage.length);
+        objects.Serialise("options"_lit, options);
+        storage.placed = chunk == MetalChunk::MTLHeap_newBufferWithOffset;
+        if(storage.placed) objects.Serialise("offset"_lit, storage.offset);
+        // A borrowed application pointer may alias another no-copy buffer.
+        // Automatic heap placement has no captured offset. Neither is treated
+        // as an independent allocation or a known physical interval.
+        storage.independent = !heap && chunk != MetalChunk::MTLDevice_newBufferWithBytesNoCopy;
+        if(buffer == ResourceId() || !storage.length ||
+           (heap && storage.heap == ResourceId()) || storage.offset > UINT64_MAX - storage.length ||
+           !objectBudget.Consume(2 * sizeof(buffer) + sizeof(storage)) ||
+           !retirementStorage.insert({buffer, storage}).second)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement storage metadata");
+        if(storage.heap != ResourceId()) m_DescriptorHeapBuffers[storage.heap].push_back(buffer);
+        else if(!storage.independent) m_DescriptorBorrowedBuffers.push_back(buffer);
+      }
       MetalResourceType kind = eResUnknown;
       bool birth = false, owner = true, array = false;
       switch(chunk)
@@ -1090,11 +1249,126 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
   uint64_t renderIndirectWork=0;
   bool frame = false, identities = false, slotEvents = false, retirementPrefix = true;
   std::set<ResourceId> retirementCommands, retirementBlits;
+  std::map<ResourceId, ResourceId> retirementBlitOwners;
+  MetalReplayPreflightBudget retirementBudget;
+  struct RetirementIdentity { uint64_t generation; uint32_t type; bool live; };
+  std::map<DescriptorSlotKey, RetirementIdentity> initialRetirementIdentities;
   uint64_t retirementCopyBytes = 0;
   uint32_t retirementCopies = 0;
+  // Restoration is an obligation of an initial slot generation, not of the
+  // entire command stream. A copy through another table (or another row of
+  // this table) cannot make this generation an execution input. Unknown
+  // backing identity remains conservative; the ordinary replay paths still
+  // validate the copy's source contents, publication and Native submission.
+  std::set<DescriptorSlotKey> retirementRequiredInitials;
+  struct RetirementSlotInterval { DescriptorSlotKey key; uint64_t begin, end; };
+  std::map<ResourceId, rdcarray<RetirementSlotInterval>> retirementObjectIntervals, retirementHeapIntervals;
+  std::map<ResourceId, rdcarray<DescriptorSlotKey>> retirementUnknownHeapSlots;
+  rdcarray<DescriptorSlotKey> retirementUnknownSlots;
+  bool retirementIntervalsReady = false;
+  auto ensureRetirementIntervals = [&]() {
+    if(!retirementIntervalsReady)
+    {
+      for(const auto &initial : initialRetirementIdentities)
+      {
+        if(!initial.second.live) continue;
+        const DescriptorSlotKey &key = initial.first;
+        const auto backing = retirementStorage.find(key.first);
+        if(!retirementBudget.Consume(2 * sizeof(RetirementSlotInterval))) return false;
+        if(backing == retirementStorage.end() || key.second > backing->second.length ||
+           24 > backing->second.length - key.second)
+        { retirementUnknownSlots.push_back(key); continue; }
+        retirementObjectIntervals[key.first].push_back({key, key.second, key.second + 24});
+        const auto &typed = backing->second;
+        if(typed.independent) continue;
+        if(typed.heap == ResourceId()) retirementUnknownSlots.push_back(key);
+        else if(!typed.placed) retirementUnknownHeapSlots[typed.heap].push_back(key);
+        else retirementHeapIntervals[typed.heap].push_back(
+            {key, typed.offset + key.second, typed.offset + key.second + 24});
+      }
+      for(auto &heap : retirementHeapIntervals)
+        std::sort(heap.second.begin(), heap.second.end(), [](const RetirementSlotInterval &a,
+                                                          const RetirementSlotInterval &b) {
+          return a.begin < b.begin;
+        });
+      retirementIntervalsReady = true;
+    }
+    return true;
+  };
+  auto noteRetirementBufferAccess = [&](ResourceId buffer, uint64_t offset, uint64_t size) {
+    const auto storage = retirementStorage.find(buffer);
+    if(storage == retirementStorage.end() || offset > storage->second.length ||
+       size > storage->second.length - offset) return false;
+    if(!ensureRetirementIntervals()) return false;
+    auto require = [&](const DescriptorSlotKey &key) {
+      if(!retirementRequiredInitials.count(key))
+      {
+        if(!retirementBudget.Consume(sizeof(key))) return false;
+        retirementRequiredInitials.insert(key);
+      }
+      // A later byte access can observe physical storage after logical free.
+      m_DescriptorPreludeRetirements.erase(key);
+      return true;
+    };
+    auto preservePhysical = [&](const DescriptorSlotKey &key) {
+      if(!m_DescriptorPreludeRawAliasSlots.count(key))
+      {
+        if(!retirementBudget.Consume(sizeof(key))) return false;
+        m_DescriptorPreludeRawAliasSlots.insert(key);
+      }
+      return true;
+    };
+    auto intersect = [&](const rdcarray<RetirementSlotInterval> &intervals,
+                         uint64_t begin, uint64_t end, bool otherObjects) {
+      auto first = std::lower_bound(intervals.begin(), intervals.end(), begin,
+          [](const RetirementSlotInterval &entry, uint64_t begin) { return entry.end <= begin; });
+      for(auto it = first; it != intervals.end() && it->begin < end; ++it)
+      {
+        if(otherObjects && it->key.first == buffer) continue;
+        // The API explicitly reads/writes ordinary bytes through this view.
+        // A known physical overlap is a payload restoration obligation, not
+        // an interpretation of another object's descriptor identity. Direct
+        // logical table transport and unknown storage retain typed checks.
+        if(!(otherObjects ? preservePhysical(it->key) : require(it->key))) return false;
+      }
+      return true;
+    };
+    const auto &range = storage->second;
+    const auto own = retirementObjectIntervals.find(buffer);
+    if(own != retirementObjectIntervals.end() && !intersect(own->second, offset, offset + size, false))
+      return false;
+    for(const auto &key : retirementUnknownSlots)
+      if(key.first != buffer && !require(key)) return false;
+    if(!range.independent && range.heap == ResourceId())
+    {
+      // Borrowed/no-copy memory has no complete captured physical identity.
+      for(const auto &initial : initialRetirementIdentities)
+        if(initial.second.live && initial.first.first != buffer && !require(initial.first)) return false;
+    }
+    else if(range.heap != ResourceId())
+    {
+      const auto known = retirementHeapIntervals.find(range.heap);
+      if(known != retirementHeapIntervals.end())
+      {
+        if(range.placed)
+        {
+          if(!intersect(known->second, range.offset + offset, range.offset + offset + size, true)) return false;
+        }
+        else for(const auto &entry : known->second)
+          if(entry.key.first != buffer && !require(entry.key)) return false;
+      }
+      const auto unknown = retirementUnknownHeapSlots.find(range.heap);
+      if(unknown != retirementUnknownHeapSlots.end())
+        for(const auto &key : unknown->second)
+          if(key.first != buffer && !require(key)) return false;
+    }
+    return true;
+  };
   m_DescriptorDrawableTextures.clear();
   m_DescriptorSubmissionInitialBuffers.clear();
   m_DescriptorPreludeRetirements.clear();
+  m_DescriptorPreludeRawAliasSlots.clear();
+  m_DescriptorCoexistingBackingViews.clear();
   m_DescriptorPreludeBufferCopies.clear();
   m_DescriptorPreludeBlitEncoders.clear();
   while(!scan.GetReader()->AtEnd() && !scan.IsErrored())
@@ -1102,14 +1376,39 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
     MetalChunk chunk = scan.ReadChunk<MetalChunk>();
     if((SystemChunk)chunk == SystemChunk::CaptureScope)
       frame = true;
-    if(frame && chunk == MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups)
+    if(!frame && m_DescriptorCoverage >= 65 && chunk == MetalChunk::MTLBuffer_DescriptorSlotEvent)
+    {
+      ResourceId buffer; uint64_t offset = 0, generation = 0;
+      uint32_t event = 0, type = 0; bytebuf data;
+      scan.Serialise("buffer"_lit, buffer); scan.Serialise("offset"_lit, offset);
+      scan.Serialise("generation"_lit, generation); scan.Serialise("event"_lit, event);
+      scan.Serialise("descriptorType"_lit, type); scan.Serialise("data"_lit, data);
+      const DescriptorSlotKey key = make_rdcpair(buffer, offset);
+      if(event == 0)
+      {
+        if(!initialRetirementIdentities.count(key) &&
+           !retirementBudget.Consume(sizeof(key) + sizeof(RetirementIdentity)))
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement metadata exceeds replay budget");
+        initialRetirementIdentities[key] = {generation, type, true};
+      }
+      else if(event == 1 && initialRetirementIdentities.count(key))
+        initialRetirementIdentities[key].live = false;
+      // Normal background slot replay still validates every generation/event.
+      // This index selects initial identities; it is not a lifetime validator.
+    }
+    if(frame && (chunk == MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups ||
+                 chunk == MetalChunk::MTLComputeCommandEncoder_dispatchThreads))
     {
       ResourceId encoder; MTL::Size groups={},threads={};
       scan.Serialise("ComputeCommandEncoder"_lit,encoder);
-      scan.Serialise("groups"_lit,groups); scan.Serialise("threadsPerGroup"_lit,threads);
+      scan.Serialise(chunk == MetalChunk::MTLComputeCommandEncoder_dispatchThreads ? "grid"_lit : "groups"_lit,groups);
+      scan.Serialise("threadsPerGroup"_lit,threads);
+      // dispatchThreads supplies the exact invocation grid, including edge groups.
+      const bool threadGrid = chunk == MetalChunk::MTLComputeCommandEncoder_dispatchThreads;
       const uint64_t groupAxes[] = {groups.width, groups.height, groups.depth};
       const uint64_t threadAxes[] = {threads.width, threads.height, threads.depth};
-      if(!MetalComputeDispatchExtentFits(groupAxes, threadAxes))
+      if(!(threadGrid ? MetalComputeThreadGridExtentFits(groupAxes, threadAxes) :
+                         MetalComputeDispatchExtentFits(groupAxes, threadAxes)))
         RETURN_ERROR_RESULT(ResultCode::APIReplayFailed,"Invalid or overflowing Metal compute dispatch extent");
     }
     if(chunk == MetalChunk::MTLComputePipelineState_CaptureIRComputeReflection)
@@ -1247,8 +1546,19 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
         matchedIndirectArguments++;
       }
     }
-    if(frame && m_DescriptorCoverage >= 16 && retirementPrefix &&
+    if(frame && m_DescriptorCoverage >= 16 && m_DescriptorCoverage < 65 && retirementPrefix &&
        chunk != MetalChunk::MTLResource_setLabel && // Metadata does not consume descriptor generations.
+       // Birth records restore physical bytes, without interpreting a typed
+       // table or submitting the application's encoded commands. Their own
+       // object/heap/range/payload checks still run below and during replay.
+       chunk != MetalChunk::MTLBuffer_CaptureHeapBirthContents &&
+       chunk != MetalChunk::MTLBuffer_CaptureHeapBirthUnspecified &&
+       // A captured CPU byte publication likewise does not dereference an
+       // address. Its range, typed relocation and submission ordering have
+       // independent checks; it does not turn an unused initial generation
+       // into a shader consumer. Only physically disjoint ordinary copy
+       // submissions can cross this proof; draw/dispatch still terminate it.
+       chunk != MetalChunk::MTLBuffer_InternalModifyCPUContents &&
        (SystemChunk)chunk != SystemChunk::CaptureScope && (SystemChunk)chunk != SystemChunk::CaptureBegin)
     {
       if(chunk == MetalChunk::MTLBuffer_DescriptorSlotEvent)
@@ -1263,9 +1573,26 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
         {
           DescriptorSlotShadow retirement;
           retirement.generation = generation; retirement.type = type;
-          if(buffer == ResourceId() || offset % 8 || !generation || type > 7 || !data.empty() ||
-             m_DescriptorPreludeRetirements.size() >= (m_DescriptorCoverage >= 30 ? 256U : 64U) ||
-             !m_DescriptorPreludeRetirements.insert({{buffer, offset}, retirement}).second)
+          if(buffer == ResourceId() || offset % 8 || !generation || type > 7 || !data.empty())
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid leading Metal descriptor retirement");
+          const DescriptorSlotKey key = make_rdcpair(buffer, offset);
+          if(m_DescriptorCoverage >= 65)
+          {
+            const auto initial = initialRetirementIdentities.find(key);
+            // A frame-created/reused generation is not an initial restoration
+            // obligation. Retain only the exact original live identity, once.
+            // All frees/reallocations are independently replay-validated.
+            if(initial != initialRetirementIdentities.end() && initial->second.live &&
+               initial->second.generation == generation && initial->second.type == type &&
+               !retirementRequiredInitials.count(key) && !m_DescriptorPreludeRetirements.count(key))
+            {
+              if(!retirementBudget.Consume(sizeof(key) + sizeof(DescriptorSlotShadow)))
+                RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement metadata exceeds replay budget");
+              m_DescriptorPreludeRetirements.insert({key, retirement});
+            }
+          }
+          else if(m_DescriptorPreludeRetirements.size() >= (m_DescriptorCoverage >= 30 ? 256U : 64U) ||
+                  !m_DescriptorPreludeRetirements.insert({key, retirement}).second)
             RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid leading Metal descriptor retirement");
         }
       }
@@ -1276,7 +1603,8 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
       {
         ResourceId queue, command;
         scan.Serialise("CommandQueue"_lit, queue); scan.Serialise("CommandBuffer"_lit, command);
-        if(queue == ResourceId() || command == ResourceId() || retirementCommands.size() >= 8 ||
+        if(queue == ResourceId() || command == ResourceId() ||
+           !retirementBudget.Consume(2 * sizeof(ResourceId)) ||
            !retirementCommands.insert(command).second)
           RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid unsubmitted retirement command buffer");
       }
@@ -1287,9 +1615,11 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
         ResourceId command, encoder;
         scan.Serialise("CommandBuffer"_lit, command); scan.Serialise("BlitCommandEncoder"_lit, encoder);
         if(!retirementCommands.count(command) || encoder == ResourceId() ||
-           retirementBlits.size() >= 8 || !retirementBlits.insert(encoder).second)
+           !retirementBudget.Consume(2 * sizeof(ResourceId)) ||
+           !retirementBlits.insert(encoder).second)
           RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid unsubmitted retirement buffer blit");
         m_DescriptorPreludeBlitEncoders.insert(encoder);
+        retirementBlitOwners[encoder] = command;
       }
       else if(m_DescriptorCoverage >= 30 && chunk == MetalChunk::MTLBlitCommandEncoder_copyFromBuffer_toBuffer)
       {
@@ -1298,9 +1628,23 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
         scan.Serialise("sourceOffset"_lit, sourceOffset); scan.Serialise("destinationBuffer"_lit, destination);
         scan.Serialise("destinationOffset"_lit, destinationOffset); scan.Serialise("size"_lit, size);
         auto src = m_DescriptorFrameBuffers.find(source), dst = m_DescriptorFrameBuffers.find(destination);
+        if(m_DescriptorCoverage >= 65)
+        {
+          if(!retirementBlits.count(encoder) || source == ResourceId() || destination == ResourceId() ||
+             !size || sourceOffset > UINT64_MAX - size || destinationOffset > UINT64_MAX - size ||
+             !retirementBudget.Consume(5 * sizeof(uint64_t)))
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid retirement-prefix buffer copy");
+          // Index the two physical ranges against each exact initial slot.
+          // This records real copy dependencies even when their command buffer
+          // has not yet been submitted. It preserves an obligation on overlap
+          // without terminating unrelated generations' retirement proofs.
+          if(!noteRetirementBufferAccess(source, sourceOffset, size) ||
+             !noteRetirementBufferAccess(destination, destinationOffset, size))
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement copy storage range");
+        }
         // A static staging upload is outside the proven frame-to-frame retirement
         // prefix. Stop that proof; ordinary sourced copy preflight validates it.
-        if(m_DescriptorCoverage >= 40 &&
+        else if(m_DescriptorCoverage >= 40 &&
            (src == m_DescriptorFrameBuffers.end() || dst == m_DescriptorFrameBuffers.end()))
           retirementPrefix = false;
         else
@@ -1325,6 +1669,19 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
         if(!retirementBlits.count(encoder))
           RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid retirement blit encoder reference");
         if(chunk == MetalChunk::MTLBlitCommandEncoder_endEncoding) retirementBlits.erase(encoder);
+      }
+      else if(m_DescriptorCoverage >= 65 && chunk == MetalChunk::MTLCommandBuffer_commit)
+      {
+        ResourceId command; scan.Serialise("CommandBuffer"_lit, command);
+        if(!retirementCommands.erase(command))
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid retirement copy submission identity");
+        for(ResourceId encoder : retirementBlits)
+          if(retirementBlitOwners[encoder] == command)
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Unfinished retirement copy submission encoder");
+        // Every encoded operation admitted by this prefix has a proved ordinary
+        // byte range, with scoped initial-slot obligations. Preserve the original
+        // Native commit, CPU publication and full-frame dependency validation.
+        // This is not an exemption for arbitrary submissions or shader access.
       }
       else
       {
@@ -1627,7 +1984,7 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
     {
       uint32_t version = 0;
       scan.Serialise("version"_lit, version);
-      if(frame || (version < 1 || version > 66) || declaredCoverage ||
+      if(frame || (version < 1 || version > 67) || declaredCoverage ||
          (m_DescriptorCoverage && !diagnosticCoverage))
         RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal descriptor coverage declaration");
       declaredCoverage=true;
@@ -1672,6 +2029,454 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
     RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Incomplete Metal per-use indirect capture evidence");
   if(scan.IsErrored())
     return RDResult(ResultCode::APIDataCorrupted, scan.GetError().message);
+  if(m_DescriptorCoverage >= 65)
+  {
+    // Whole-frame API effects, independently of the legacy command prefix.
+    // An initial generation is an obligation only when an operation can touch
+    // its physical storage before retirement, or a later explicit byte access
+    // still observes that storage. No CPU shader expression is needed here.
+    // Unknown shader/texture scopes retain the conservative initial obligations
+    // that are still live at that point; their normal recovery guards remain.
+    ReadSerialiser dependencies(rdc->ReadSection(section), Ownership::Stream);
+    dependencies.SetVersion(m_SectionVersion);
+    struct RetirementCommand { bool committed = false; };
+    std::map<ResourceId, RetirementCommand> dependencyCommands;
+    std::map<ResourceId, ResourceId> dependencyBlits;
+    struct RetirementComputeScope
+    {
+      ResourceId command;
+      std::map<uint64_t, rdcpair<ResourceId, uint64_t>> buffers;
+      std::map<uint64_t, ResourceId> textures;
+      std::set<ResourceId> residency;
+      bool opaque = false;
+    };
+    std::map<ResourceId, RetirementComputeScope> dependencyComputes;
+    struct RetirementRenderScope { ResourceId command; };
+    std::map<ResourceId, RetirementRenderScope> dependencyRenders;
+    std::set<DescriptorSlotKey> openInitials;
+    for(const auto &initial : initialRetirementIdentities)
+      if(initial.second.live)
+      {
+        if(!retirementBudget.Consume(sizeof(initial.first)))
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement dependency budget exceeded");
+        openInitials.insert(initial.first);
+      }
+    bool dependencyFrame = false;
+    auto requireUnretired = [&]() {
+      for(const auto &key : openInitials)
+        if(!retirementRequiredInitials.count(key))
+        {
+          if(!retirementBudget.Consume(sizeof(key))) return false;
+          retirementRequiredInitials.insert(key);
+        }
+      openInitials.clear();
+      return true;
+    };
+    auto independentTexture = [&](ResourceId texture) {
+      if(texture == ResourceId()) return true;
+      std::set<ResourceId> visited;
+      while(texture != ResourceId())
+      {
+        if(!visited.insert(texture).second) return false;
+        const auto backing = retirementTextures.find(texture);
+        if(backing == retirementTextures.end()) return false;
+        if(backing->second.independent) return true;
+        texture = backing->second.parent;
+      }
+      return false;
+    };
+    auto noteHeapTextureStorage = [&](const RetirementTextureStorage &storage) {
+      const ResourceId heap = storage.heap;
+      if(heap == ResourceId() || !ensureRetirementIntervals()) return false;
+      auto requireTyped = [&](const DescriptorSlotKey &key) {
+        if(!retirementRequiredInitials.count(key))
+        {
+          if(!retirementBudget.Consume(sizeof(key))) return false;
+          retirementRequiredInitials.insert(key);
+        }
+        m_DescriptorPreludeRetirements.erase(key);
+        return true;
+      };
+      // Borrowed/unknown backing remains conservative. Known placed slots
+      // require restoration only if their captured physical interval intersects
+      // the complete ancestor allocation (views inherit it, not logical pixels).
+      // Legacy opaque texture allocations still require every slot of this heap.
+      for(const auto &key : retirementUnknownSlots)
+        if(!requireTyped(key)) return false;
+      const auto known = retirementHeapIntervals.find(heap);
+      if(known != retirementHeapIntervals.end())
+        for(const auto &entry : known->second)
+          if((!storage.capturedRange || (entry.begin < storage.offset + storage.allocationSize &&
+               storage.offset < entry.end)) && !requireTyped(entry.key)) return false;
+      const auto unknown = retirementUnknownHeapSlots.find(heap);
+      if(unknown != retirementUnknownHeapSlots.end())
+        for(const auto &key : unknown->second)
+          if(!requireTyped(key)) return false;
+      return true;
+    };
+    auto noteTextureStorage = [&](ResourceId texture) {
+      if(texture == ResourceId()) return true;
+      std::set<ResourceId> visited;
+      while(texture != ResourceId())
+      {
+        if(!visited.insert(texture).second) return false;
+        const auto found = retirementTextures.find(texture);
+        if(found == retirementTextures.end()) return false;
+        const auto &storage = found->second;
+        if(storage.independent) return true;
+        if(storage.heap != ResourceId()) return noteHeapTextureStorage(storage);
+        if(storage.bufferView)
+        {
+          const auto parent = retirementStorage.find(storage.parent);
+          if(parent == retirementStorage.end() || storage.offset > parent->second.length ||
+             storage.rows-1 > (parent->second.length-storage.offset)/storage.pitch ||
+             storage.rowBytes > parent->second.length-storage.offset-(storage.rows-1)*storage.pitch)
+            return false;
+          // Native pixels alias these parent bytes, not the entire arena or its
+          // row padding. Reuse the existing physical interval/generation proof.
+          for(uint64_t row=0; row<storage.rows; ++row)
+            if(!noteRetirementBufferAccess(storage.parent,
+                storage.offset+row*storage.pitch,storage.rowBytes)) return false;
+          return true;
+        }
+        texture = storage.parent;
+      }
+      return false;
+    };
+    while(!dependencies.GetReader()->AtEnd() && !dependencies.IsErrored())
+    {
+      const MetalChunk operation = dependencies.ReadChunk<MetalChunk>();
+      if((SystemChunk)operation == SystemChunk::CaptureScope) dependencyFrame = true;
+      if(!dependencyFrame) { dependencies.EndChunk(); continue; }
+      if(operation == MetalChunk::MTLBuffer_DescriptorSlotEvent)
+      {
+        ResourceId buffer; uint64_t offset = 0, generation = 0;
+        uint32_t event = 0, type = 0; bytebuf data;
+        dependencies.Serialise("buffer"_lit, buffer); dependencies.Serialise("offset"_lit, offset);
+        dependencies.Serialise("generation"_lit, generation); dependencies.Serialise("event"_lit, event);
+        dependencies.Serialise("descriptorType"_lit, type); dependencies.Serialise("data"_lit, data);
+        const DescriptorSlotKey key = make_rdcpair(buffer, offset);
+        const auto initial = initialRetirementIdentities.find(key);
+        if(event == 1 && initial != initialRetirementIdentities.end() && initial->second.live &&
+           initial->second.generation == generation && initial->second.type == type)
+        {
+          openInitials.erase(key);
+          if(!retirementRequiredInitials.count(key) && !m_DescriptorPreludeRetirements.count(key))
+          {
+            if(!retirementBudget.Consume(sizeof(key) + sizeof(DescriptorSlotShadow)))
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement dependency budget exceeded");
+            DescriptorSlotShadow retirement;
+            retirement.generation = generation; retirement.type = type;
+            m_DescriptorPreludeRetirements.insert({key, retirement});
+          }
+        }
+      }
+      else if(operation == MetalChunk::MTLCommandQueue_commandBuffer ||
+              operation == MetalChunk::MTLCommandQueue_commandBufferWithDescriptor ||
+              operation == MetalChunk::MTLCommandQueue_commandBufferWithUnretainedReferences)
+      {
+        ResourceId queue, command;
+        dependencies.Serialise("CommandQueue"_lit, queue); dependencies.Serialise("CommandBuffer"_lit, command);
+        if(queue == ResourceId() || command == ResourceId() ||
+           !retirementBudget.Consume(sizeof(command) + sizeof(RetirementCommand)) ||
+           !dependencyCommands.insert({command, {}}).second)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement command identity");
+      }
+      else if(operation == MetalChunk::MTLCommandBuffer_computeCommandEncoder ||
+              operation == MetalChunk::MTLCommandBuffer_computeCommandEncoderWithDispatchType ||
+              operation == MetalChunk::MTLCommandBuffer_computeCommandEncoderWithDescriptor)
+      {
+        ResourceId command, encoder;
+        dependencies.Serialise("CommandBuffer"_lit, command);
+        dependencies.Serialise("ComputeCommandEncoder"_lit, encoder);
+        const auto owner = dependencyCommands.find(command);
+        if(owner == dependencyCommands.end() || owner->second.committed || encoder == ResourceId() ||
+           !retirementBudget.Consume(sizeof(encoder) + sizeof(RetirementComputeScope)) ||
+           !dependencyComputes.insert({encoder, {command}}).second)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement compute identity");
+        // Encoder/state creation is not an execution input. Bindings and
+        // residency define the scope of a later Native dispatch, independently
+        // of unrelated generations and CPU command interleaving.
+      }
+      else if(ToStr(operation).beginsWith("MTLComputeCommandEncoder::"))
+      {
+        ResourceId encoder;
+        dependencies.Serialise("ComputeCommandEncoder"_lit, encoder);
+        auto found = dependencyComputes.find(encoder);
+        if(found == dependencyComputes.end())
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Missing Metal retirement compute identity");
+        auto &scope = found->second;
+        const rdcstr name = ToStr(operation);
+        if(operation == MetalChunk::MTLComputeCommandEncoder_setBuffer)
+        {
+          ResourceId buffer; uint64_t offset = 0, index = 0;
+          dependencies.Serialise("buffer"_lit, buffer);
+          dependencies.Serialise("offset"_lit, offset); dependencies.Serialise("index"_lit, index);
+          if(index >= 31 || (buffer == ResourceId() && offset) ||
+             (!scope.buffers.count(index) && !retirementBudget.Consume(32)))
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement compute buffer binding");
+          if(buffer == ResourceId()) scope.buffers.erase(index);
+          else scope.buffers[index] = {buffer, offset};
+        }
+        else if(operation == MetalChunk::MTLComputeCommandEncoder_setBufferOffset)
+        {
+          uint64_t offset = 0, index = 0;
+          dependencies.Serialise("offset"_lit, offset); dependencies.Serialise("index"_lit, index);
+          if(!scope.buffers.count(index))
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Missing Metal retirement compute buffer offset binding");
+          scope.buffers[index].second = offset;
+        }
+        else if(operation == MetalChunk::MTLComputeCommandEncoder_setTexture)
+        {
+          ResourceId texture; uint64_t index = 0;
+          dependencies.Serialise("texture"_lit, texture);
+          dependencies.Serialise("index"_lit, index);
+          if(index >= 128 || (!scope.textures.count(index) && texture != ResourceId() &&
+              !retirementBudget.Consume(sizeof(index) + sizeof(texture))))
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement texture binding");
+          if(texture == ResourceId()) scope.textures.erase(index);
+          else scope.textures[index] = texture;
+        }
+        else if(operation == MetalChunk::MTLComputeCommandEncoder_setTextures)
+        {
+          NS::Range range = NS::Range::Make(0, 0);
+          rdcarray<uint8_t> bound; rdcarray<ResourceId> textures;
+          dependencies.Serialise("range"_lit, range);
+          dependencies.Serialise("bound"_lit, bound);
+          dependencies.Serialise("textures"_lit, textures);
+          if(range.location >= 128 || range.length > 128 - range.location ||
+             textures.size() != range.length || bound.size() != range.length)
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement texture batch");
+          for(size_t i = 0; i < textures.size(); i++)
+          {
+            const uint64_t index = range.location + i;
+            if(bound[i] > 1 || (bound[i] != 0) != (textures[i] != ResourceId()) ||
+               (!scope.textures.count(index) && textures[i] != ResourceId() &&
+                !retirementBudget.Consume(sizeof(index) + sizeof(ResourceId))))
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement texture batch binding");
+            if(textures[i] == ResourceId()) scope.textures.erase(index);
+            else scope.textures[index] = textures[i];
+          }
+        }
+        else if(operation == MetalChunk::MTLComputeCommandEncoder_useResource ||
+                operation == MetalChunk::MTLComputeCommandEncoder_useResources)
+        {
+          rdcarray<ResourceId> resources;
+          if(operation == MetalChunk::MTLComputeCommandEncoder_useResource)
+          { ResourceId resource; dependencies.Serialise("resource"_lit, resource); resources.push_back(resource); }
+          else dependencies.Serialise("resources"_lit, resources);
+          for(ResourceId resource : resources)
+          {
+            if(!scope.residency.count(resource) && !retirementBudget.Consume(sizeof(resource)))
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement residency budget exceeded");
+            scope.residency.insert(resource);
+          }
+        }
+        else if(name.beginsWith("MTLComputeCommandEncoder::dispatch"))
+        {
+          bool opaque = scope.opaque;
+          for(const auto &binding : scope.textures)
+            opaque |= !noteTextureStorage(binding.second);
+          for(ResourceId resource : scope.residency)
+            opaque |= retirementStorage.find(resource) == retirementStorage.end() &&
+                      (resource == ResourceId() || !noteTextureStorage(resource));
+          // A Native texture with independent backing (including its view
+          // ancestry) cannot alias a descriptor buffer generation. This is a
+          // physical storage proof, not shader expression/access completeness.
+          // Buffer-backed textures use their parent pixel intervals. Unknown
+          // storage within a known heap retains that heap's obligations;
+          // unresolved backing remains conservative. The normal texture initial-state, lifetime and submission guards still
+          // apply to all of these bindings. Unbinding updates the actual scope.
+          // An unresolved inline/texture/heap scope cannot turn a binding of a
+          // reused logical table into a raw read of its old initial generation.
+          // Retain the conservative still-live obligations; ordinary API byte
+          // transfers independently preserve exact physical spans, even later.
+          if(opaque)
+          {
+            if(!requireUnretired())
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement dependency budget exceeded");
+            dependencies.EndChunk();
+            continue;
+          }
+          // Native indirect argument bytes are an actual input range too.
+          if(operation == MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups_indirect)
+          {
+            ResourceId buffer; uint64_t offset = 0;
+            dependencies.Serialise("indirectBuffer"_lit, buffer);
+            dependencies.Serialise("indirectBufferOffset"_lit, offset);
+            if(!noteRetirementBufferAccess(buffer, offset, 12))
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement indirect input range");
+          }
+          for(const auto &binding : scope.buffers)
+          {
+            const auto storage = retirementStorage.find(binding.second.first);
+            if(storage == retirementStorage.end() || binding.second.second >= storage->second.length ||
+               !noteRetirementBufferAccess(binding.second.first, binding.second.second,
+                   storage->second.length - binding.second.second))
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement compute input range");
+          }
+          for(ResourceId resource : scope.residency)
+          {
+            const auto storage = retirementStorage.find(resource);
+            if(storage == retirementStorage.end()) continue; // Proven independent Native texture above.
+            if(!noteRetirementBufferAccess(resource, 0, storage->second.length))
+              RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement residency range");
+          }
+          // A typed/inline/texture/heap scope not yet indexed here remains
+          // conservative. Unknown access display never supplies this proof;
+          // ordinary execution still validates all real addresses and state.
+        }
+        else if(operation == MetalChunk::MTLComputeCommandEncoder_endEncoding)
+          dependencyComputes.erase(found);
+        else if(operation != MetalChunk::MTLComputeCommandEncoder_setComputePipelineState &&
+                operation != MetalChunk::MTLComputeCommandEncoder_setThreadgroupMemoryLength &&
+                !name.contains("memoryBarrier") && !name.contains("Label") &&
+                !name.contains("Debug"))
+        {
+          // Retain unresolved memory scopes until their actual execution, not
+          // until an unrelated setter happened to precede a logical free.
+          scope.opaque = true;
+          if(!name.beginsWith("MTLComputeCommandEncoder::set") &&
+             !name.beginsWith("MTLComputeCommandEncoder::use") && !requireUnretired())
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement dependency budget exceeded");
+        }
+      }
+      else if(operation == MetalChunk::MTLCommandBuffer_renderCommandEncoderWithDescriptor)
+      {
+        ResourceId command, encoder;
+        RDMTL::RenderPassDescriptor pass;
+        dependencies.Serialise("CommandBuffer"_lit, command);
+        dependencies.Serialise("RenderCommandEncoder"_lit, encoder);
+        dependencies.Serialise("descriptor"_lit, pass);
+        const auto owner = dependencyCommands.find(command);
+        if(owner == dependencyCommands.end() || owner->second.committed || encoder == ResourceId() ||
+           !retirementBudget.Consume(sizeof(encoder) + sizeof(RetirementRenderScope)) ||
+           !dependencyRenders.insert({encoder, {command}}).second)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement render owner");
+        // Beginning/ending a render pass can load, clear, resolve or store its
+        // attachments even without a draw. Prove independent physical backing,
+        // not a format/size/load-action permit list. Unknown memory still retains
+        // live initial obligations; normal pass/counter/lifetime checks remain.
+        bool independent = independentTexture(pass.depthAttachment.textureId) &&
+            independentTexture(pass.depthAttachment.resolveTextureId) &&
+            independentTexture(pass.stencilAttachment.textureId) &&
+            independentTexture(pass.stencilAttachment.resolveTextureId) &&
+            pass.visibilityResultBufferId == ResourceId() &&
+            pass.rasterizationRateMapId == ResourceId();
+        for(const auto &attachment : pass.colorAttachments)
+          independent &= independentTexture(attachment.textureId) &&
+                         independentTexture(attachment.resolveTextureId);
+        if(!independent && !requireUnretired())
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement dependency budget exceeded");
+      }
+      else if(ToStr(operation).beginsWith("MTLRenderCommandEncoder::"))
+      {
+        const rdcstr name = ToStr(operation);
+        ResourceId encoder; dependencies.Serialise("RenderCommandEncoder"_lit, encoder);
+        const auto found = dependencyRenders.find(encoder);
+        if(found == dependencyRenders.end())
+        {
+          // Parallel render ownership is still handled conservatively rather
+          // than inferring a serial owner from CPU chunk order.
+          if(!requireUnretired())
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement dependency budget exceeded");
+        }
+        else if(operation == MetalChunk::MTLRenderCommandEncoder_endEncoding)
+          dependencyRenders.erase(found);
+        else if(name.beginsWith("MTLRenderCommandEncoder::draw") ||
+                name.beginsWith("MTLRenderCommandEncoder::dispatch") ||
+                (!name.beginsWith("MTLRenderCommandEncoder::set") &&
+                 !name.beginsWith("MTLRenderCommandEncoder::use") &&
+                 !name.contains("memoryBarrier") && !name.contains("Label") &&
+                 !name.contains("Debug")))
+        {
+          // Actual shader/tile/unknown memory work retains the currently live
+          // obligations. Setters and residency alone do not execute shaders
+          // or revive retired typed identities. Raw buffer API spans remain
+          // independently indexed by the existing physical restoration path.
+          if(!requireUnretired())
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement dependency budget exceeded");
+        }
+      }
+      else if(operation == MetalChunk::MTLCommandBuffer_blitCommandEncoder ||
+              operation == MetalChunk::MTLCommandBuffer_blitCommandEncoderWithDescriptor)
+      {
+        ResourceId command, encoder;
+        dependencies.Serialise("CommandBuffer"_lit, command); dependencies.Serialise("BlitCommandEncoder"_lit, encoder);
+        const auto owner = dependencyCommands.find(command);
+        if(owner == dependencyCommands.end() || owner->second.committed || encoder == ResourceId() ||
+           !retirementBudget.Consume(2 * sizeof(ResourceId)) ||
+           !dependencyBlits.insert({encoder, command}).second)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement encoder identity");
+      }
+      else if(operation == MetalChunk::MTLBlitCommandEncoder_copyFromBuffer_toBuffer ||
+              operation == MetalChunk::MTLBlitCommandEncoder_fillBuffer)
+      {
+        ResourceId encoder, source, destination; uint64_t sourceOffset = 0, destinationOffset = 0, size = 0;
+        dependencies.Serialise("BlitCommandEncoder"_lit, encoder);
+        if(operation == MetalChunk::MTLBlitCommandEncoder_copyFromBuffer_toBuffer)
+        {
+          dependencies.Serialise("sourceBuffer"_lit, source); dependencies.Serialise("sourceOffset"_lit, sourceOffset);
+          dependencies.Serialise("destinationBuffer"_lit, destination); dependencies.Serialise("destinationOffset"_lit, destinationOffset);
+          dependencies.Serialise("size"_lit, size);
+        }
+        else
+        {
+          NS::Range range = NS::Range::Make(0, 0); uint8_t value = 0;
+          dependencies.Serialise("buffer"_lit, destination); dependencies.Serialise("range"_lit, range);
+          dependencies.Serialise("value"_lit, value); destinationOffset = range.location; size = range.length;
+        }
+        // Record real API spans even after another command used an unknown
+        // shader scope. A physical alias must not escape by operation order.
+        if(!dependencyBlits.count(encoder) || !size ||
+           (source != ResourceId() && !noteRetirementBufferAccess(source, sourceOffset, size)) ||
+           !noteRetirementBufferAccess(destination, destinationOffset, size))
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement buffer access range");
+      }
+      else if(operation == MetalChunk::MTLBlitCommandEncoder_endEncoding)
+      {
+        ResourceId encoder; dependencies.Serialise("BlitCommandEncoder"_lit, encoder);
+        if(dependencyBlits.erase(encoder) != 1)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement encoder completion");
+      }
+      else if(operation == MetalChunk::MTLCommandBuffer_commit)
+      {
+        ResourceId command; dependencies.Serialise("CommandBuffer"_lit, command);
+        auto owner = dependencyCommands.find(command);
+        if(owner == dependencyCommands.end() || owner->second.committed)
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Invalid Metal retirement submission identity");
+        for(const auto &encoder : dependencyBlits)
+          if(encoder.second == command)
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Unfinished Metal retirement submission encoder");
+        for(const auto &encoder : dependencyComputes)
+          if(encoder.second.command == command)
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Unfinished Metal retirement compute encoder");
+        for(const auto &encoder : dependencyRenders)
+          if(encoder.second.command == command)
+            RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Unfinished Metal retirement render encoder");
+        owner->second.committed = true;
+      }
+      else
+      {
+        const rdcstr name = ToStr(operation);
+        // Object/CPU publications are not Native shader consumers. Command
+        // waits and events carry submission dependencies, checked by normal
+        // preflight; they do not interpret a descriptor or GPU pointer.
+        const bool executionScope = name.beginsWith("MTLComputeCommandEncoder::") ||
+            name.beginsWith("MTLRenderCommandEncoder::") ||
+            name.beginsWith("MTLAccelerationStructureCommandEncoder::") ||
+            name.beginsWith("MTLParallelRenderCommandEncoder::") ||
+            (name.beginsWith("MTLBlitCommandEncoder::") &&
+             operation != MetalChunk::MTLBlitCommandEncoder_setLabel) ||
+            (name.beginsWith("MTLCommandBuffer::") && name.contains("CommandEncoder"));
+        if(executionScope && !requireUnretired())
+          RETURN_ERROR_RESULT(ResultCode::APIReplayFailed, "Metal retirement dependency budget exceeded");
+      }
+      dependencies.EndChunk();
+    }
+    if(dependencies.IsErrored())
+      return RDResult(ResultCode::APIDataCorrupted, dependencies.GetError().message);
+  }
   for(const auto &copy : m_DescriptorPreludeBufferCopies)
     for(const auto &table : m_DescriptorTables)
       if(copy.source == table.buffer || copy.destination == table.buffer)
@@ -1729,14 +2534,16 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
         MTL::HazardTrackingMode hazardMode; uint32_t type = 0;
         budget.Serialise("storageMode"_lit, storageMode); budget.Serialise("cacheMode"_lit, cacheMode);
         budget.Serialise("hazardMode"_lit, hazardMode); budget.Serialise("type"_lit, type);
+        uint64_t physicalSize = size;
+        if(budget.VersionAtLeast(0x12)) budget.Serialise("capturedHeapSize"_lit, physicalSize);
         // Match the already supported native heap range for the v65 contract.
         // Charge the entire backing, including unused placement space, before
         // allocating anything. Child extents/aliases are checked separately.
         const uint64_t heapLimit = m_DescriptorCoverage >= 65 ? 576ULL * 1024 * 1024 :
             m_DescriptorCoverage >= 60 ? 128ULL * 1024 * 1024 :
             m_DescriptorCoverage >= 43 ? 16ULL * 1024 * 1024 : 1024 * 1024;
-        sourcedBudgetInvalid |= frame || !size || size > heapLimit;
-        sourcedAllocationBytes += RDCMIN(size, heapLimit + 1);
+        sourcedBudgetInvalid |= frame || !size || physicalSize < size || physicalSize > heapLimit;
+        sourcedAllocationBytes += RDCMIN(physicalSize, heapLimit + 1);
         if(m_DescriptorCoverage >= 60)
         {
           // Metal can place small textures in sub-page heaps. Account for the
@@ -1747,7 +2554,7 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
               !(storageMode == MTL::StorageModeShared && type == uint32_t(MTL::HeapTypePlacement))) ||
               cacheMode != MTL::CPUCacheModeDefaultCache || hazardMode > MTL::HazardTrackingModeTracked ||
               (type != uint32_t(MTL::HeapTypeAutomatic) && type != uint32_t(MTL::HeapTypePlacement));
-          nativeBudget.Add(nativeBudget.nativeBytes, AlignUp(RDCMIN(size, heapLimit + 1), uint64_t(64*1024)));
+          nativeBudget.Add(nativeBudget.nativeBytes, AlignUp(RDCMIN(physicalSize, heapLimit + 1), uint64_t(64*1024)));
         }
         if(!previouslyInvalid && sourcedBudgetInvalid && getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
           fprintf(stderr,"Metal heap metadata rejection: heap=%s bytes=%llu limit=%llu storage=%u cache=%u hazard=%u type=%u frame=%d\n",
@@ -2023,7 +2830,7 @@ RDResult WrappedMTLDevice::ScanDescriptorMetadata(RDCFile *rdc, int section, uin
 }
 
 bool WrappedMTLDevice::RestoreDescriptorTable(ResourceId bufferId, const bytebuf &raw,
-                                                uint64_t start, uint64_t size)
+                                                uint64_t start, uint64_t size, bool identitiesOnly)
 {
   WrappedMTLObject *object = GetResourceManager()->GetResource(bufferId, true);
   if(!object || object->m_Type != eResBuffer || !object->m_Real)
@@ -2129,7 +2936,16 @@ bool WrappedMTLDevice::RestoreDescriptorTable(ResourceId bufferId, const bytebuf
     }
   }
   if(!PatchRayASHeaders(bufferId, raw, patched)) return false;
-  memcpy((byte *)destination->contents() + start, patched.data() + start, size);
+  if(identitiesOnly)
+  {
+    // All physical initial windows were restored first. Relocation must not
+    // upload an alias's whole raw snapshot over another logical table's already
+    // relocated identities. Ordinary bytes remain owned by that physical pass.
+    byte *native = (byte *)destination->contents();
+    for(uint64_t i = start; i < start + size; ++i)
+      if(patched[i] != raw[i]) native[i] = patched[i];
+  }
+  else memcpy((byte *)destination->contents() + start, patched.data() + start, size);
   return true;
 }
 
@@ -2226,7 +3042,15 @@ bool WrappedMTLDevice::ValidateDescriptorValues(ResourceId bufferId, const byteb
 bool WrappedMTLDevice::PrepareDescriptorTables()
 {
   if(m_DescriptorCoverage >= 4)
-    return PrepareRayASHeaderInitialContents() && PrepareDescriptorSlotShadow();
+    {
+    if(!PrepareRayASHeaderInitialContents())
+    {
+      if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
+        fprintf(stderr, "Metal descriptor initial restore rejected: typed AS header stage\n");
+      return false;
+    }
+    return PrepareDescriptorSlotShadow();
+  }
   for(const DescriptorTable &layout : m_DescriptorTables)
   {
     if(m_DescriptorRawContents.count(layout.buffer))
@@ -2327,7 +3151,15 @@ bool WrappedMTLDevice::Serialise_DescriptorSlotProducer(SerialiserType &ser, Res
        GetReplayComputeCommandEncoder((WrappedMTLComputeCommandEncoder *)object) != object)
       return false;
   }
-  return TrackDescriptorGPUCopy(source, sourceOffset, buffer, offset, 24);
+  if(!TrackDescriptorGPUCopy(source, sourceOffset, buffer, offset, 24)) return false;
+  if(!m_DescriptorPreflight)
+  {
+    auto producer = (WrappedMTLComputeCommandEncoder *)GetResourceManager()->GetResource(encoder, true);
+    auto expected = m_DescriptorGPUCopyExpected.find(make_rdcpair(buffer, offset));
+    if(expected != m_DescriptorGPUCopyExpected.end())
+      expected->second.gpuCopyCommand = GetResID(producer->GetCommandBuffer());
+  }
+  return true;
 }
 template bool WrappedMTLDevice::Serialise_DescriptorSlotProducer(ReadSerialiser &, ResourceId,
     uint64_t, ResourceId, ResourceId, uint64_t);
@@ -2494,6 +3326,363 @@ bool WrappedMTLDevice::PatchDescriptorSlotField(const DescriptorSource &source, 
   return replacement != 0;
 }
 
+void WrappedMTLDevice::TraceReplaySubmissionPublications(WrappedMTLCommandBuffer *buffer)
+{
+  // Optional CPU-only input observer at the actual submission boundary. Requests
+  // are diagnostic ranges, never resource eligibility or shader access proof.
+  // No GPU copy, wait, patch, or support decision is added by this observer.
+  const rdcstr ranges = Process::GetEnvVariable("RENDERDOC_METAL_TRACE_CPU_SUBMISSION_RANGES");
+  const char *request = ranges.c_str();
+  for(uint32_t count = 0; buffer && *request && count < 16; count++)
+  {
+    unsigned long long id = 0, offset = 0, size = 0;
+    int consumed = 0;
+    if(sscanf(request, "%llu:%llu:%llu%n", &id, &offset, &size, &consumed) != 3 ||
+       consumed <= 0 || (request[consumed] && request[consumed] != ';') ||
+       !id || !size || size > 65536)
+      break;
+    ResourceId resource;
+    const uint64_t numericID = id;
+    memcpy(&resource, &numericID, sizeof(resource));
+    auto object = GetResourceManager()->GetResource(resource, true);
+    MTL::Buffer *native = object && object->m_Type == eResBuffer && object->m_Real ?
+        Unwrap((WrappedMTLBuffer *)object) : NULL;
+    if(native && native->storageMode() == MTL::StorageModeShared && native->contents() &&
+       offset <= native->length() && size <= native->length() - offset)
+    {
+      const byte *data = (const byte *)native->contents() + offset;
+      uint64_t hash = 14695981039346656037ULL, nonzero = 0;
+      rdcstr hex;
+      for(uint64_t i = 0; i < size; i++)
+      {
+        hash = (hash ^ data[i]) * 1099511628211ULL;
+        nonzero += data[i] != 0;
+        if(size <= 1024) hex += StringFormat::Fmt("%02x", uint32_t(data[i]));
+      }
+      fprintf(stderr, "Metal CPU submission range: epoch=%llu loading=%d command=%s buffer=%s offset=%llu size=%llu fnv64=%016llx nonzero=%llu hex=%s\n",
+          (unsigned long long)GetReplayEpoch(), IsLoading(m_State),
+          ToStr(GetResID(buffer)).c_str(), ToStr(resource).c_str(), offset, size,
+          (unsigned long long)hash, (unsigned long long)nonzero, hex.c_str());
+    }
+    request += consumed;
+    if(*request == ';') request++;
+  }
+  if(!getenv("RENDERDOC_METAL_TRACE_SUBMISSION_PUBLICATIONS") || !buffer) return;
+  const ResourceId command = GetResID(buffer);
+  const auto submission = m_DescriptorSubmissionSlots.find(command);
+  if(submission == m_DescriptorSubmissionSlots.end()) return;
+  uint64_t live = 0, retired = 0, capturedOnly = 0, relocated = 0, reused = 0, unobserved = 0;
+  for(const DescriptorSlotKey &key : submission->second)
+  {
+    const auto found = m_DescriptorSlotShadow.find(key);
+    if(found == m_DescriptorSlotShadow.end()) { unobserved++; continue; }
+    const DescriptorSlotShadow &slot = found->second;
+    if(slot.live) live++;
+    else retired++;
+    auto object = GetResourceManager()->GetResource(key.first, true);
+    MTL::Buffer *native = object && object->m_Type == eResBuffer && object->m_Real ?
+        Unwrap((WrappedMTLBuffer *)object) : NULL;
+    // Observe only CPU-visible publications. Do not add a readback or GPU wait,
+    // and do not treat a conservative submission closure as proof of access.
+    if(slot.gpuExpected || slot.data.size() != 24 || !native ||
+       native->storageMode() != MTL::StorageModeShared || !native->contents() ||
+       key.second > native->length() || 24 > native->length() - key.second)
+    { unobserved++; continue; }
+    bytebuf observed((byte *)native->contents() + key.second, 24), patched;
+    DescriptorSlotShadow diagnostic = slot;
+    diagnostic.live = true;
+    if(!PatchDescriptorSlot(diagnostic, patched)) { unobserved++; continue; }
+    if(observed == patched) { relocated++; continue; }
+    if(observed != slot.data)
+    {
+      reused++;
+      if(slot.live)
+        fprintf(stderr, "Metal submission publication live-different: loading=%d command=%s buffer=%s offset=%llu generation=%llu type=%u sources=%zu\n",
+            IsLoading(m_State), ToStr(command).c_str(), ToStr(key.first).c_str(),
+            (unsigned long long)key.second, (unsigned long long)slot.generation,
+            slot.type, slot.sources.size());
+      continue;
+    }
+    capturedOnly++;
+    fprintf(stderr, "Metal submission publication captured-only: loading=%d live=%d command=%s buffer=%s offset=%llu generation=%llu type=%u sources=%zu\n",
+        IsLoading(m_State), slot.live, ToStr(command).c_str(), ToStr(key.first).c_str(),
+        (unsigned long long)key.second, (unsigned long long)slot.generation,
+        slot.type, slot.sources.size());
+  }
+  fprintf(stderr, "Metal submission publication summary: loading=%d command=%s keys=%zu live=%llu retired=%llu capturedOnly=%llu relocated=%llu reused=%llu unobserved=%llu\n",
+      IsLoading(m_State), ToStr(command).c_str(), submission->second.size(),
+      (unsigned long long)live, (unsigned long long)retired,
+      (unsigned long long)capturedOnly, (unsigned long long)relocated,
+      (unsigned long long)reused, (unsigned long long)unobserved);
+}
+
+void WrappedMTLDevice::TraceReplayGPUDescriptorPublications(WrappedMTLCommandBuffer *buffer)
+{
+  if(!getenv("RENDERDOC_METAL_TRACE_GPU_PUBLICATIONS") || !buffer) return;
+  const ResourceId command = GetResID(buffer);
+  const auto submission = m_DescriptorSubmissionSlots.find(command);
+  if(submission == m_DescriptorSubmissionSlots.end()) return;
+  struct Observation
+  {
+    DescriptorSlotKey key;
+    MTL::Buffer *native;
+    uint64_t generation;
+    bytebuf expected;
+    bool asHeader;
+  };
+  rdcarray<Observation> observations;
+  uint64_t unobserved = 0, pending = 0;
+  for(const DescriptorSlotKey &key : submission->second)
+  {
+    const auto found = m_DescriptorSlotShadow.find(key);
+    if(found == m_DescriptorSlotShadow.end() || !found->second.live) continue;
+    const DescriptorSlotShadow &slot = found->second;
+    bytebuf predecessor;
+    if(slot.gpuCopyPublished && slot.gpuCopyCommand != ResourceId())
+    {
+      auto producer = m_ReplayCommandBuffers.find(slot.gpuCopyCommand);
+      if(producer == m_ReplayCommandBuffers.end() || !producer->second.committed)
+      {
+        pending++;
+        fprintf(stderr, "Metal GPU publication pending: loading=%d command=%s producer=%s buffer=%s offset=%llu generation=%llu\n",
+            IsLoading(m_State), ToStr(command).c_str(), ToStr(slot.gpuCopyCommand).c_str(),
+            ToStr(key.first).c_str(), (unsigned long long)key.second,
+            (unsigned long long)slot.generation);
+        if(slot.gpuCopyPreviousValue.size() != 24) { unobserved++; continue; }
+        predecessor = slot.gpuCopyPreviousValue;
+      }
+    }
+    auto object = GetResourceManager()->GetResource(key.first, true);
+    MTL::Buffer *native = object && object->m_Type == eResBuffer && object->m_Real ?
+        Unwrap((WrappedMTLBuffer *)object) : NULL;
+    if(!native || (!slot.gpuExpected && native->storageMode() != MTL::StorageModePrivate))
+      continue;
+    bytebuf expected;
+    if(slot.data.size() != 24 || key.second > native->length() ||
+       24 > native->length() - key.second ||
+       (predecessor.empty() && !PatchDescriptorSlot(slot, expected)))
+    { unobserved++; continue; }
+    if(!predecessor.empty()) expected = predecessor;
+    observations.push_back({key, native, slot.generation, expected, slot.sources.count(3) != 0});
+  }
+  if(observations.empty())
+  {
+    if(pending || unobserved)
+      fprintf(stderr, "Metal GPU publication summary: loading=%d command=%s observed=0 mismatches=0 unobserved=%llu pending=%llu\n",
+          IsLoading(m_State), ToStr(command).c_str(), (unsigned long long)unobserved,
+          (unsigned long long)pending);
+    return;
+  }
+  // Diagnostic only: the shadow here belongs to this submission, before the
+  // next captured chunk publishes a future value. Waiting and copying change
+  // scheduling, so this must never become ordinary replay admission.
+  if(observations.size() > (128ULL << 20) / 24 ||
+     !WaitReplayCommandBuffer(buffer, "GPU publication diagnostic"))
+  {
+    fprintf(stderr, "Metal GPU publication diagnostic failed: command=%s reason=budget-or-completion\n",
+        ToStr(command).c_str());
+    return;
+  }
+  MTL::Buffer *readback = Unwrap(this)->newBuffer(observations.size() * 24,
+                                                MTL::ResourceStorageModeShared);
+  // The captured queue may already have a later enqueued but uncommitted
+  // reservation. A diagnostic appended to that queue would wait forever.
+  // The producer has completed above; observe it on an independent queue.
+  MTL::CommandQueue *diagnosticQueue = Unwrap(this)->newCommandQueue();
+  MTL::CommandBuffer *copy = diagnosticQueue ? diagnosticQueue->commandBuffer() : NULL;
+  MTL::BlitCommandEncoder *blit = readback && copy ? copy->blitCommandEncoder() : NULL;
+  if(!blit)
+  {
+    if(readback) readback->release();
+    if(diagnosticQueue) diagnosticQueue->release();
+    fprintf(stderr, "Metal GPU publication diagnostic failed: command=%s reason=allocation\n",
+        ToStr(command).c_str());
+    return;
+  }
+  for(size_t i = 0; i < observations.size(); i++)
+    blit->copyFromBuffer(observations[i].native, observations[i].key.second, readback, i * 24, 24);
+  blit->endEncoding();
+  copy->commit();
+  copy->waitUntilCompleted();
+  if(copy->status() != MTL::CommandBufferStatusCompleted || copy->error())
+  {
+    fprintf(stderr, "Metal GPU publication diagnostic failed: command=%s reason=copy\n",
+        ToStr(command).c_str());
+    readback->release();
+    diagnosticQueue->release();
+    return;
+  }
+  uint64_t mismatches = 0, headersObserved = 0, headersUnobserved = 0, headerMismatches = 0;
+  std::set<uint64_t> observedHeaders;
+  for(size_t i = 0; i < observations.size(); i++)
+  {
+    const Observation &observation = observations[i];
+    const byte *actual = (const byte *)readback->contents() + i * 24;
+    // Follow only an explicitly declared Header field, using the observed
+    // packet address, not the possibly future producer's shadow identity.
+    // These Shared bytes are the public ABI payload, never opaque AS storage.
+    if(observation.asHeader)
+    {
+      uint64_t address = 0;
+      memcpy(&address, actual, sizeof(address));
+      if(observedHeaders.insert(address).second)
+      {
+        bool foundHeader = false;
+        for(const auto &entry : m_RayASHeaderCurrent)
+        {
+          const RayASHeader &header = entry.second;
+          auto object = GetResourceManager()->GetResource(header.buffer, true);
+          auto native = object && object->m_Type == eResBuffer && object->m_Real ?
+              Unwrap((WrappedMTLBuffer *)object) : NULL;
+          if(!native || native->gpuAddress() > UINT64_MAX - header.offset ||
+             native->gpuAddress() + header.offset != address) continue;
+          foundHeader = true;
+          auto raw = m_DescriptorRawContents.find(header.buffer);
+          bytebuf patched;
+          if(raw != m_DescriptorRawContents.end()) patched = raw->second;
+          if(!ValidateRayASHeader(header) || raw == m_DescriptorRawContents.end() ||
+             !PatchRayASHeaders(header.buffer, raw->second, patched))
+          { headersUnobserved++; break; }
+          headersObserved++;
+          const byte *contents = (const byte *)native->contents() + header.offset;
+          const bool match = !memcmp(contents, patched.data() + header.offset, 64);
+          if(!match) headerMismatches++;
+          uint64_t actualWords[8], expectedWords[8];
+          memcpy(actualWords, contents, 64);
+          memcpy(expectedWords, patched.data() + header.offset, 64);
+          fprintf(stderr, "Metal AS Header publication: loading=%d command=%s buffer=%s offset=%llu result=%s actual=%llx,%llx expected=%llx,%llx reserved=%s\n",
+              IsLoading(m_State), ToStr(command).c_str(), ToStr(header.buffer).c_str(),
+              (unsigned long long)header.offset, match ? "MATCH" : "MISMATCH",
+              (unsigned long long)actualWords[0], (unsigned long long)actualWords[1],
+              (unsigned long long)expectedWords[0], (unsigned long long)expectedWords[1],
+              !memcmp(contents + 16, patched.data() + header.offset + 16, 48) ? "MATCH" : "MISMATCH");
+          break;
+        }
+        if(!foundHeader) headersUnobserved++;
+      }
+    }
+    if(!memcmp(actual, observation.expected.data(), 24)) continue;
+    mismatches++;
+    uint64_t actualFields[3], expectedFields[3];
+    memcpy(actualFields, actual, 24);
+    memcpy(expectedFields, observation.expected.data(), 24);
+    fprintf(stderr, "Metal GPU publication mismatch: loading=%d command=%s buffer=%s offset=%llu generation=%llu actual=%llx,%llx,%llx expected=%llx,%llx,%llx\n",
+        IsLoading(m_State), ToStr(command).c_str(), ToStr(observation.key.first).c_str(),
+        (unsigned long long)observation.key.second, (unsigned long long)observation.generation,
+        (unsigned long long)actualFields[0], (unsigned long long)actualFields[1],
+        (unsigned long long)actualFields[2], (unsigned long long)expectedFields[0],
+        (unsigned long long)expectedFields[1], (unsigned long long)expectedFields[2]);
+  }
+  readback->release();
+  diagnosticQueue->release();
+  if(headersObserved || headersUnobserved)
+    fprintf(stderr, "Metal AS Header publication summary: loading=%d command=%s observed=%llu mismatches=%llu unobserved=%llu\n",
+        IsLoading(m_State), ToStr(command).c_str(), (unsigned long long)headersObserved,
+        (unsigned long long)headerMismatches, (unsigned long long)headersUnobserved);
+  fprintf(stderr, "Metal GPU publication summary: loading=%d command=%s observed=%zu mismatches=%llu unobserved=%llu pending=%llu\n",
+      IsLoading(m_State), ToStr(command).c_str(), observations.size(),
+      (unsigned long long)mismatches, (unsigned long long)unobserved, (unsigned long long)pending);
+}
+
+void WrappedMTLDevice::RegisterReplayASInputObservation(WrappedMTLCommandBuffer *command,
+    WrappedMTLBuffer *input, const rdcarray<uint64_t> &parameters, const bytebuf &snapshot,
+    const rdcarray<WrappedMTLAccelerationStructure *> &children)
+{
+  if(!getenv("RENDERDOC_METAL_TRACE_AS_BUILD_INPUTS") || !command || !input ||
+     !Unwrap(input)) return;
+  ReplayASInputObservation observation;
+  observation.command = GetResID(command);
+  observation.input = GetResID(input);
+  observation.native = NS::RetainPtr(Unwrap(input));
+  observation.parameters = parameters;
+  observation.snapshot = snapshot;
+  for(auto child : children)
+    if(child && Unwrap(child))
+      observation.nativeToCaptured[Unwrap(child)->gpuResourceID()._impl] = child->m_CapturedGPUResourceID;
+  m_ReplayASInputObservations.push_back(observation);
+}
+
+void WrappedMTLDevice::TraceReplayASBuildInputs(WrappedMTLCommandBuffer *command)
+{
+  if(!getenv("RENDERDOC_METAL_TRACE_AS_BUILD_INPUTS") || !command) return;
+  for(const auto &observation : m_ReplayASInputObservations)
+  {
+    if(observation.command != GetResID(command)) continue;
+    const auto &p = observation.parameters;
+    auto input = observation.native.get();
+    const uint64_t budget = 128ULL << 20;
+    if(!input || p.size() != 8 || !p[3] || p[1] < 72 || p[3] > budget / 72 ||
+       observation.snapshot.size() != p[3] * 72 || p[0] > input->length() ||
+       72 > input->length() - p[0] ||
+       p[3] - 1 > (input->length() - p[0] - 72) / p[1] ||
+       !WaitReplayCommandBuffer(command, "AS build input diagnostic"))
+    {
+      fprintf(stderr, "Metal AS input diagnostic unavailable: input=%s\n",
+          ToStr(observation.input).c_str());
+      continue;
+    }
+    // Observe declared instance records, not opaque AS memory. This adds a
+    // completion boundary and readback; it never decides replay admission.
+    auto queue = NS::TransferPtr(Unwrap(this)->newCommandQueue());
+    auto readback = NS::TransferPtr(Unwrap(this)->newBuffer(p[3] * 72, MTL::ResourceStorageModeShared));
+    auto copy = queue ? queue->commandBuffer() : NULL;
+    auto blit = copy && readback ? copy->blitCommandEncoder() : NULL;
+    if(!blit)
+    {
+      fprintf(stderr, "Metal AS input diagnostic unavailable: input=%s reason=allocation\n",
+          ToStr(observation.input).c_str());
+      continue;
+    }
+    for(uint64_t i = 0; i < p[3]; i++)
+      blit->copyFromBuffer(input, p[0] + i * p[1], readback.get(), i * 72, 72);
+    blit->endEncoding(); copy->commit(); copy->waitUntilCompleted();
+    if(copy->status() != MTL::CommandBufferStatusCompleted || copy->error())
+    {
+      fprintf(stderr, "Metal AS input diagnostic unavailable: input=%s reason=copy\n",
+          ToStr(observation.input).c_str());
+      continue;
+    }
+    uint64_t changed = 0, unmapped = 0;
+    rdcarray<bytebuf> actualActive, expectedActive;
+    for(uint64_t i = 0; i < p[3]; i++)
+    {
+      bytebuf actual((byte *)readback->contents() + i * 72, 72);
+      bytebuf expected(observation.snapshot.data() + i * 72, 72);
+      uint64_t handle = 0;
+      uint32_t mask = 0, expectedMask = 0;
+      memcpy(&handle, actual.data() + 64, 8);
+      memcpy(&mask, actual.data() + 52, 4);
+      memcpy(&expectedMask, expected.data() + 52, 4);
+      const auto mapped = observation.nativeToCaptured.find(handle);
+      if(mask && mapped == observation.nativeToCaptured.end()) unmapped++;
+      if(mapped != observation.nativeToCaptured.end())
+        memcpy(actual.data() + 64, &mapped->second, 8);
+      if(actual != expected)
+      {
+        changed++;
+        uint64_t expectedHandle = 0;
+        uint32_t user = 0, expectedUser = 0;
+        memcpy(&expectedHandle, expected.data() + 64, 8);
+        memcpy(&user, actual.data() + 60, 4);
+        memcpy(&expectedUser, expected.data() + 60, 4);
+        fprintf(stderr, "Metal AS input record: loading=%d input=%s index=%llu mask=%x snapshot_mask=%x user=%u snapshot_user=%u native_handle=%llx snapshot_handle=%llx mapped=%d\n",
+            IsLoading(m_State), ToStr(observation.input).c_str(), (unsigned long long)i,
+            mask, expectedMask, user, expectedUser, (unsigned long long)handle,
+            (unsigned long long)expectedHandle, mapped != observation.nativeToCaptured.end());
+      }
+      if(mask) actualActive.push_back(actual);
+      if(expectedMask) expectedActive.push_back(expected);
+    }
+    auto less = [](const bytebuf &a, const bytebuf &b) { return memcmp(a.data(), b.data(), 72) < 0; };
+    std::sort(actualActive.begin(), actualActive.end(), less);
+    std::sort(expectedActive.begin(), expectedActive.end(), less);
+    fprintf(stderr, "Metal AS input diagnostic: loading=%d command=%s input=%s records=%llu ordered_changed=%llu unmapped_active_handles=%llu active_records=%zu snapshot_active_records=%zu active_multiset=%s\n",
+        IsLoading(m_State), ToStr(GetResID(command)).c_str(), ToStr(observation.input).c_str(),
+        (unsigned long long)p[3], (unsigned long long)changed, (unsigned long long)unmapped,
+        actualActive.size(), expectedActive.size(), actualActive == expectedActive ? "MATCH" : "DIFFERENT");
+  }
+}
+
 bool WrappedMTLDevice::PatchDescriptorSlot(const DescriptorSlotShadow &slot, bytebuf &data)
 {
   if(!slot.live || slot.data.size() != 24) return false;
@@ -2598,7 +3787,17 @@ bool WrappedMTLDevice::ReadDescriptorSlotEvent(ResourceId buffer, uint64_t offse
   if(gpuValue)
   {
     if(!m_DescriptorGPUWrittenBuffers.count(buffer) || data.size() != 24) return false;
+    bytebuf previousValue;
+    if(!m_DescriptorPreflight && getenv("RENDERDOC_METAL_TRACE_GPU_PUBLICATIONS"))
+    {
+      auto producer = m_ReplayCommandBuffers.find(old->second.gpuCopyCommand);
+      const bool previousPublished = !old->second.gpuCopyPublished ||
+          old->second.gpuCopyCommand == ResourceId() ||
+          (producer != m_ReplayCommandBuffers.end() && producer->second.committed);
+      if(previousPublished) PatchDescriptorSlot(old->second, previousValue);
+    }
     DescriptorSource expectedSource;
+    ResourceId expectedCommand;
     std::map<uint32_t, DescriptorSource> expectedSources;
     if(m_DescriptorShadowFrame)
     {
@@ -2606,6 +3805,7 @@ bool WrappedMTLDevice::ReadDescriptorSlotEvent(ResourceId buffer, uint64_t offse
       if(expected == m_DescriptorGPUCopyExpected.end() || data != expected->second.data)
         return false;
       expectedSource = expected->second.source;
+      expectedCommand = expected->second.gpuCopyCommand;
       expectedSources = expected->second.sources;
       m_DescriptorGPUCopyExpected.erase(expected);
     }
@@ -2615,6 +3815,8 @@ bool WrappedMTLDevice::ReadDescriptorSlotEvent(ResourceId buffer, uint64_t offse
     old->second.gpuCopyPublished = m_DescriptorShadowFrame;
     old->second.initialRestored = false;
     old->second.gpuCopySource = expectedSource;
+    old->second.gpuCopyCommand = expectedCommand;
+    old->second.gpuCopyPreviousValue = previousValue;
     old->second.sources.clear();
     old->second.gpuCopySources = expectedSources;
     // GPU expected metadata validates the copy; it must never become a CPU write.
@@ -2640,6 +3842,8 @@ bool WrappedMTLDevice::ReadDescriptorSlotEvent(ResourceId buffer, uint64_t offse
   old->second.gpuCopyPublished = false;
   old->second.initialRestored = false;
   old->second.gpuCopySource = {};
+  old->second.gpuCopyCommand = ResourceId();
+  old->second.gpuCopyPreviousValue.clear();
   old->second.sources.clear();
   old->second.gpuCopySources.clear();
   uint64_t captured = 0;
@@ -2717,8 +3921,54 @@ bool WrappedMTLDevice::ReadDescriptorSlotBinding(ResourceId buffer, uint64_t off
   return object && ReplayCPUBufferUpdate((WrappedMTLBuffer *)object, offset, patched);
 }
 
+bool WrappedMTLDevice::IsDescriptorOrdinaryWriteRange(ResourceId buffer, uint64_t offset,
+                                                    uint64_t size) const
+{
+  const auto written = m_DescriptorBufferStorage.find(buffer);
+  if(written == m_DescriptorBufferStorage.end() || !size ||
+     offset > written->second.length || size > written->second.length - offset)
+    return false;
+  const auto &storage = written->second;
+  auto hasLivePacket = [&](ResourceId id, uint64_t begin, uint64_t end) {
+    // All packets are 24 bytes and keys are ordered by object/offset. Examine
+    // only intersecting generations, not every shader's entire heap table.
+    auto slot = m_DescriptorSlotShadow.lower_bound(make_rdcpair(id, begin > 23 ? begin - 23 : 0));
+    for(; slot != m_DescriptorSlotShadow.end() && slot->first.first == id &&
+          slot->first.second < end; ++slot)
+      if(slot->second.live) return true;
+    return false;
+  };
+  if(hasLivePacket(buffer, offset, offset + size)) return false;
+  // Borrowed/no-copy storage has no complete captured physical identity.
+  if(!storage.independent && storage.heap == ResourceId())
+    for(const auto &slot : m_DescriptorSlotShadow) if(slot.second.live) return false;
+  for(ResourceId borrowed : m_DescriptorBorrowedBuffers)
+    if(borrowed != buffer && hasLivePacket(borrowed, 0, ~0ULL)) return false;
+  if(storage.heap != ResourceId())
+  {
+    const auto heap = m_DescriptorHeapBuffers.find(storage.heap);
+    if(heap != m_DescriptorHeapBuffers.end()) for(ResourceId id : heap->second)
+    {
+      if(id == buffer) continue;
+      const auto &backing = m_DescriptorBufferStorage.at(id);
+      if(!storage.placed || !backing.placed)
+      { if(hasLivePacket(id, 0, ~0ULL)) return false; continue; }
+      const uint64_t begin = storage.offset + offset, end = begin + size;
+      const uint64_t backingEnd = backing.offset + backing.length;
+      if(begin >= backingEnd || end <= backing.offset) continue;
+      if(hasLivePacket(id, RDCMAX(begin, backing.offset) - backing.offset,
+                      RDCMIN(end, backingEnd) - backing.offset)) return false;
+    }
+  }
+  // No live logical packet owns these bytes. Native API execution may write
+  // ordinary values here, including inside an otherwise declared table. Any
+  // later descriptor consumer still requires its typed publication/identity.
+  return true;
+}
+
 bool WrappedMTLDevice::TrackDescriptorGPUCopy(ResourceId source, uint64_t sourceOffset,
-    ResourceId destination, uint64_t destinationOffset, uint64_t size)
+    ResourceId destination, uint64_t destinationOffset, uint64_t size,
+    ResourceId command, const std::function<bool(ResourceId, uint64_t, uint64_t)> &capturedField)
 {
   if(m_DescriptorCoverage < 4) return true;
   if(m_DescriptorCoverage >= 30)
@@ -2730,7 +3980,12 @@ bool WrappedMTLDevice::TrackDescriptorGPUCopy(ResourceId source, uint64_t source
     bool table = false;
     for(const auto &layout : m_DescriptorTables)
       table |= layout.buffer == source || layout.buffer == destination;
-    if(!table)
+    bool typedDestination = table;
+    if(m_DescriptorCoverage >= 65 && destinationOffset <= UINT64_MAX - size)
+    {
+      typedDestination = !IsDescriptorOrdinaryWriteRange(destination, destinationOffset, size);
+    }
+    if(!typedDestination)
     {
       auto length = [&](ResourceId id) -> uint64_t {
         auto future = m_DescriptorFrameBuffers.find(id);
@@ -2743,9 +3998,71 @@ bool WrappedMTLDevice::TrackDescriptorGPUCopy(ResourceId source, uint64_t source
         return Unwrap((WrappedMTLBuffer *)object)->length();
       };
       const uint64_t srcLength = length(source), dstLength = length(destination);
-      return source != destination && size && size <= DescriptorPlainCopyLimit(m_DescriptorCoverage) &&
-          sourceOffset <= srcLength && size <= srcLength - sourceOffset &&
-          destinationOffset <= dstLength && size <= dstLength - destinationOffset;
+      if(!size || sourceOffset > srcLength || size > srcLength - sourceOffset ||
+          destinationOffset > dstLength || size > dstLength - destinationOffset ||
+          (source==destination && sourceOffset<destinationOffset+size && destinationOffset<sourceOffset+size))
+        return false;
+      // Ordinary transport copies already restored address fields as Native
+      // bytes. It does not create a new descriptor publication. Preserve the
+      // exact source identity/generation and check publication at owner submit.
+      std::map<DescriptorSlotKey, ReplayCopyAddressField> fields;
+      for(const auto &layout : m_DescriptorTables)
+      {
+        if(layout.buffer != source || sourceOffset >= layout.offset + layout.count * layout.stride ||
+           layout.offset >= sourceOffset + size) continue;
+        const uint64_t first = sourceOffset <= layout.offset ? 0 : (sourceOffset-layout.offset)/layout.stride;
+        const uint64_t end = RDCMIN(layout.count, (sourceOffset+size-layout.offset-1)/layout.stride+1);
+        for(uint64_t row=first;row<end;row++) for(uint64_t member : {0ULL,8ULL})
+        {
+          const uint64_t slotOffset = layout.offset + row*layout.stride;
+          const uint64_t field = slotOffset + member;
+          if(field >= sourceOffset+size || sourceOffset >= field+8) continue;
+          if(m_DescriptorGPUWrittenBuffers.count(source) || command == ResourceId()) return false;
+          ReplayCopyAddressField obligation;
+          auto slot = m_DescriptorSlotShadow.find(make_rdcpair(source,slotOffset));
+          if(slot != m_DescriptorSlotShadow.end() && slot->second.live && slot->second.data.size()==24)
+          {
+            memcpy(&obligation.captured,slot->second.data.data()+member,8);
+            if(obligation.captured)
+            {
+              bytebuf patched; std::map<uint32_t,uint64_t> addressFields;
+              if(slot->second.gpuExpected || !PatchDescriptorSlot(slot->second,patched) ||
+                 !DescriptorIRFields(slot->second.type,addressFields)) return false;
+              if(slot->second.sources.count(3)){addressFields.clear();addressFields[3]=0;}
+              bool found=false;
+              for(const auto &kind : addressFields) if(kind.second==member)
+              {
+                auto identity=slot->second.sources.find(kind.first);
+                if(identity==slot->second.sources.end()) return false;
+                obligation.kind=kind.first; obligation.source=identity->second;
+                obligation.slotOffset=slotOffset; obligation.generation=slot->second.generation;
+                obligation.type=slot->second.type; found=true; break;
+              }
+              if(!found) return false;
+            }
+          }
+          if(m_DescriptorPreflight)
+          {
+            if(!capturedField || !capturedField(source,field,obligation.captured)) return false;
+          }
+          else
+          {
+            if(!m_ReplayCopyAddressBudget.Consume(sizeof(DescriptorSlotKey)+sizeof(ReplayCopyAddressField)+64)) return false;
+            fields[make_rdcpair(source,field)]=obligation;
+          }
+        }
+      }
+      for(const auto &field : fields)
+      {
+        auto &reads=m_ReplayCopyAddressFields[command];
+        auto previous=reads.find(field.first);
+        if(previous!=reads.end() && (previous->second.captured!=field.second.captured ||
+           previous->second.generation!=field.second.generation || previous->second.type!=field.second.type ||
+           previous->second.source.resource!=field.second.source.resource ||
+           previous->second.source.offset!=field.second.source.offset)) return false;
+        reads[field.first]=field.second;
+      }
+      return true;
     }
   }
   if(m_DescriptorCoverage < 5 || size != 24 || !m_DescriptorGPUWrittenBuffers.count(destination) ||
@@ -2777,6 +4094,42 @@ bool WrappedMTLDevice::TrackDescriptorGPUCopy(ResourceId source, uint64_t source
   return true;
 }
 
+bool WrappedMTLDevice::ValidateReplayCopyAddressFields(ResourceId command)
+{
+  auto reads = m_ReplayCopyAddressFields.find(command);
+  if(reads == m_ReplayCopyAddressFields.end()) return true;
+  for(const auto &read : reads->second)
+  {
+    const DescriptorSlotKey &field=read.first;
+    const ReplayCopyAddressField &expected=read.second;
+    auto object = GetResourceManager()->GetResource(field.first,true);
+    if(!object || object->m_Type != eResBuffer || !object->m_Real) return false;
+    auto native = Unwrap((WrappedMTLBuffer *)object);
+    if(native->storageMode() != MTL::StorageModeShared || !native->contents() ||
+       field.second > native->length() || 8 > native->length()-field.second) return false;
+    uint64_t replacement=0;
+    if(expected.captured)
+    {
+      auto slot=m_DescriptorSlotShadow.find(make_rdcpair(field.first,expected.slotOffset));
+      if(slot==m_DescriptorSlotShadow.end() || !slot->second.live ||
+         slot->second.generation!=expected.generation || slot->second.type!=expected.type) return false;
+      auto identity=slot->second.sources.find(expected.kind);
+      if(identity==slot->second.sources.end() || identity->second.resource!=expected.source.resource ||
+         identity->second.offset!=expected.source.offset ||
+         !PatchDescriptorSlotField(expected.source,expected.kind,expected.captured,replacement)) return false;
+    }
+    uint64_t address=0;memcpy(&address,(byte *)native->contents()+field.second,8);
+    if(address!=replacement)
+    {
+      RDCERR("Metal copy source descriptor address does not match its restored identity at submission: buffer=%s offset=%llu",
+          ToStr(field.first).c_str(),(unsigned long long)field.second);
+      return false;
+    }
+  }
+  m_ReplayCopyAddressFields.erase(reads);
+  return true;
+}
+
 bool WrappedMTLDevice::IsRetiredDescriptorBacking(ResourceId buffer) const
 {
   if(m_DescriptorCoverage < 25) return false;
@@ -2796,7 +4149,10 @@ bool WrappedMTLDevice::IsRetiredDescriptorBacking(ResourceId buffer) const
 
 bool WrappedMTLDevice::OverlayAliasedDescriptorTables(ResourceId buffer, uint64_t start, uint64_t size)
 {
-  if(m_DescriptorCoverage < 25 || m_ValidatedDescriptorBackingAliases.empty()) return true;
+  if(m_DescriptorCoverage < 25 ||
+     (m_ValidatedDescriptorBackingAliases.empty() && m_ReplayBackgroundBufferAliases.empty() &&
+      m_DescriptorCoexistingBackingViews.empty()))
+    return true;
   auto object = GetResourceManager()->GetResource(buffer, true);
   MTL::Buffer *source = object && object->m_Type == eResBuffer ? Unwrap((WrappedMTLBuffer *)object) : NULL;
   if(!source || !source->heap()) return true;
@@ -2804,14 +4160,26 @@ bool WrappedMTLDevice::OverlayAliasedDescriptorTables(ResourceId buffer, uint64_
   if(size == ~0ULL) size = source->length() - start;
   if(size > source->length() - start) return false;
   const uint64_t begin = source->heapOffset() + start, end = begin + size;
-  std::set<ResourceId> restored;
-  for(const auto &layout : m_DescriptorTables)
+  // Coexisting background aliases and frame retirement aliases both share
+  // physical bytes. Use the factory heap index, including ad-hoc typed packets,
+  // rather than requiring a retired-table transition to trigger relocation.
+  rdcarray<ResourceId> candidates;
+  auto storage = m_DescriptorBufferStorage.find(buffer);
+  if(m_DescriptorCoverage >= 65 && storage != m_DescriptorBufferStorage.end())
   {
-    if(layout.buffer == buffer || restored.count(layout.buffer)) continue;
-    auto targetObject = GetResourceManager()->GetResource(layout.buffer, true);
+    auto heap = m_DescriptorHeapBuffers.find(storage->second.heap);
+    if(heap != m_DescriptorHeapBuffers.end()) candidates = heap->second;
+  }
+  else
+    for(const auto &layout : m_DescriptorTables)
+      if(!candidates.contains(layout.buffer)) candidates.push_back(layout.buffer);
+  for(ResourceId targetId : candidates)
+  {
+    if(targetId == buffer) continue;
+    auto targetObject = GetResourceManager()->GetResource(targetId, true);
     MTL::Buffer *target = targetObject && targetObject->m_Type == eResBuffer ?
         Unwrap((WrappedMTLBuffer *)targetObject) : NULL;
-    if(!target || target->heap() != source->heap() || IsRetiredDescriptorBacking(layout.buffer)) continue;
+    if(!target || target->heap() != source->heap() || IsRetiredDescriptorBacking(targetId)) continue;
     if(begin < target->heapOffset() + target->length() && target->heapOffset() < end)
     {
       // Conservative useHeaps snapshots can include both the retired backing
@@ -2819,10 +4187,9 @@ bool WrappedMTLDevice::OverlayAliasedDescriptorTables(ResourceId buffer, uint64_
       // slots; never interpret a duplicate raw captured VA as a new identity.
       const uint64_t targetBegin = RDCMAX(begin, target->heapOffset());
       const uint64_t targetEnd = RDCMIN(end, target->heapOffset() + target->length());
-      if(m_DescriptorGPUWrittenBuffers.count(layout.buffer) ||
-         !OverlayDescriptorSlotBuffer(layout.buffer, false, targetBegin - target->heapOffset(),
+      if(m_DescriptorGPUWrittenBuffers.count(targetId) ||
+         !OverlayDescriptorSlotBuffer(targetId, false, targetBegin - target->heapOffset(),
                                       targetEnd - targetBegin)) return false;
-      restored.insert(layout.buffer);
     }
   }
   return true;
@@ -2853,6 +4220,10 @@ bool WrappedMTLDevice::OverlayDescriptorSlotBuffer(ResourceId buffer, bool initi
     if(entry.second.live && !IsDescriptorPreludeRetirement(entry.first, entry.second))
     {
       if(entry.second.gpuExpected && !entry.second.initialRestored && !initialRestore) continue;
+      // A frame allocation does not write Native bytes. Partial replay can
+      // submit an earlier draw before this slot's later publication; preserve
+      // the restored physical bytes rather than inventing a logical packet.
+      if(m_DescriptorCoverage >= 65 && !initialRestore && entry.second.data.empty()) continue;
       if(m_DescriptorCoverage>=63 && !initialRestore && entry.second.data.empty() &&
          m_DescriptorGPUWrittenBuffers.count(buffer)) continue;
       bytebuf patched;
@@ -2873,7 +4244,11 @@ bool WrappedMTLDevice::OverlayDescriptorSlotBuffer(ResourceId buffer, bool initi
         }
         return false;
       }
-      memcpy((byte *)native->contents() + offset, patched.data(), 24);
+      // Initial state owns the complete captured packet. At submission, raw
+      // restoration has already supplied ordinary metadata, including legal
+      // late CPU writes. Relocation owns only the two identity lanes; replaying
+      // an old logical packet's scalar lane would overwrite defined input.
+      memcpy((byte *)native->contents() + offset, patched.data(), initialRestore ? 24 : 16);
     }
     else
     {
@@ -2885,6 +4260,25 @@ bool WrappedMTLDevice::OverlayDescriptorSlotBuffer(ResourceId buffer, bool initi
       // allocating another descriptor generation. Clearing a historical field
       // here would corrupt those captured CPU writes (and pending GPU readers).
       if(m_DescriptorCoverage >= 65 && !initialRestore) continue;
+      // A different physical view can read the captured bit pattern of an
+      // unused descriptor as ordinary data, including after logical free.
+      // Initial bytes were checked against the captured packet; do not zero
+      // them. This never exempts a consumed/live typed identity from patching.
+      if(m_DescriptorCoverage >= 65 && initialRestore &&
+         m_DescriptorPreludeRawAliasSlots.count(entry.first) &&
+         IsDescriptorPreludeRetirement(entry.first, entry.second)) continue;
+      // A retired ad-hoc packet no longer owns its former upload-memory bytes,
+      // including at frame start. Only a persistent table layout reserves the
+      // identity fields after a slot is freed. Ordinary initial contents in a
+      // recycled arena must survive unchanged; later typed consumption still
+      // requires a live generation and a validated source/publication.
+      bool tableOwnsSlot = false;
+      for(const DescriptorTable &layout : m_DescriptorTables)
+        if(layout.buffer == buffer && layout.stride == 24 && offset >= layout.offset &&
+           (offset - layout.offset) % layout.stride == 0 &&
+           (offset - layout.offset) / layout.stride < layout.count)
+          tableOwnsSlot = true;
+      if(!tableOwnsSlot) continue;
       const uint64_t zero = 0;
       if(m_DescriptorCoverage >= 16)
       {
@@ -2904,27 +4298,35 @@ bool WrappedMTLDevice::OverlayDescriptorSlotBuffer(ResourceId buffer, bool initi
 
 bool WrappedMTLDevice::PrepareDescriptorSlotShadow()
 {
+  DescriptorSlotKey restoring;
+  auto reject = [&](uint32_t line) {
+    if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
+      fprintf(stderr, "Metal descriptor initial restore rejected: line=%u buffer=%s offset=%llu\n",
+          line, ToStr(restoring.first).c_str(), (unsigned long long)restoring.second);
+    return false;
+  };
   // A table may be empty at frame start and receive its first typed publication
   // after a frame resource is born. Validate its actual initial bytes below;
   // consumption still requires the normal slot/source/publication preflight.
   // The presence of an unrelated background slot is not a restoration contract.
-  if(m_DescriptorCoverage < 5 && !m_DescriptorGPUWrittenBuffers.empty()) return false;
+  if(m_DescriptorCoverage < 5 && !m_DescriptorGPUWrittenBuffers.empty()) return reject(__LINE__);
   for(const DescriptorTable &layout : m_DescriptorTables)
   {
+    restoring = make_rdcpair(layout.buffer, layout.offset);
     if((layout.schema != 1 && !(m_DescriptorCoverage >= 7 && layout.schema == 2)) ||
-       layout.stride != 24 || layout.count > DescriptorTableBufferLimit(m_DescriptorCoverage) / 24) return false;
+       layout.stride != 24 || layout.count > DescriptorTableBufferLimit(m_DescriptorCoverage) / 24) return reject(__LINE__);
     if(m_DescriptorCoverage >= 8 && m_DescriptorFrameBuffers.count(layout.buffer))
       continue;
     WrappedMTLObject *object = GetResourceManager()->GetResource(layout.buffer, true);
-    if(!object || object->m_Type != eResBuffer || !object->m_Real) return false;
+    if(!object || object->m_Type != eResBuffer || !object->m_Real) return reject(__LINE__);
     MTL::Buffer *buffer = Unwrap((WrappedMTLBuffer *)object);
     if(buffer->storageMode() != MTL::StorageModeShared || buffer->length() > DescriptorTableBufferLimit(m_DescriptorCoverage) ||
        layout.offset > buffer->length() || layout.count * layout.stride > buffer->length() - layout.offset)
-      return false;
+      return reject(__LINE__);
     if(!m_ReplayBufferInitialContents.count(layout.buffer))
       m_ReplayBufferInitialContents[layout.buffer] = bytebuf((byte *)buffer->contents(), buffer->length());
     const bytebuf &raw = m_ReplayBufferInitialContents[layout.buffer];
-    if(raw.size() != buffer->length()) return false;
+    if(raw.size() != buffer->length()) return reject(__LINE__);
     for(uint64_t entry = 0; entry < layout.count; entry++)
     {
       const uint64_t offset = layout.offset + entry * layout.stride;
@@ -2932,12 +4334,13 @@ bool WrappedMTLDevice::PrepareDescriptorSlotShadow()
       uint64_t pointer = 0, texture = 0;
       memcpy(&pointer, raw.data() + offset, 8);
       memcpy(&texture, raw.data() + offset + 8, 8);
-      if(pointer || (layout.schema != 2 && texture)) return false;
+      if(pointer || (layout.schema != 2 && texture)) return reject(__LINE__);
     }
   }
   std::set<ResourceId> buffers;
   for(const auto &entry : m_DescriptorSlotShadow)
   {
+    restoring = entry.first;
     buffers.insert(entry.first.first);
     bytebuf patched;
     if(entry.second.live)
@@ -2947,7 +4350,7 @@ bool WrappedMTLDevice::PrepareDescriptorSlotShadow()
          entry.first.second > raw->second.size() || 24 > raw->second.size() - entry.first.second ||
          memcmp(raw->second.data() + entry.first.second, entry.second.data.data(), 24) ||
          (!IsDescriptorPreludeRetirement(entry.first, entry.second) &&
-          !PatchDescriptorSlot(entry.second, patched))) return false;
+          !PatchDescriptorSlot(entry.second, patched))) return reject(__LINE__);
     }
   }
   // Vulkan explicitly permits stale, unused descriptor bindings after the source
@@ -2955,9 +4358,10 @@ bool WrappedMTLDevice::PrepareDescriptorSlotShadow()
   // non-consumption; keep the logical live state only to validate the captured frees.
   for(const auto &retirement : m_DescriptorPreludeRetirements)
   {
+    restoring = retirement.first;
     auto slot = m_DescriptorSlotShadow.find(retirement.first);
     if(slot == m_DescriptorSlotShadow.end() ||
-       !IsDescriptorPreludeRetirement(retirement.first, slot->second)) return false;
+       !IsDescriptorPreludeRetirement(retirement.first, slot->second)) return reject(__LINE__);
   }
   // Initial descriptor identities are reconstructed from captured bytes and
   // typed sources, independently of how the application produced those bytes
@@ -2968,11 +4372,12 @@ bool WrappedMTLDevice::PrepareDescriptorSlotShadow()
   m_DescriptorSlotInitial = m_DescriptorSlotShadow;
   for(ResourceId id : buffers)
   {
+    restoring = make_rdcpair(id, uint64_t(0));
     MTL::Buffer *buffer = Unwrap((WrappedMTLBuffer *)GetResourceManager()->GetResource(id));
     if(!m_ReplayBufferInitialContents.count(id))
       m_ReplayBufferInitialContents[id] = bytebuf((byte *)buffer->contents(), buffer->length());
     m_ReplayCPUUpdatedBuffers.insert(id);
-    if(!OverlayDescriptorSlotBuffer(id, true)) return false;
+    if(!OverlayDescriptorSlotBuffer(id, true)) return reject(__LINE__);
   }
   m_DescriptorShadowFrame = true;
   return true;
@@ -2994,9 +4399,14 @@ bool WrappedMTLDevice::RelocateDescriptorInlineShadow(ResourceId encoder, uint32
     return false;
   if(!layout->second.count)
   {
-    if(m_DescriptorCoverage < 14 || !ValidInlineDrawConstants(stage, index, data.size()) ||
-       !layout->second.sources.empty()) return false;
-    if(index == 5)
+    // Protocol 67 records a complete inline address layout with zero fields.
+    // Its stride is the exact original setBytes length, not an inferred scalar
+    // type. It applies to this setter only and never exempts another binding.
+    if(!layout->second.sources.empty() ||
+       (m_DescriptorCoverage < 67 &&
+        (m_DescriptorCoverage < 14 || !ValidInlineDrawConstants(stage, index, data.size()))))
+      return false;
+    if(m_DescriptorCoverage < 67 && index == 5)
     {
       uint32_t value = 0;
       memcpy(&value, data.data(), data.size());
@@ -3023,6 +4433,7 @@ bool WrappedMTLDevice::RelocateDescriptorInlineShadow(ResourceId encoder, uint32
 
 bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
 {
+  MetalLoadProfile::Scope profile("descriptor_preflight");
   m_DescriptorPreflight = true;
   m_RayIRASCurrentContents=m_ReplayASInitialContents;
   struct HeaderScope
@@ -3042,6 +4453,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
   m_DescriptorPartialCopySubmissions.clear(); m_DescriptorFrameBufferBirthOffsets.clear();
   m_DescriptorBackingAliasConsumers.clear();
   m_RetiredTextureAliasConsumers.clear();
+  m_DescriptorCoexistingTextureViews.clear();
   m_DescriptorSubmissionOrder.clear();
   m_ValidatedDescriptorBackingAliases.clear();
   m_DescriptorPreflightLiveBuffers.clear();
@@ -3059,9 +4471,13 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     ResourceId pipeline;
     std::map<uint32_t, MetalPipe::BufferBinding> buffers;
     std::map<uint32_t, uint64_t> bytes;
+    std::map<uint32_t, uint64_t> threadgroupMemory;
+    std::map<uint32_t, ResourceId> textures;
+    std::map<uint32_t, ResourceId> samplers;
     std::map<ResourceId,uint64_t> residency;
     std::map<uint32_t, rdcarray<byte>> inlineData;
     std::map<uint32_t,std::map<uint64_t,DescriptorSource>> pointers;
+    std::set<uint32_t> zeroAddressInline;
   };
   std::map<ResourceId, ComputeSnapshot> computes;
   std::map<rdcpair<ResourceId, uint32_t>, ComputeSnapshot> graphics;
@@ -3090,6 +4506,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
   uint64_t drawWork = 0;
   uint32_t plainCopyCount = 0; uint64_t plainCopyBytes = 0;
   ResourceId submissionQueue, currentCommand;
+  std::map<ResourceId, ResourceId> submissionQueues;
   std::set<ResourceId> commands, committed, completed;
   std::set<ResourceId> liveEncoders;
   // Match the replay core and D3D12/Vulkan: command identity and submission order
@@ -3156,7 +4573,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       // A frame retirement does not acquire this fact; later CPU/GPU writes
       // still invalidate/revalidate it at the consuming submission.
       const bool invalidatedInitial=slot!=m_DescriptorSlotInitial.end() &&
-          (!slot->second.live || IsDescriptorPreludeRetirement(key,slot->second));
+          (!slot->second.live || (IsDescriptorPreludeRetirement(key,slot->second) &&
+                                 !m_DescriptorPreludeRawAliasSlots.count(key)));
       if(!word || invalidatedInitial)(*mask)[row/8]|=byte(1U<<(row%8));
     }
   }
@@ -3172,7 +4590,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     }
     return parent;
   };
-  auto noteResource = [&](ResourceId resource, ResourceId encoder) {
+  auto noteResource = [&](ResourceId resource, ResourceId encoder,
+                          uint64_t byteOffset = 0, uint64_t byteSize = ~0ULL) {
     if(resource == ResourceId()) return;
     auto noteBacking = [&](ResourceId view) {
       ResourceId parent = viewBacking(view);
@@ -3194,7 +4613,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     // unrelated descriptor for each ordinary buffer/texture use.
     for(auto slot=m_DescriptorSlotShadow.lower_bound(make_rdcpair(resource,0ULL));
         slot!=m_DescriptorSlotShadow.end() && slot->first.first==resource;++slot)
-      if(slot->second.live)
+      if(slot->second.live && (byteSize == ~0ULL ||
+         (slot->first.second < byteOffset+byteSize && byteOffset < slot->first.second+24)))
       {
         const auto &entry=*slot;
         if(m_DescriptorCoverage<64 || !entry.second.data.empty()) {
@@ -3248,14 +4668,46 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     if(!isTable(before) && !isTable(after)) return true;
     if(m_DescriptorCoverage < 25 || m_DescriptorGPUWrittenBuffers.count(before) ||
        m_DescriptorGPUWrittenBuffers.count(after)) return false;
-    bool knownSlot = false;
+    bool knownSlot = false, liveSlot = false, unusedPhysicalPayload = true;
     for(const auto &entry : m_DescriptorSlotShadow)
       if(entry.first.first == before)
       {
         knownSlot = true;
-        if(entry.second.live) return false;
+        if(entry.second.live)
+        {
+          liveSlot = true;
+          // Coexistence covers the allocation; payload preservation is only
+          // required for the exact physical read ranges. Unread rows must not
+          // acquire a whole-allocation raw-read proof obligation here.
+          unusedPhysicalPayload &= IsDescriptorPreludeRetirement(entry.first, entry.second);
+        }
       }
     if(isTable(before) && !knownSlot) return false;
+    if(liveSlot)
+    {
+      // Creation of a tracked physical view neither retires the live logical
+      // generation nor reads/writes its bytes. Retain both objects and replay
+      // original submissions. Existing slot/source publication checks still
+      // validate consumed identities; overlays relocate them through every view.
+      // Two independently typed live backings need an identity/layout agreement
+      // proof; an ordinary new view introduces no competing logical packet.
+      const auto old = m_DescriptorBufferStorage.find(before);
+      const auto next = m_DescriptorFrameBuffers.find(after);
+      auto previous = GetResourceManager()->GetResource(before, true);
+      MTL::Buffer *native = previous && previous->m_Type == eResBuffer && previous->m_Real ?
+          Unwrap((WrappedMTLBuffer *)previous) : NULL;
+      if(m_DescriptorCoverage < 65 || (!unusedPhysicalPayload && isTable(after)) || !native ||
+         native->storageMode() != MTL::StorageModeShared ||
+         native->hazardTrackingMode() != MTL::HazardTrackingModeTracked ||
+         old == m_DescriptorBufferStorage.end() || !old->second.placed ||
+         next == m_DescriptorFrameBuffers.end() || next->second.heap != old->second.heap ||
+         (next->second.options & 0xf0ULL) != MTL::ResourceStorageModeShared ||
+         !(next->second.options & MTL::ResourceHazardTrackingModeTracked)) return false;
+      m_DescriptorCoexistingBackingViews.insert(make_rdcpair(before, after));
+      return true;
+    }
+    // Actual logical backing retirement, unlike physical view birth, must
+    // preserve the dependency on all previous consumers.
     for(ResourceId command : resourceCommands[before])
       if(!committed.count(command)) return false;
     // Native resources stay retained. This retires the old logical backing only,
@@ -3356,7 +4808,12 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     uint64_t begin=0,end=0,gpuAddress=0,length=0;
     bool buffer=false,valid=false;
   };
-  auto indirectFootprint=[&](ResourceId resource) {
+  // Allocation geometry is immutable during this CPU-only preflight. Factories
+  // are scanned beforehand; Native frame resources are created only afterwards.
+  // Resolve view identity each time and cache positive owner geometry locally,
+  // never liveness, publications, submission checks or recovery eligibility.
+  std::map<ResourceId,RenderIndirectFootprint> footprintGeometry;
+  auto queryIndirectFootprint=[&](ResourceId resource) {
     RenderIndirectFootprint result;
     for(uint32_t depth=0;depth<8;depth++)
     {
@@ -3401,6 +4858,75 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       auto allocation=(MTL::Buffer *)native.owner.get();
       result.gpuAddress=allocation->gpuAddress();result.length=allocation->length();
     }
+    return result;
+  };
+  auto indirectFootprint=[&](ResourceId resource) {
+    for(uint32_t depth=0;depth<8;depth++)
+    {
+      const ResourceId parent=viewBacking(resource);
+      if(parent==ResourceId())break;
+      if(parent==resource || depth==7)return RenderIndirectFootprint();
+      resource=parent;
+    }
+    const auto cached=footprintGeometry.find(resource);
+    if(cached!=footprintGeometry.end())return cached->second;
+    const auto footprint=queryIndirectFootprint(resource);
+    if(footprint.valid)footprintGeometry[resource]=footprint;
+    return footprint;
+  };
+  auto validateCoexistingTextureAlias = [&](ResourceId before, ResourceId after) {
+    if(m_DescriptorCoverage < 65 || isTable(after)) return false;
+    auto object = GetResourceManager()->GetResource(before, true);
+    auto next = m_DescriptorFrameBuffers.find(after);
+    MTL::Texture *texture = object && object->m_Type == eResTexture && object->m_Real ?
+        Unwrap((WrappedMTLTexture *)object) : NULL;
+    if(!texture || !texture->heap() || texture->storageMode() != MTL::StorageModePrivate ||
+       texture->hazardTrackingMode() != MTL::HazardTrackingModeTracked ||
+       texture->heap()->hazardTrackingMode() != MTL::HazardTrackingModeTracked ||
+       next == m_DescriptorFrameBuffers.end() ||
+       (next->second.options & 0xf0ULL) != MTL::ResourceStorageModePrivate ||
+       !(next->second.options & MTL::ResourceHazardTrackingModeTracked)) return false;
+    auto heap = GetResourceManager()->GetResource(next->second.heap, true);
+    const auto previous = indirectFootprint(before);
+    const auto following = indirectFootprint(after);
+    if(!heap || heap->m_Type != eResHeap || !heap->m_Real ||
+       Unwrap((WrappedMTLHeap *)heap) != texture->heap() ||
+       !previous.valid || previous.buffer || !following.valid || !following.buffer ||
+       previous.heap != following.heap || previous.begin >= following.end ||
+       following.begin >= previous.end) return false;
+    // Placement creation introduces another physical interpretation, not a
+    // write or logical retirement. Keep every live source and its initial;
+    // Native commands retain their original submissions and tracked hazards.
+    m_DescriptorCoexistingTextureViews.insert(make_rdcpair(before, after));
+    return true;
+  };
+  // Index physical buffer intervals once instead of rebuilding and scanning all
+  // allocations for every ordinary write. Future frame buffers are candidates
+  // only while live at this exact command; retirement checks remain at callers.
+  std::map<MTL::Heap *,rdcarray<rdcpair<ResourceId,RenderIndirectFootprint>>> heapBufferGeometry;
+  bool heapBufferGeometryReady=false;
+  auto bufferAliases=[&](const RenderIndirectFootprint &write) {
+    rdcarray<ResourceId> result;
+    if(!write.valid || !write.heap)return result;
+    if(!heapBufferGeometryReady)
+    {
+      std::set<ResourceId> candidates;
+      for(const auto &buffer:GetReplay()->GetBuffers())candidates.insert(buffer.resourceId);
+      for(const auto &buffer:m_DescriptorFrameBuffers)candidates.insert(buffer.first);
+      for(ResourceId candidate:candidates)
+      {
+        const auto geometry=indirectFootprint(candidate);
+        if(geometry.valid && geometry.buffer && geometry.heap)
+          heapBufferGeometry[geometry.heap].push_back(make_rdcpair(candidate,geometry));
+      }
+      heapBufferGeometryReady=true;
+    }
+    const auto heap=heapBufferGeometry.find(write.heap);
+    if(heap!=heapBufferGeometry.end())for(const auto &candidate:heap->second)
+      if((!m_DescriptorFrameBuffers.count(candidate.first) ||
+          m_DescriptorPreflightLiveBuffers.count(candidate.first)) &&
+         candidate.second.begin<write.end && write.begin<candidate.second.end)
+        result.push_back(candidate.first);
     return result;
   };
   auto validateIndirectPass=[&](ResourceId pass) {
@@ -3544,6 +5070,16 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
   rdcarray<ResourceId> capturedSubmissionOrder;
   std::map<ResourceId,std::set<ResourceId>> producerDestinations;
   std::map<ResourceId,std::set<DescriptorSlotKey>> producerSlots;
+  struct ValidatedTypedCopy
+  {
+    ResourceId command, source;
+    uint64_t sourceOffset=0, generation=0;
+    DescriptorSlotShadow packet;
+  };
+  // Filled only after TrackDescriptorGPUCopy validates the complete packet.
+  // The ownership prescan above records declarations, not recovery evidence.
+  std::map<ResourceId,std::map<DescriptorSlotKey,ValidatedTypedCopy>> validatedTypedCopies;
+  std::map<DescriptorSlotKey,ResourceId> validatedTypedPublicationOwners;
   if(m_DescriptorCoverage >= 50)
   {
     // Match core submission snapshot ownership without applying any Native data.
@@ -3552,12 +5088,43 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     ownership.SetVersion(m_SectionVersion); ownership.SetUserData(GetResourceManager());
     m_FrameReader->SetOffset(0);
     rdcarray<CPUUpdate> pending; rdcarray<uint64_t> pendingOffsets;
+    std::set<ResourceId> computeAIRDemand, renderAIRDemand;
+    std::map<ResourceId,ResourceId> boundComputeAIR, boundRenderAIR;
     uint64_t bytes = 0; uint32_t count = 0;
     while(!m_FrameReader->AtEnd() && !ownership.IsErrored() && success)
     {
       const uint64_t offset = m_FrameReader->GetOffset();
       MetalChunk chunk = ownership.ReadChunk<MetalChunk>();
-      if(chunk == MetalChunk::MTLBuffer_InternalModifyCPUContents)
+      if(chunk==MetalChunk::MTLComputeCommandEncoder_setComputePipelineState ||
+         chunk==MetalChunk::MTLRenderCommandEncoder_setRenderPipelineState)
+      {
+        ResourceId encoder,pipeline;
+        const bool compute=chunk==MetalChunk::MTLComputeCommandEncoder_setComputePipelineState;
+        ownership.Serialise(compute?"ComputeCommandEncoder"_lit:"RenderCommandEncoder"_lit,encoder);
+        ownership.Serialise(compute?"pipeline"_lit:"pipelineState"_lit,pipeline);
+        (compute?boundComputeAIR:boundRenderAIR)[encoder]=pipeline;
+      }
+      else if(chunk==MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups ||
+              chunk==MetalChunk::MTLComputeCommandEncoder_dispatchThreads ||
+              chunk==MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups_indirect)
+      {
+        ResourceId encoder;ownership.Serialise("ComputeCommandEncoder"_lit,encoder);
+        const auto pipeline=boundComputeAIR.find(encoder);
+        if(pipeline!=boundComputeAIR.end())computeAIRDemand.insert(pipeline->second);
+      }
+      else if((chunk>=MetalChunk::MTLRenderCommandEncoder_drawPrimitives &&
+               chunk<=MetalChunk::MTLRenderCommandEncoder_drawPrimitives_indirect) ||
+              (chunk>=MetalChunk::MTLRenderCommandEncoder_drawPatches &&
+               chunk<=MetalChunk::MTLRenderCommandEncoder_drawIndexedPatches_indirect) ||
+              chunk==MetalChunk::MTLRenderCommandEncoder_drawMeshThreadgroups ||
+              chunk==MetalChunk::MTLRenderCommandEncoder_drawMeshThreads ||
+              chunk==MetalChunk::MTLRenderCommandEncoder_drawMeshThreadgroups_indirect)
+      {
+        ResourceId encoder;ownership.Serialise("RenderCommandEncoder"_lit,encoder);
+        const auto pipeline=boundRenderAIR.find(encoder);
+        if(pipeline!=boundRenderAIR.end())renderAIRDemand.insert(pipeline->second);
+      }
+      else if(chunk == MetalChunk::MTLBuffer_InternalModifyCPUContents)
       {
         ResourceId buffer; uint64_t start = 0, size = 0; bytebuf data;
         ownership.Serialise("Buffer"_lit, buffer); ownership.Serialise("start"_lit, start);
@@ -3601,6 +5168,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       {
         ResourceId encoder, buffer; MTL::PrimitiveType primitive; MTL::IndexType type; uint64_t indexCount = 0;
         ownership.Serialise("RenderCommandEncoder"_lit, encoder); ownership.Serialise("primitiveType"_lit, primitive);
+        const auto pipeline=boundRenderAIR.find(encoder);
+        if(pipeline!=boundRenderAIR.end())renderAIRDemand.insert(pipeline->second);
         if(chunk!=MetalChunk::MTLRenderCommandEncoder_drawIndexedPrimitives_indirect)
           ownership.Serialise("indexCount"_lit, indexCount);
         ownership.Serialise("indexType"_lit, type);
@@ -3611,6 +5180,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     }
     success &= !ownership.IsErrored() && pending.empty();
     m_FrameReader->SetOffset(0);
+    // Prepare immutable syntax for explicit frame draw/dispatch pipeline demand.
+    // This neither validates bindings nor decides restoration eligibility.
+    if(success)GetReplay()->PrepareReplayAIR(computeAIRDemand,renderAIRDemand);
   }
   struct ComputeCBVOperation
   {
@@ -3628,6 +5200,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     // is required; CPU vertex_id values are only optional shader analysis.
     bool indexedInput = false;
     bool indirectInput = false;
+    ResourceId indexEncoder;
+    uint32_t indexOrdinal=UINT32_MAX;
+    uint64_t indexAPIOffset=0,indexStride=0;
   };
   std::map<ResourceId,rdcarray<ComputeCBVOperation>> computeCBVOperations;
   struct UniformDispatch
@@ -3684,6 +5259,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         const uint64_t field=address.offset%24,slotOffset=address.offset-field;
         const auto slot=dispatch.slots.find(slotOffset);
         if(slot==dispatch.slots.end())return result;
+        if(kind==Value::ASHeaderPointer)kind=Value::Pointer;
         const uint32_t sourceKind=kind==Value::Texture && field==8?1:
             kind==Value::Pointer && !field?(slot->second.sources.count(3)?3:0):UINT32_MAX;
         const auto source=slot->second.sources.find(sourceKind);
@@ -3806,14 +5382,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     invalidate(buffer);
     const auto write=indirectFootprint(buffer);
     if(!write.valid || !write.heap)return;
-    std::set<ResourceId> candidates=m_DescriptorPreflightLiveBuffers;
-    for(const auto &candidate:GetReplay()->GetBuffers())candidates.insert(candidate.resourceId);
-    for(ResourceId candidate:candidates)
-    {
-      const auto alias=indirectFootprint(candidate);
-      if(alias.valid && alias.heap==write.heap && alias.begin<write.end && write.begin<alias.end)
-        invalidate(candidate);
-    }
+    for(ResourceId candidate:bufferAliases(write))invalidate(candidate);
   };
   auto preserveCreationInput=[&](ResourceId buffer) {
     if(m_ReplayBufferInitialContents.count(buffer))return true;
@@ -3945,17 +5514,65 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     }
     return restoredBufferRanges[buffer];
   };
+  auto hasRestoredBufferTexturePixels = [&](ResourceId texture) {
+    // Buffer textures have buffer initial state, not an independent texture
+    // payload. Resolve view ancestry, then project only actual Native pixel rows.
+    ResourceId source = texture;
+    std::set<ResourceId> visited;
+    while(source != ResourceId() && visited.insert(source).second)
+    {
+      ResourceId parent = GetReplay()->GetBufferTextureSource(source);
+      const auto future = runtimeTextureViews.find(source);
+      auto object = GetResourceManager()->GetResource(source,true);
+      auto native = object && object->m_Type == eResTexture ? Unwrap((WrappedMTLTexture *)object) : NULL;
+      if(future != runtimeTextureViews.end())
+      {
+        const auto declared = m_DescriptorFrameViews.find(source);
+        if(declared != m_DescriptorFrameViews.end()) parent = declared->second;
+      }
+      if(parent != ResourceId())
+      {
+        const uint64_t offset = future != runtimeTextureViews.end() ? future->second.offset : native ? native->bufferOffset() : 0;
+        const uint64_t pitch = future != runtimeTextureViews.end() ? future->second.bytesPerRow : native ? native->bufferBytesPerRow() : 0;
+        const uint64_t width = future != runtimeTextureViews.end() ? future->second.descriptor.width : native ? native->width() : 0;
+        const uint64_t rows = future != runtimeTextureViews.end() ? future->second.descriptor.height : native ? native->height() : 0;
+        const auto format = future != runtimeTextureViews.end() ? future->second.descriptor.pixelFormat : native ? native->pixelFormat() : MTL::PixelFormatInvalid;
+        uint32_t bw=0,bh=0,bytes=0;
+        const auto frame = m_DescriptorFrameBuffers.find(parent);
+        const uint64_t length = frame != m_DescriptorFrameBuffers.end() ? frame->second.length : GetReplay()->GetBuffer(parent).length;
+        if(!width || !rows || !pitch || !GetTextureDataBlockShape(format,bw,bh,bytes) ||
+           bw!=1 || bh!=1 || !bytes || width>UINT64_MAX/bytes || pitch<width*bytes ||
+           offset>length || rows-1>(length-offset)/pitch ||
+           width*bytes>length-offset-(rows-1)*pitch) return false;
+        const auto &ranges = bufferRestoredRanges(parent);
+        for(uint64_t row=0; row<rows; ++row)
+        {
+          const uint64_t begin=offset+row*pitch, end=begin+width*bytes;
+          for(const auto &range:ranges)
+            if(range.first<end && begin<range.second) return true;
+        }
+        // As with other Native reads, this is restored input existence, not a
+        // CPU proof of all dynamically read texels. Undefined texels stay so.
+        return false;
+      }
+      const ResourceId backing = viewBacking(source);
+      if(backing == source) return false;
+      source = backing;
+    }
+    return false;
+  };
   std::set<ResourceId> restoredIndexInputs;
   struct RuntimeDispatch
   {
     NullFieldProofs nullBufferFields;
     std::map<DescriptorSlotKey,ResourceId> nullGPUOwners;
-    ResourceId pipeline, heap, samplerHeap;
+    ResourceId pipeline, heap, samplerHeap, encoder;
     uint64_t heapOffset=0, samplerHeapOffset=0;
     MetalIRComputeRuntimeABI abi;
     rdcarray<byte> roots;
     std::map<uint64_t,DescriptorSource> pointers;
     std::map<DescriptorSlotKey,DescriptorSlotShadow> slots;
+    std::map<DescriptorSlotKey,uint64_t> slotGenerations;
     std::set<ResourceId> opaque;
     std::map<rdcpair<ResourceId,uint64_t>,RayASHeader> headers;
     std::map<ResourceId,std::shared_ptr<MetalASInitialBuild>> structures;
@@ -3964,6 +5581,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     uint32_t stage=0;
     ComputeSnapshot graphics;
     bool nativeCompute=false;
+    bool indirectGraphics=false;
     MetalAIR::InvocationValues builtins;
     ResourceId indexBuffer;
     uint64_t indexOffset=0,indexCount=0,indexStride=0,vertexStart=0,instanceCount=0,baseInstance=0;
@@ -3971,6 +5589,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
   };
   std::map<rdcpair<uint64_t,uint32_t>,RuntimeDispatch> runtimeDispatches;
   auto validateRuntimeDispatch=[&](uint64_t readOffset,ResourceId command,uint32_t stage) {
+    MetalLoadProfile::Scope profile("dynamic_binding_lifetime");
     const auto &dispatch=runtimeDispatches.at(make_rdcpair(readOffset,stage));
     const auto &abi=dispatch.abi;
     using Value=MetalAIR::Value;
@@ -4040,6 +5659,17 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         return result;
       }
       ResourceId buffer;memcpy(&buffer,&address.object,sizeof(buffer));
+      if(address.kind==Value::DescriptorPointer && address.namespaceRole==1 && bytes==8)
+      {
+        if(kind==Value::AccelerationStructure && !address.namespaceField)
+        {result=address;result.kind=kind;return result;}
+        if(kind==Value::Pointer && address.namespaceField==8)
+        {
+          result=address;result.metadata=false;result.namespaceRole=2;result.namespaceField=0;
+          result.descriptorObject=0;return result;
+        }
+        return result;
+      }
       const uint64_t field=address.offset%24;
       const auto slot=dispatch.slots.find(make_rdcpair(buffer,address.offset-field));
       if(address.metadata && isTable(buffer))
@@ -4049,8 +5679,11 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           // A compiler-projected row in the current typed table is a restored
           // namespace, not an integer GPU-address guess. GPU indices execute
           // natively; only the ABI field and complete namespace are proved.
-          if(kind!=Value::Pointer || bytes!=8 || address.namespaceField ||
-             address.namespaceStride!=24)return result;
+          const bool headerField=kind==Value::ASHeaderPointer && address.namespaceField==0;
+          const bool bufferField=kind==Value::Pointer && address.namespaceField==0;
+          const bool textureField=kind==Value::Texture && address.namespaceField==8;
+          const bool samplerField=kind==Value::Sampler && address.namespaceField==0;
+          if((!headerField && !bufferField && !textureField && !samplerField) || bytes!=8 || address.namespaceStride!=24)return result;
           for(const auto &layout:m_DescriptorTables)
             if(layout.buffer==buffer && layout.stride==address.namespaceStride &&
                address.namespaceBase>=layout.offset &&
@@ -4060,7 +5693,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
                  address.namespaceEnd>=layout.offset && (address.namespaceEnd-layout.offset)%layout.stride==0 &&
                  (address.namespaceEnd-layout.offset)/layout.stride<=layout.count)))
             {
-              result.kind=Value::DescriptorPointer;result.object=address.object;
+              result.kind=textureField?Value::Texture:samplerField?Value::Sampler:Value::DescriptorPointer;result.object=address.object;
+              result.metadata=headerField || textureField || samplerField;result.namespaceRole=headerField?1:0;
+              result.namespaceField=address.namespaceField;
               result.namespaceBase=address.namespaceBase;result.namespaceStride=layout.stride;
               result.namespaceEnd=address.namespaceEnd;
               result.offsetKnown=false;result.descriptorObject=address.object;
@@ -4254,11 +5889,20 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     }
     if(dispatch.nativeCompute && air.empty())
     {
-      // With no original AIR, undeclared inline fields cannot be certified as
-      // non-address inputs by this path. Keep the existing explicit-layout
-      // recovery requirement; optional access display remains unknown.
+      // Undeclared active inline fields have unknown address obligations.
+      // Explicit layouts, including zero-field layouts, restore those facts
+      // without requiring optional AIR; access display may remain unknown.
       for(const auto &inlineData:dispatch.graphics.inlineData)
       {
+        // Native pipeline reflection can prove that this binding is never
+        // consumed. Its original setBytes command remains replayed, but it
+        // has no shader address recovery obligation, with or without AIR.
+        if(GetReplay()->IsComputeBufferStaticallyUnused(dispatch.pipeline,inlineData.first))
+          continue;
+        // A captured complete zero-field layout carries the restoration fact
+        // independently of optional AIR. Missing metadata remains unknown.
+        if(dispatch.graphics.zeroAddressInline.count(inlineData.first))
+          continue;
         const auto origins=dispatch.graphics.pointers.find(inlineData.first);
         if(origins==dispatch.graphics.pointers.end() || origins->second.empty())
           return false;
@@ -4293,6 +5937,12 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         if(residency.second & MTL::ResourceUsageRead)
         {
           bool restored=HasReplayTextureInitialContents(resource) || HasReplayTextureInitialContents(parent);
+          // A linear texture reads its real buffer backing, whose initial/CPU
+          // publication ranges are restored in submission order. It has no
+          // separate texture initial payload. Use the same ancestry/offset/row
+          // projection as the AIR path instead of requiring that nonexistent
+          // payload solely because optional AIR is unavailable.
+          restored |= hasRestoredBufferTexturePixels(resource);
           restored |= hasNativeTextureProducer(resource,command);
           if(!restored)return false;
         }
@@ -4320,22 +5970,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       if(callStack.size()>=8 || !callStack.insert(name).second)return MetalAIR::UniformAccessReport();
       // Resolve aliases only from this caller's AIR metadata and the functions
       // attached to the actual Native stage. A label or suffix is not identity.
-      std::map<std::string,std::string> aliases;
-      const std::regex reference(R"ref(!"air.visible_function_reference", [^\n]*@([-a-zA-Z$._0-9]+), !"([^"\n]+)")ref");
-      for(std::sregex_iterator i(module.begin(),module.end(),reference),end;i!=end;++i)
-        aliases[(*i)[1]]=(*i)[2];
-      // Internal helpers already belong to this captured Native module. Their
-      // call parameters are sourced at the caller, not Metal binding slots.
-      std::set<std::string> localDefinitions;
-      std::istringstream definitions(module);std::string definition;
-      while(std::getline(definitions,definition))
-        if(definition.compare(0,16,"define internal ")==0 ||
-           definition.compare(0,15,"define private ")==0)
-        {
-          const size_t nameBegin=definition.find('@'),nameEnd=definition.find('(',nameBegin);
-          if(nameBegin!=std::string::npos && nameEnd!=std::string::npos)
-            localDefinitions.insert(definition.substr(nameBegin+1,nameEnd-nameBegin-1));
-        }
+      const auto syntax=MetalAIR::GetModuleSyntax(module);
+      const auto &aliases=syntax->aliases;
+      const auto &localDefinitions=syntax->localDefinitions;
       auto resolver=[&](const std::string &symbol,const std::vector<Value> &parameters) {
         if(localDefinitions.count(symbol))
         {
@@ -4358,42 +5995,55 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     auto builtins=dispatch.builtins;
     if(dispatch.stage==1)
     {
-      uint64_t low=dispatch.vertexStart,high=low+dispatch.indexCount-1;
-      if(dispatch.indexBuffer!=ResourceId())
+      if(dispatch.indirectGraphics)
       {
-        auto data=computeByteState(dispatch.indexBuffer);
-        const auto count=dispatch.indexCount,stride=dispatch.indexStride,begin=dispatch.indexOffset;
-        if(!restoredIndexInputs.count(dispatch.indexBuffer))return false;
-        bool numerical=data && count && (stride==2 || stride==4) && begin<=data->data.size() &&
-            count<=(data->data.size()-begin)/stride;
-        low=UINT64_MAX;high=0;
-        for(uint64_t i=0;numerical && i<count;i++)
-        {
-          for(uint64_t b=0;b<stride;b++)numerical &= data->known[begin+i*stride+b]!=0;
-          if(!numerical)break;
-          uint32_t index=0;memcpy(&index,data->data.data()+begin+i*stride,stride);
-          // Native vertex_id is an unsigned 32-bit builtin. Do not impose a
-          // scene-sized vertex limit on the original indexed draw operation.
-          const uint32_t vertex=uint32_t(uint64_t(index)+uint64_t(dispatch.baseVertex));
-          low=RDCMIN(low,uint64_t(vertex));high=RDCMAX(high,uint64_t(vertex));
-        }
-        rootBuffers.insert(dispatch.indexBuffer);
-        if(numerical)scalarReads.push_back({dispatch.indexBuffer,begin,begin+count*stride});
-        else
-        {
-          low=UINT64_MAX;high=0;
-          if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
-            fprintf(stderr,"Metal indexed input restored: consumer=%llu buffer=%s offset=%llu count=%llu stride=%llu CPUstate=%d scalarBudget=%llu vertexID=unknown\n",
-                (unsigned long long)readOffset,ToStr(dispatch.indexBuffer).c_str(),
-                (unsigned long long)begin,(unsigned long long)count,(unsigned long long)stride,
-                int(data!=NULL),(unsigned long long)computeCBVProofBytes);
-        }
+        // Captured per-use counts are observations. A different Native address
+        // or ordinary GPU result can change the actual invocation footprint.
+        // Recover the current namespace without a captured builtin range proof.
+        builtins.builtins["vertex_id"]=Value();
+        builtins.builtins["instance_id"]=Value();
+        builtins.builtins["base_instance"]=Value();
+        builtins.builtins["base_vertex"]=dispatch.indexBuffer!=ResourceId()?Value():Value::Number(0);
       }
-      builtins.builtins["vertex_id"]=low<=high?Value::Range(low,high):Value();
-      builtins.builtins["instance_id"]=Value::Range(dispatch.baseInstance,
-          dispatch.baseInstance+dispatch.instanceCount-1);
-      builtins.builtins["base_instance"]=Value::Number(dispatch.baseInstance);
-      builtins.builtins["base_vertex"]=Value::Number(uint32_t(dispatch.baseVertex));
+      else
+      {
+        uint64_t low=dispatch.vertexStart,high=low+dispatch.indexCount-1;
+        if(dispatch.indexBuffer!=ResourceId())
+        {
+          auto data=computeByteState(dispatch.indexBuffer);
+          const auto count=dispatch.indexCount,stride=dispatch.indexStride,begin=dispatch.indexOffset;
+          if(!restoredIndexInputs.count(dispatch.indexBuffer))return false;
+          bool numerical=data && count && (stride==2 || stride==4) && begin<=data->data.size() &&
+              count<=(data->data.size()-begin)/stride;
+          low=UINT64_MAX;high=0;
+          for(uint64_t i=0;numerical && i<count;i++)
+          {
+            for(uint64_t b=0;b<stride;b++)numerical &= data->known[begin+i*stride+b]!=0;
+            if(!numerical)break;
+            uint32_t index=0;memcpy(&index,data->data.data()+begin+i*stride,stride);
+            // Native vertex_id is an unsigned 32-bit builtin. Do not impose a
+            // scene-sized vertex limit on the original indexed draw operation.
+            const uint32_t vertex=uint32_t(uint64_t(index)+uint64_t(dispatch.baseVertex));
+            low=RDCMIN(low,uint64_t(vertex));high=RDCMAX(high,uint64_t(vertex));
+          }
+          rootBuffers.insert(dispatch.indexBuffer);
+          if(numerical)scalarReads.push_back({dispatch.indexBuffer,begin,begin+count*stride});
+          else
+          {
+            low=UINT64_MAX;high=0;
+            if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
+              fprintf(stderr,"Metal indexed input restored: consumer=%llu buffer=%s offset=%llu count=%llu stride=%llu CPUstate=%d scalarBudget=%llu vertexID=unknown\n",
+                  (unsigned long long)readOffset,ToStr(dispatch.indexBuffer).c_str(),
+                  (unsigned long long)begin,(unsigned long long)count,(unsigned long long)stride,
+                  int(data!=NULL),(unsigned long long)computeCBVProofBytes);
+          }
+        }
+        builtins.builtins["vertex_id"]=low<=high?Value::Range(low,high):Value();
+        builtins.builtins["instance_id"]=Value::Range(dispatch.baseInstance,
+            dispatch.baseInstance+dispatch.instanceCount-1);
+        builtins.builtins["base_instance"]=Value::Number(dispatch.baseInstance);
+        builtins.builtins["base_vertex"]=Value::Number(uint32_t(dispatch.baseVertex));
+      }
     }
     // Recompute display/namespace analysis without pre-dispatch scalar values
     // from potentially written allocations. A Native shader can read its own
@@ -4539,25 +6189,55 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     // feedback. A missing/opaque publication, stale source, absent initial
     // contents or producer cannot borrow another slot's successful recovery.
     bool dynamicNamespace=false;
+    auto typedCopyRestored=[&](ResourceId destination,uint64_t begin,uint64_t length) {
+      if(dispatch.stage || dispatch.encoder==ResourceId() ||
+         m_DescriptorDispatches[dispatch.encoder]!=1)return false;
+      const auto copies=validatedTypedCopies.find(dispatch.encoder);
+      if(copies==validatedTypedCopies.end())return false;
+      bool recovered=false;
+      for(const auto &copy:copies->second)
+      {
+        if(copy.first.first!=destination)continue;
+        const auto &proof=copy.second;
+        const auto generation=dispatch.slotGenerations.find(copy.first);
+        const auto source=dispatch.slots.find(make_rdcpair(proof.source,proof.sourceOffset));
+        const auto published=m_DescriptorSlotShadow.find(copy.first);
+        const auto owner=validatedTypedPublicationOwners.find(copy.first);
+        if(proof.command!=command || copy.first.second<begin ||
+           copy.first.second-begin>length || 24>length-(copy.first.second-begin) ||
+           generation==dispatch.slotGenerations.end() || generation->second!=proof.generation ||
+           source==dispatch.slots.end() || source->second.generation!=proof.packet.generation ||
+           source->second.type!=proof.packet.type || source->second.data!=proof.packet.data ||
+           owner==validatedTypedPublicationOwners.end() || owner->second!=dispatch.encoder ||
+           published==m_DescriptorSlotShadow.end() || !published->second.live ||
+           published->second.generation!=proof.generation || !published->second.gpuCopyPublished ||
+           published->second.type!=proof.packet.type || published->second.data!=proof.packet.data ||
+           published->second.sources.size()!=proof.packet.sources.size())return false;
+        for(const auto &identity:proof.packet.sources)
+        {
+          const auto before=source->second.sources.find(identity.first);
+          const auto after=published->second.sources.find(identity.first);
+          if(before==source->second.sources.end() || after==published->second.sources.end() ||
+             before->second.resource!=identity.second.resource || before->second.offset!=identity.second.offset ||
+             after->second.resource!=identity.second.resource || after->second.offset!=identity.second.offset)return false;
+        }
+        bytebuf patched;
+        if(!PatchDescriptorSlot(published->second,patched))return false;
+        recovered=true;
+      }
+      return recovered;
+    };
     std::vector<MetalAIR::UniformAccessReport::BufferAccess> restoredAccesses;
-    std::map<rdcpair<ResourceId,rdcpair<uint64_t,uint64_t>>,uint64_t> restoredNamespaces;
+    using NamespaceKey=std::tuple<ResourceId,uint64_t,uint64_t,bool,unsigned>;
+    std::map<NamespaceKey,uint64_t> restoredNamespaces;
     for(const auto &access:report.buffers)
     {
       if(access.address.kind!=Value::DescriptorPointer)
       {restoredAccesses.push_back(access);continue;}
       dynamicNamespace=true;
-      if(access.write)
-      {
-        // The read closure cannot certify writable descriptor types or the
-        // initialized ranges produced by a GPU-selected destination.
-        if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
-          fprintf(stderr,"Metal dynamic descriptor writer coverage unavailable: table=%llu base=%llu\n",
-              (unsigned long long)access.address.object,
-              (unsigned long long)access.address.namespaceBase);
-        return false;
-      }
       ResourceId table;memcpy(&table,&access.address.object,sizeof(table));
-      const auto namespaceKey=make_rdcpair(table,make_rdcpair(access.address.namespaceBase,access.address.namespaceEnd));
+      const NamespaceKey namespaceKey(table,access.address.namespaceBase,
+          access.address.namespaceEnd,access.write,access.address.namespaceRole);
       const auto priorNamespace=restoredNamespaces.find(namespaceKey);
       // Reuse only a closure proved for at least this read width. Allocation
       // capacity is not a contents proof for a later wider load.
@@ -4584,8 +6264,21 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
               (unsigned long long)first,(unsigned long long)(last-first),(unsigned long long)access.bytes);
         // Entries already obey the uniform table/snapshot budget. Do not
         // replace the old 64-value display cap with a scene-sized pointer set.
+        auto liveRow=dispatch.slotGenerations.lower_bound(make_rdcpair(table,layout.offset+first*layout.stride));
         for(uint64_t row=first;row<last;row++)
         {
+          {
+            // Capacity is not a set of live descriptors. Unknown GPU indices
+            // contribute current logical candidates, without resurrecting
+            // retired generations or inventing unallocated identities.
+            // Walk the frozen live generations, not every byte-capacity row.
+            // This changes no qualification cache or Native input restoration.
+            if(liveRow==dispatch.slotGenerations.end() || liveRow->first.first!=table ||
+               liveRow->first.second>=layout.offset+last*layout.stride)break;
+            const uint64_t offset=liveRow->first.second;++liveRow;
+            if((offset-layout.offset)%layout.stride)continue;
+            row=(offset-layout.offset)/layout.stride;
+          }
           const uint64_t slotOffset=layout.offset+row*layout.stride;
           const auto nulls=dispatch.nullBufferFields.find(make_rdcpair(table,layout.offset));
           if(nulls!=dispatch.nullBufferFields.end() && nulls->second &&
@@ -4609,6 +6302,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           const auto slot=dispatch.slots.find(make_rdcpair(table,slotOffset));
           if(slot==dispatch.slots.end() || !slot->second.live)
           {
+            // A live allocation with missing publication remains an actual
+            // unresolved address obligation, recorded in this use's snapshot.
             if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
               fprintf(stderr,"Metal dynamic descriptor publication unavailable: table=%s slot=%llu missing=%d\n",
                   ToStr(table).c_str(),(unsigned long long)slotOffset,int(slot==dispatch.slots.end()));
@@ -4628,9 +6323,38 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
             }
           }
           if(!published)return false;
+          if(access.address.namespaceRole==2)
+          {
+            // Native query instance IDs index ordinary contribution data. The
+            // selected header is unknown to display, but each current typed
+            // header supplies an explicit, relocated contribution identity.
+            if(!state.sources.count(3))continue;
+            if(access.write)return false;
+            const auto &source=state.sources.at(3);
+            const auto header=dispatch.headers.find(make_rdcpair(source.resource,source.offset));
+            if(header==dispatch.headers.end() || dispatch.opaque.count(source.resource))return false;
+            const auto &h=header->second;
+            const uint64_t length=GetReplay()->GetBuffer(h.contributions).length;
+            if(!length || h.contributionOffset>length || access.bytes>length-h.contributionOffset)return false;
+            bool initialized=false;
+            for(const auto &range:bufferRestoredRanges(h.contributions))
+              initialized |= RDCMAX(h.contributionOffset,range.first)<range.second &&
+                  access.bytes<=range.second-RDCMAX(h.contributionOffset,range.first);
+            if(!initialized)return false;
+            auto candidate=access;candidate.address.kind=Value::Pointer;
+            memcpy(&candidate.address.object,&h.contributions,sizeof(h.contributions));
+            candidate.address.offset=h.contributionOffset;candidate.address.offsetKnown=false;
+            candidate.address.descriptorObject=0;
+            restoredAccesses.push_back(candidate);rootBuffers.insert(h.contributions);
+            resourceCommands[h.contributions].insert(command);recovered=true;continue;
+          }
           // All row identities were validated/relocated independently. Only
           // this API buffer field participates in the possible read closure.
           if(!MetalDescriptor::Buffer(state.type) || state.sources.count(3))continue;
+          // GPU-selected ordinary outputs use the independently restored
+          // writable namespace. Read-only rows are not writable alternatives;
+          // candidate enumeration is not feedback that each row was accessed.
+          if(access.write && !MetalDescriptor::Writable(state.type))continue;
           uint64_t captured=0;if(state.data.size()!=24)return false;
           memcpy(&captured,state.data.data(),8);
           const auto source=state.sources.find(0);
@@ -4638,6 +6362,23 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           {if(source!=state.sources.end())return false;continue;}
           if(source==state.sources.end())return false;
           const ResourceId buffer=source->second.resource;
+          if(access.write)
+          {
+            // This path restores ordinary data writers, never new addresses.
+            // A table/header destination needs its real typed publication and
+            // relocation mechanism, regardless of optional access display.
+            if(isTable(buffer))
+            {
+              const uint64_t length=m_DescriptorFrameBuffers.count(buffer)?m_DescriptorFrameBuffers.at(buffer).length:
+                  GetReplay()->GetBuffer(buffer).length;
+              uint32_t declared=0;memcpy(&declared,state.data.data()+16,4);
+              const uint64_t begin=source->second.offset;
+              const uint64_t extent=!dispatch.nativeCompute && declared?declared:(begin<=length?length-begin:0);
+              if(!typedCopyRestored(buffer,begin,extent))return false;
+            }
+            for(const auto &header:dispatch.headers)
+              if(header.first.first==buffer)return false;
+          }
           const uint64_t length=m_DescriptorFrameBuffers.count(buffer)?m_DescriptorFrameBuffers.at(buffer).length:
               GetReplay()->GetBuffer(buffer).length;
           uint32_t declared=0;memcpy(&declared,state.data.data()+16,4);
@@ -4662,7 +6403,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           // proof. A never-owned physical range has API-unspecified contents;
           // Native execution may select it without CPU producer analysis.
           // Captured defined inputs still require their real payload/producer.
-          if(!initialized && !m_ReplayHeapBufferBirthUnspecified.count(buffer))
+          if(!access.write && !initialized && !m_ReplayHeapBufferBirthUnspecified.count(buffer))
           {
             if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
               fprintf(stderr,"Metal dynamic descriptor contents unavailable: table=%s slot=%llu resource=%s range=%llu/%llu\n",
@@ -4673,6 +6414,10 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           auto candidate=access;candidate.address.kind=Value::Pointer;
           memcpy(&candidate.address.object,&buffer,sizeof(buffer));
           candidate.address.offset=begin;candidate.address.offsetKnown=false;
+          // A possible dynamic writer is not an exact defined-byte or scalar
+          // store proof. Preserve Native execution, invalidate observations,
+          // and retain the existing restoration state for later real inputs.
+          if(access.write){candidate.definiteWrite=false;candidate.definiteStore=false;}
           candidate.address.descriptorObject=access.address.object;
           candidate.address.descriptorOffset=slotOffset;
           restoredAccesses.push_back(candidate);recovered=true;
@@ -4683,6 +6428,95 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       restoredNamespaces[namespaceKey]=access.bytes;
     }
     report.buffers.swap(restoredAccesses);
+    // A dynamic typed texture field carries the table ABI, not a selected
+    // handle. Restore its current logical identities using the same real
+    // texture/view/pixel/submission checks as a static field below. Capacity
+    // and retired generations never become identities or shader feedback.
+    std::vector<Value> restoredTextures;
+    for(const auto &access:report.accesses)
+    {
+      if((access.kind!=Value::Texture && access.kind!=Value::Sampler) || !access.namespaceStride)
+      {restoredTextures.push_back(access);continue;}
+      const bool samplerNamespace=access.kind==Value::Sampler;
+      const uint64_t handleField=samplerNamespace?0:8;
+      const uint32_t sourceKind=samplerNamespace?2:1;
+      if(!access.metadata || access.namespaceStride!=24 || access.namespaceField!=handleField)
+        return false;
+      dynamicNamespace=true;
+      ResourceId table;memcpy(&table,&access.object,sizeof(table));
+      bool recovered=false;
+      for(const auto &layout:m_DescriptorTables)
+      {
+        if(layout.buffer!=table || layout.stride!=access.namespaceStride ||
+           access.namespaceBase<layout.offset ||
+           (access.namespaceBase-layout.offset)%layout.stride)continue;
+        const uint64_t first=(access.namespaceBase-layout.offset)/layout.stride;
+        if(first>=layout.count)continue;
+        uint64_t last=layout.count;
+        if(access.namespaceEnd)
+        {
+          if(access.namespaceEnd<=access.namespaceBase || access.namespaceEnd<layout.offset ||
+             (access.namespaceEnd-layout.offset)%layout.stride)return false;
+          last=(access.namespaceEnd-layout.offset)/layout.stride;
+          if(last>layout.count)return false;
+        }
+        auto row=dispatch.slotGenerations.lower_bound(make_rdcpair(table,layout.offset+first*layout.stride));
+        for(;row!=dispatch.slotGenerations.end() && row->first.first==table &&
+              row->first.second<layout.offset+last*layout.stride;++row)
+        {
+          const uint64_t offset=row->first.second;
+          if((offset-layout.offset)%layout.stride)continue;
+          const auto slot=dispatch.slots.find(row->first);
+          if(slot==dispatch.slots.end() || !slot->second.live ||
+             slot->second.generation!=row->second)
+          {
+            if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
+              fprintf(stderr,"Metal dynamic texture publication unavailable: consumer=%llu table=%s slot=%llu generation=%llu\n",
+                  (unsigned long long)readOffset,ToStr(table).c_str(),(unsigned long long)offset,
+                  (unsigned long long)row->second);
+            return false;
+          }
+          const auto &state=slot->second;
+          if(samplerNamespace?state.type!=7:(!MetalDescriptor::Texture(state.type) ||
+             ((access.write || access.ordering) && !MetalDescriptor::Writable(state.type))))continue;
+          bool published=!state.gpuExpected || state.initialRestored;
+          if(state.gpuExpected && state.gpuCopyPublished && state.sources.size()==state.gpuCopySources.size())
+          {
+            published=true;
+            for(const auto &source:state.sources)
+            {
+              const auto copied=state.gpuCopySources.find(source.first);
+              published &= copied!=state.gpuCopySources.end() && copied->second.resource==source.second.resource &&
+                  copied->second.offset==source.second.offset;
+            }
+          }
+          if(!published || state.data.size()!=24)return false;
+          uint64_t capturedHandle=0;memcpy(&capturedHandle,state.data.data()+handleField,8);
+          // Buffer/texel packet tags share this ABI. A proved zero texture
+          // field contributes no texture identity; a nonzero handle still
+          // needs its exact source. This never assumes missing bytes are zero.
+          if(!capturedHandle)
+          {if(state.sources.count(sourceKind))return false;continue;}
+          if(!state.sources.count(sourceKind))
+          {
+            if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
+              fprintf(stderr,"Metal dynamic texture source unavailable: consumer=%llu table=%s slot=%llu type=%u\n",
+                  (unsigned long long)readOffset,ToStr(table).c_str(),(unsigned long long)offset,state.type);
+            return false;
+          }
+          auto candidate=access;candidate.offset=offset+handleField;candidate.offsetKnown=true;candidate.ranged=false;
+          restoredTextures.push_back(candidate);recovered=true;
+          resourceCommands[table].insert(command);
+          resourceCommands[state.sources.at(sourceKind).resource].insert(command);
+        }
+      }
+      if(!recovered)return false;
+      if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
+        fprintf(stderr,"Metal dynamic texture/sampler namespace restored: consumer=%llu table=%s base=%llu field=%llu candidates=%zu accessDisplay=partial\n",
+            (unsigned long long)readOffset,ToStr(table).c_str(),(unsigned long long)access.namespaceBase,
+            (unsigned long long)access.namespaceField,restoredTextures.size());
+    }
+    report.accesses.swap(restoredTextures);
     // Binding restoration is independent of the optional numerical access
     // display. A sourced pointer can have an unknown GPU-computed byte offset:
     // replay the Native shader against the restored allocation, rather than
@@ -4790,8 +6624,51 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       else if(!modifiedBuffers.count(buffer) && !m_ReplayBufferInitialContents.count(buffer) &&
               !m_DescriptorFrameBuffers.count(buffer) && !preserveCreationInput(buffer))return false;
     }
+    std::vector<Value> restoredStructures;
     for(const auto &access:report.accesses)
     {
+      if(access.kind!=Value::AccelerationStructure || access.namespaceRole!=1)
+      {restoredStructures.push_back(access);continue;}
+      ResourceId table;memcpy(&table,&access.object,sizeof(table));
+      bool recovered=false;
+      for(const auto &generation:dispatch.slotGenerations)
+      {
+        if(generation.first.first!=table || generation.first.second<access.namespaceBase ||
+           (access.namespaceEnd && generation.first.second>=access.namespaceEnd))continue;
+        const auto slot=dispatch.slots.find(generation.first);
+        if(slot==dispatch.slots.end() || !slot->second.live ||
+           slot->second.generation!=generation.second || slot->second.data.size()!=24)return false;
+        if(!slot->second.sources.count(3))continue;
+        const auto &state=slot->second;
+        if(state.gpuExpected && !state.initialRestored)
+        {
+          if(!state.gpuCopyPublished || state.sources.size()!=state.gpuCopySources.size())return false;
+          for(const auto &identity:state.sources)
+          {
+            const auto copied=state.gpuCopySources.find(identity.first);
+            if(copied==state.gpuCopySources.end() || copied->second.resource!=identity.second.resource ||
+               copied->second.offset!=identity.second.offset)return false;
+          }
+        }
+        const auto &source=slot->second.sources.at(3);
+        auto candidate=access;candidate.offsetKnown=true;candidate.ranged=false;
+        memcpy(&candidate.object,&source.resource,sizeof(source.resource));candidate.offset=source.offset;
+        candidate.descriptorObject=access.object;candidate.descriptorOffset=generation.first.second;
+        // Keep namespace provenance for partial access display. Existing exact
+        // AS/header/recipe/child/submission obligations below validate every row.
+        restoredStructures.push_back(candidate);recovered=true;
+      }
+      if(!recovered)return false;
+      restoration.completeAccessDisplay=false;
+    }
+    report.accesses.swap(restoredStructures);
+    using TextureNamespaceKey=std::tuple<uint64_t,uint64_t,uint64_t,bool,bool,bool,char>;
+    std::set<TextureNamespaceKey> textureNamespaces,compatibleTextureNamespaces;
+    for(const auto &access:report.accesses)
+    {
+      const TextureNamespaceKey textureNamespace(access.object,access.namespaceBase,access.namespaceEnd,
+          access.read,access.write,access.ordering,access.numeric);
+      if(access.kind==Value::Texture && access.namespaceStride)textureNamespaces.insert(textureNamespace);
       ResourceId table;memcpy(&table,&access.object,sizeof(table));
       if(access.kind==Value::AccelerationStructure)
       {
@@ -4906,12 +6783,18 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           CompType::UInt : description.format.compType;
       if(!access.resourceOnly && !TextureNumericFamily(access.numeric,type))
       {
+        // A heterogeneous live table is an API namespace. An incompatible
+        // row is not evidence that this typed operation selected that row.
+        // Its original handle/format remains independently relocated, and
+        // the Native shader still selects the actual compatible identity.
+        if(access.namespaceStride)continue;
         if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
           fprintf(stderr,"Metal runtime texture numeric ABI rejected: consumer=%llu source=%s type=%u numeric=%c read=%d write=%d\n",
               (unsigned long long)readOffset,ToStr(texture).c_str(),uint32_t(type),
               access.numeric?access.numeric:'?',int(access.read),int(access.write));
         return false;
       }
+      if(access.namespaceStride)compatibleTextureNamespaces.insert(textureNamespace);
       uint64_t viewBegin=0,viewEnd=0;
       bool boundedView=false;
       uint64_t width=0;
@@ -4946,6 +6829,14 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       if(access.read)
       {
         bool restored=HasReplayTextureInitialContents(texture);
+        // A validated in-frame factory has no pre-frame pixel payload to
+        // restore. Its original Native creation and any preceding writes are
+        // replayed, including the physical alias/lifetime checks at that
+        // factory. A possible dynamic row does not create an additional CPU
+        // assertion that those newly allocated pixels were defined/read.
+        // Background textures still require their captured initial content.
+        restored |= m_DescriptorPreflight && future!=m_DescriptorFrameTextures.end() &&
+            m_DescriptorPreflightLiveTextures.count(texture)!=0;
         for(ResourceId source : {texture,backing})
         {
           const auto writer=typedTextureWriteCommands.find(source);
@@ -5016,6 +6907,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         writes.insert(texture);
       }
     }
+    if(textureNamespaces!=compatibleTextureNamespaces)return false;
     // Retain only identified descriptors for access display. Unknown offsets
     // do not become fictitious per-invocation accesses or all-heap feedback.
     {
@@ -5030,19 +6922,20 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       m_IRRuntimeDescriptorAccessComplete[key]=restoration.completeAccessDisplay;
       auto &dependencies=m_IRRuntimeDescriptorAccesses[key];
       dependencies.clear();
-      auto save=[&](Value value) {
+      auto save=[&](Value value, uint64_t bytes = 0) {
         IRRuntimeDescriptorAccess access;
         access.pipeline=dispatch.pipeline;access.object=value.object;access.offset=value.offset;
         access.descriptorObject=value.descriptorObject;access.descriptorOffset=value.descriptorOffset;
+        access.byteSize=bytes;
         access.kind=uint32_t(value.kind);access.write=value.write;access.resourceOnly=value.resourceOnly;
         dependencies.push_back(access);
       };
       // Ordering references are restoration dependencies, not pixel accesses.
-      for(const auto &value:report.accesses)if(!value.ordering)save(value);
+      for(const auto &value:report.accesses)if(!value.ordering && !value.namespaceStride)save(value);
       for(const auto &buffer:report.buffers)
       {
         if(buffer.address.namespaceStride)continue; // namespace candidates are not actual accesses
-        Value value=buffer.address;value.kind=Value::Buffer;value.write=buffer.write;save(value);
+        Value value=buffer.address;value.kind=Value::Buffer;value.write=buffer.write;save(value,buffer.bytes);
       }
     }
     if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT") &&
@@ -5070,14 +6963,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       }
       if(write.valid && write.heap)
       {
-        std::set<ResourceId> candidates=m_DescriptorPreflightLiveBuffers;
-        for(const auto &candidate:GetReplay()->GetBuffers())candidates.insert(candidate.resourceId);
-        for(ResourceId candidate:candidates)
-        {
-          const auto alias=indirectFootprint(candidate);
-          if(alias.valid && alias.heap==write.heap && alias.begin<write.end && write.begin<alias.end)
-          {modifiedBuffers.insert(candidate);opaqueWrites.insert(candidate);computeInvalidatedBuffers.insert(candidate);computeCBVScalarKnownBytes.erase(candidate);}
-        }
+        for(ResourceId candidate:bufferAliases(write))
+        {modifiedBuffers.insert(candidate);opaqueWrites.insert(candidate);computeInvalidatedBuffers.insert(candidate);computeCBVScalarKnownBytes.erase(candidate);}
       }
       if(GetReplay()->GetTexture(resource).resourceId!=ResourceId() ||
          (m_DescriptorFrameTextures.count(resource) && m_DescriptorPreflightLiveTextures.count(resource)) ||
@@ -5167,9 +7054,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     computeInvalidatedBuffers.insert(buffer);
     if(write.valid && write.heap)
     {
-      std::set<ResourceId> candidates=m_DescriptorPreflightLiveBuffers;
-      for(const auto &candidate:GetReplay()->GetBuffers())candidates.insert(candidate.resourceId);
-      for(ResourceId candidate:candidates)
+      for(ResourceId candidate:bufferAliases(write))
       {uint64_t begin=0,end=0;if(overlap(candidate,begin,end))computeInvalidatedBuffers.insert(candidate);}
     }
   };
@@ -5208,6 +7093,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       {
         const bool runtime=runtimeDispatches.count(make_rdcpair(op.readOffset,op.stage))!=0;
         if(!(runtime?validateRuntimeDispatch(op.readOffset,command,op.stage):validateUniformDispatch(op.readOffset)))return rejectOperation("shader resource/address restoration");
+        // Device-owned restored facts survive; these preflight-only namespace
+        // and null-mask snapshots have no consumer after this submission.
+        if(runtime)runtimeDispatches.erase(make_rdcpair(op.readOffset,op.stage));
         continue;
       }
       if(op.indexedInput || op.indirectInput)
@@ -5219,13 +7107,63 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         bool restored=false;
         for(const auto &range:bufferRestoredRanges(op.buffer))
           restored |= range.first<=op.offset && op.offset+op.bytes<=range.second;
+        const bool unspecifiedIndex=op.indexedInput &&
+            m_ReplayHeapBufferBirthUnspecified.count(op.buffer)!=0;
+        // A proved fresh Native allocation restores its API-unspecified bytes
+        // as unspecified. Index integers are ordinary data, not GPU addresses;
+        // do not invent zeros or require a CPU initialization oracle for them.
+        restored |= unspecifiedIndex;
         if(!restored)return rejectOperation("missing Native API input state");
         if(op.indexedInput)restoredIndexInputs.insert(op.buffer);
+        if(op.indexedInput && op.indexOrdinal!=UINT32_MAX)
+        {
+          const std::vector<RestoredRange> ranges=unspecifiedIndex
+              ? std::vector<RestoredRange>{{0,length}} : bufferRestoredRanges(op.buffer);
+          GetReplay()->RecordRenderIndexRestoration(op.indexEncoder,op.indexOrdinal,op.buffer,
+              op.indexAPIOffset,op.indexStride,ranges);
+        }
         resourceCommands[op.buffer].insert(command);
         continue;
       }
+      const uint64_t length=m_DescriptorFrameBuffers.count(op.buffer)?m_DescriptorFrameBuffers.at(op.buffer).length:
+          GetReplay()->GetBuffer(op.buffer).length;
+      if(op.offset>length || op.bytes>length-op.offset || !indirectFootprint(op.buffer).valid)
+        return rejectOperation("invalid ordinary API destination interval");
+      if(!op.read)
+      {
+        // Execution input coverage is physical state, not a numerical CPU cache.
+        // Propagate only preceding defined ranges. Unavailable display values
+        // must not reject the original Native API payload/copy.
+        if(op.source!=ResourceId())
+        {
+          const uint64_t sourceLength=m_DescriptorFrameBuffers.count(op.source)?m_DescriptorFrameBuffers.at(op.source).length:
+              GetReplay()->GetBuffer(op.source).length;
+          if(op.sourceOffset>sourceLength || op.bytes>sourceLength-op.sourceOffset ||
+             !indirectFootprint(op.source).valid)return rejectOperation("invalid ordinary API source interval");
+          const auto ranges=bufferRestoredRanges(op.source);
+          bufferRestoredRanges(op.buffer);eraseRestoredRange(op.buffer,op.offset,op.offset+op.bytes);
+          for(const auto &range:ranges)
+          {
+            const uint64_t begin=RDCMAX(range.first,op.sourceOffset),end=RDCMIN(range.second,op.sourceOffset+op.bytes);
+            if(begin<end)addRestoredRange(op.buffer,op.offset+begin-op.sourceOffset,op.offset+end-op.sourceOffset);
+          }
+        }
+        else
+        {
+          if(op.known && op.data.size()!=op.bytes)return rejectOperation("missing ordinary API payload");
+          bufferRestoredRanges(op.buffer);eraseRestoredRange(op.buffer,op.offset,op.offset+op.bytes);
+          if(op.known)addRestoredRange(op.buffer,op.offset,op.offset+op.bytes);
+        }
+      }
       auto values=state(op.buffer);
-      if(!values || op.offset>values->known.size() || op.bytes>values->known.size()-op.offset) return rejectOperation("state/range/budget");
+      if(!values)
+      {
+        if(op.read)return rejectOperation("required scalar observation unavailable");
+        invalidateScalarRange(op.buffer,op.offset,op.bytes);
+        continue; // Native restoration remains qualified; optional values unknown.
+      }
+      if(op.offset>values->known.size() || op.bytes>values->known.size()-op.offset)
+        return rejectOperation("invalid scalar observation interval");
       if(op.read)
       {
         for(uint64_t i=0;i<op.bytes;i++) if(!values->known[op.offset+i]) return rejectOperation("unknown CPU scalar byte");
@@ -5266,20 +7204,6 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           invalidateScalarRange(op.buffer,op.offset,op.bytes);
           memcpy(values->data.data()+op.offset,copied.data(),op.bytes);
           memcpy(values->known.data()+op.offset,known.data(),op.bytes);
-          // Copy the restoration intervals independently of known scalar
-          // values. Snapshot first for legal same-allocation copies.
-          const auto ranges=bufferRestoredRanges(op.source);
-          bufferRestoredRanges(op.buffer);
-          // An uninitialized source must not inherit the destination's older
-          // initialized pixels. Native copy replaces exactly this interval.
-          eraseRestoredRange(op.buffer,op.offset,op.offset+op.bytes);
-          for(const auto &range:ranges)
-          {
-            const uint64_t begin=RDCMAX(op.sourceOffset,range.first);
-            const uint64_t end=RDCMIN(op.sourceOffset+op.bytes,range.second);
-            if(begin<end)addRestoredRange(op.buffer,op.offset+begin-op.sourceOffset,
-                                         op.offset+end-op.sourceOffset);
-          }
           continue;
         }
         if(op.known && op.data.size()!=op.bytes)return rejectOperation("missing ordinary API payload");
@@ -5290,15 +7214,14 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         {bufferRestoredRanges(op.buffer);addRestoredRange(op.buffer,op.offset,op.offset+op.bytes);}
       }
     }
+    computeCBVOperations.erase(command);
     return true;
   };
   auto invalidateAliasedBufferContents=[&](ResourceId written) {
     if(m_DescriptorCoverage<65)return;
     const auto write=indirectFootprint(written);
     if(!write.valid || !write.heap)return;
-    std::set<ResourceId> candidates=m_DescriptorPreflightLiveBuffers;
-    for(const auto &buffer:GetReplay()->GetBuffers())candidates.insert(buffer.resourceId);
-    for(ResourceId candidate:candidates)
+    for(ResourceId candidate:bufferAliases(write))
     {
       if(candidate==written || m_DescriptorPreflightAliasedBuffers.count(candidate))continue;
       const auto alias=indirectFootprint(candidate);
@@ -5317,15 +7240,15 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       }
     }
   };
-  auto readIndexUpload = [&](ResourceId source, ResourceId command, uint64_t offset, uint64_t size, bytebuf &data) {
+  auto readIndexUpload = [&](ResourceId source, ResourceId command, uint64_t offset, uint64_t size, bytebuf &data, bool addressLane = false) {
     auto future = m_DescriptorFrameBuffers.find(source);
     auto object = GetResourceManager()->GetResource(source, true);
     MTL::Buffer *native = object && object->m_Type == eResBuffer ? Unwrap((WrappedMTLBuffer *)object) : NULL;
     const uint64_t length = future != m_DescriptorFrameBuffers.end() ? future->second.length : native ? native->length() : 0;
     const bool shared = future != m_DescriptorFrameBuffers.end() ?
         (future->second.options & 0xf0ULL) == MTL::ResourceStorageModeShared : native && native->storageMode() == MTL::StorageModeShared;
-    if(!shared || !size || size > (m_DescriptorCoverage >= 52 ? DescriptorPlainCopyLimit(m_DescriptorCoverage) : 64 * 1024) || offset > length || size > length - offset ||
-       modifiedBuffers.count(source) || m_DescriptorGPUWrittenBuffers.count(source) || isTable(source)) return false;
+    if(!shared || !size || size > (m_DescriptorCoverage >= 52 ? DescriptorScalarObservationLimit(m_DescriptorCoverage) : 64 * 1024) || offset > length || size > length - offset ||
+       modifiedBuffers.count(source) || m_DescriptorGPUWrittenBuffers.count(source) || (!addressLane && isTable(source))) return false;
     data.resize(size); bytebuf known; known.resize(size); memset(known.data(), 0, size);
     auto initial = m_ReplayBufferInitialContents.find(source);
     if(initial != m_ReplayBufferInitialContents.end() && initial->second.size() == length) {
@@ -5342,8 +7265,24 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       }
       return true;
     };
-    for(ResourceId prior : submissionOrder) if(!overlay(prior)) return false;
-    if(!overlay(command)) return false;
+    if(addressLane)
+    {
+      // Encoding can precede a different command's CPU publication. The null
+      // address obligation belongs to actual captured submission order, not
+      // the copy's CPU/EID position. Do not borrow a later submission's data.
+      bool ownerFound=false;
+      for(ResourceId prior : capturedSubmissionOrder)
+      {
+        if(!overlay(prior)) return false;
+        if(prior==command){ownerFound=true;break;}
+      }
+      if(!ownerFound) return false;
+    }
+    else
+    {
+      for(ResourceId prior : submissionOrder) if(!overlay(prior)) return false;
+      if(!overlay(command)) return false;
+    }
     for(byte value : known) if(!value) return false;
     return true;
   };
@@ -5478,24 +7417,42 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       }
       else success &= chunk==MetalChunk::MTLAccelerationStructureCommandEncoder_insertDebugSignpost;
     }
-    else if(heapQuery && chunk==MetalChunk::MTLBlitCommandEncoder_fillBuffer)
+    else if((heapQuery || m_DescriptorCoverage >= 65) && chunk==MetalChunk::MTLBlitCommandEncoder_fillBuffer)
     {
       ResourceId encoder,destination;NS::Range range=NS::Range::Make(0,0);uint8_t value=0;
       scan.Serialise("BlitCommandEncoder"_lit,encoder);scan.Serialise("buffer"_lit,destination);
       scan.Serialise("range"_lit,range);scan.Serialise("value"_lit,value);
       auto object=GetResourceManager()->GetResource(destination,true);
       auto native=object && object->m_Type==eResBuffer ? Unwrap((WrappedMTLBuffer *)object):NULL;
-      success=liveBlits.count(encoder) && native && native->storageMode()==MTL::StorageModePrivate &&
-          !object->m_CapturedAliasable && !isTable(destination) && value==0 &&
-          range.location<=native->length() && range.length<=native->length()-range.location;
+      auto future = m_DescriptorFrameBuffers.find(destination);
+      const uint64_t length = future != m_DescriptorFrameBuffers.end() ? future->second.length :
+          native ? native->length() : 0;
+      bool ordinaryRange = m_DescriptorCoverage >= 65 ?
+          IsDescriptorOrdinaryWriteRange(destination, range.location, range.length) :
+          range.location <= UINT64_MAX - range.length;
+      if(m_DescriptorCoverage < 65 && ordinaryRange) for(const auto &table : m_DescriptorTables)
+        if(table.buffer == destination && range.location < table.offset + table.count * table.stride &&
+           table.offset < range.location + range.length) ordinaryRange = false;
+      success = liveBlits.count(encoder) && length && range.length && ordinaryRange &&
+          (future == m_DescriptorFrameBuffers.end() || m_DescriptorPreflightLiveBuffers.count(destination)) &&
+          !m_DescriptorPreflightAliasedBuffers.count(destination) &&
+          (!object || !object->m_CapturedAliasable) &&
+          range.location <= length && range.length <= length - range.location &&
+          (m_DescriptorCoverage >= 65 || (native && native->storageMode() == MTL::StorageModePrivate && value == 0));
       for(const auto &q:m_RayQueryHeapDispatches) success &= q.output!=destination;
       for(const auto &h:m_RayASHeaders) success &= h.second.buffer!=destination && h.second.contributions!=destination;
       for(const auto &h:m_RayASHeaderFrameWrites) success &= h.buffer!=destination && h.contributions!=destination;
       if(success)
       {
-        noteResource(destination,encoder);modifiedBuffers.insert(destination);opaqueWrites.insert(destination);noteOpaqueScalarWrite(destination,chunkOffset);
+        noteResource(destination,encoder,range.location,range.length);modifiedBuffers.insert(destination);opaqueWrites.insert(destination);noteOpaqueScalarWrite(destination,chunkOffset);
+        invalidateNullBufferFields(destination);
         invalidateAliasedBufferContents(destination);
-        pendingWork.insert(encoderCommands[encoder]);m_DescriptorPartialCopySubmissions[encoderCommands[encoder]].valid=false;
+        const ResourceId command = encoderCommands[encoder];
+        pendingWork.insert(command);
+        auto &plan = m_DescriptorPartialCopySubmissions[command];
+        plan.chunks.push_back(chunkOffset);
+        plan.buffers.insert(destination);
+        plan.fills++;
       }
     }
     else if(m_DescriptorCoverage >= 14 && chunk == MetalChunk::MTLBuffer_InternalModifyCPUContents)
@@ -5536,7 +7493,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       scan.Serialise("CommandQueue"_lit, queue); scan.Serialise("CommandBuffer"_lit, command);
       ++commandCount;
       success = queue != ResourceId() && command != ResourceId() &&
-          (submissionQueue == ResourceId() || submissionQueue == queue) &&
+          (m_DescriptorCoverage >= 65 || submissionQueue == ResourceId() || submissionQueue == queue) &&
           (m_DescriptorCoverage >= 15 || currentCommand == ResourceId() || completed.count(currentCommand) ||
            (m_DescriptorCoverage >= 12 && committed.count(currentCommand))) && commands.insert(command).second;
       if(chunk == MetalChunk::MTLCommandQueue_commandBufferWithDescriptor)
@@ -5545,6 +7502,10 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         scan.Serialise("retainedReferences"_lit, retainedReferences); scan.Serialise("errorOptions"_lit, errorOptions);
         success &= errorOptions <= (uint64_t)MTL::CommandBufferErrorOptionEncoderExecutionStatus;
       }
+      auto queueObject = GetResourceManager()->GetResource(queue, true);
+      success &= queueObject && queueObject->m_Type == eResCommandQueue &&
+          queueObject->m_Real && queueObject->m_Device == this &&
+          submissionQueues.insert({command, queue}).second;
       submissionQueue = queue; currentCommand = command;
       if(m_DescriptorCoverage >= 52) m_DescriptorPartialCopySubmissions[command].chunks.push_back(chunkOffset);
     }
@@ -5562,16 +7523,20 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       success = (m_DescriptorCoverage >= 15 ? !hasLiveEncoder(command) :
           command == currentCommand && liveEncoders.empty() && liveRenders.empty() && liveBlits.empty()) &&
           committed.count(command) && inlineCompleteForCommand(command) &&
-          m_DescriptorGPUCopyExpected.empty() && completed.insert(command).second;
+          m_DescriptorGPUCopyExpected.empty();
       if(success)
       {
+        // Waiting again on a completed Native command buffer is idempotent.
+        // An earlier queue-prefix completion can already contain this command;
+        // membership is a dependency fact, not a one-use API permission.
+        completed.insert(command);
         consumed = m_DescriptorCoverage >= 15 && !pendingWork.empty();
         // A queue completion covers the prefix ending at this submission, not later work.
         if(m_DescriptorCoverage >= 15)
         {
           for(ResourceId prior : submissionOrder)
           {
-            completed.insert(prior);
+            if(submissionQueues[prior] == submissionQueues[command]) completed.insert(prior);
             if(prior == command) break;
           }
         }
@@ -5771,8 +7736,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
               auto footprint = GetMetalIndirectWriteFootprint(old, true);
               if(!footprint.valid || footprint.buffer) { success = false; break; }
               if(offset < footprint.end && footprint.begin < end)
-                success &= footprint.end - footprint.begin <= DescriptorPlacementAliasLimit() &&
-                    validateRetiredTextureAlias(description.resourceId, buffer);
+                success &= validateCoexistingTextureAlias(description.resourceId, buffer) ||
+                    (footprint.end - footprint.begin <= DescriptorPlacementAliasLimit() &&
+                     validateRetiredTextureAlias(description.resourceId, buffer));
             }
           success &= !backgroundOverlap || (m_DescriptorCoverage >= 18 &&
               length <= DescriptorPlacementBufferAliasLimit() &&
@@ -5783,9 +7749,23 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
                 m_DescriptorInlineShadow.empty() && m_DescriptorGPUCopyExpected.empty())) &&
               parent->CanImplicitlyAliasBuffers(offset, end, buffer));
           for(const auto &range : heapRanges[heap])
-            if(offset < range.end && range.begin < end &&
-               !m_DescriptorPreflightAliasedBuffers.count(range.buffer))
+            if(offset < range.end && range.begin < end)
             {
+              if(m_DescriptorPreflightAliasedBuffers.count(range.buffer))
+              {
+                // Native objects retain their physical ranges after logical retirement.
+                // Each later overlapping allocation needs its own backing proof, including
+                // the old consumers. Retirement through an earlier view is not a blanket
+                // permission for all future views of the heap.
+                const auto previous = m_DescriptorFrameBuffers.find(range.buffer);
+                if(previous != m_DescriptorFrameBuffers.end() &&
+                   (isTable(range.buffer) || isTable(buffer)))
+                  success &= storage == MTL::StorageModeShared &&
+                      length <= DescriptorPlacementBufferAliasLimit() &&
+                      previous->second.length <= DescriptorPlacementBufferAliasLimit() &&
+                      validateBackingAlias(range.buffer, buffer);
+                continue;
+              }
               // Placement buffers may share storage while both logical objects and their
               // descriptors remain live. This differs from explicit makeAliasable retirement.
               // v17/18 require captured CPU completion; v22 uses native tracked-heap ordering.
@@ -5805,8 +7785,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
               if(!implicit && m_DescriptorCoverage >= 65 && storage == MTL::StorageModePrivate &&
                  texture != m_DescriptorFrameTextures.end())
                 implicit = length <= DescriptorPlacementBufferAliasLimit() &&
-                    range.end - range.begin <= DescriptorPlacementAliasLimit() &&
-                    validateRetiredTextureAlias(range.buffer, buffer);
+                    (validateCoexistingTextureAlias(range.buffer, buffer) ||
+                     (range.end - range.begin <= DescriptorPlacementAliasLimit() &&
+                      validateRetiredTextureAlias(range.buffer, buffer)));
               if(!implicit) success = false;
             }
           if(success) heapRanges[heap].push_back({offset, end, buffer});
@@ -6035,8 +8016,97 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         computes[encoder].bytes.erase((uint32_t)index);
         computes[encoder].inlineData.erase((uint32_t)index);
         computes[encoder].pointers.erase((uint32_t)index);
+        computes[encoder].zeroAddressInline.erase((uint32_t)index);
         appliedInline[encoder].erase(index);
         noteResource(buffer, encoder);
+      }
+    }
+    else if(m_DescriptorCoverage >= 65 &&
+        (chunk == MetalChunk::MTLComputeCommandEncoder_setTexture ||
+         chunk == MetalChunk::MTLComputeCommandEncoder_setTextures))
+    {
+      ResourceId encoder; scan.Serialise("ComputeCommandEncoder"_lit, encoder);
+      NS::Range range = NS::Range::Make(0, 0);
+      rdcarray<uint8_t> bound; rdcarray<ResourceId> textures;
+      if(chunk == MetalChunk::MTLComputeCommandEncoder_setTexture)
+      {
+        ResourceId texture; uint64_t index = 0;
+        scan.Serialise("texture"_lit, texture); scan.Serialise("index"_lit, index);
+        range = NS::Range::Make(index, 1); textures.push_back(texture);
+        bound.push_back(texture != ResourceId() ? 1 : 0);
+      }
+      else
+      {
+        scan.Serialise("range"_lit, range); scan.Serialise("bound"_lit, bound);
+        scan.Serialise("textures"_lit, textures);
+      }
+      success = liveEncoders.count(encoder) && range.location < 128 &&
+          range.length <= 128 - range.location && textures.size() == range.length &&
+          bound.size() == range.length && preflightBudget.Consume(range.length * 16);
+      for(size_t i = 0; success && i < textures.size(); i++)
+      {
+        const ResourceId texture = textures[i];
+        success = bound[i] <= 1 && (bound[i] != 0) == (texture != ResourceId());
+        if(texture == ResourceId()) { computes[encoder].textures.erase(range.location + i); continue; }
+        const auto future = m_DescriptorFrameTextures.find(texture);
+        auto object = GetResourceManager()->GetResource(texture, true);
+        const bool live = future != m_DescriptorFrameTextures.end() ?
+            m_DescriptorPreflightLiveTextures.count(texture) || m_DescriptorPreflightLiveViews.count(texture) :
+            object && object->m_Type == eResTexture && object->m_Device == this && object->m_Real;
+        success &= live && !m_DescriptorPreflightAliasedBuffers.count(texture) &&
+                   !m_DescriptorPreflightAliasedBuffers.count(viewBacking(texture));
+        if(success) { computes[encoder].textures[range.location + i] = texture; noteResource(texture, encoder); }
+      }
+    }
+    else if(m_DescriptorCoverage >= 65 &&
+        (chunk == MetalChunk::MTLComputeCommandEncoder_setSamplerState ||
+         chunk == MetalChunk::MTLComputeCommandEncoder_setSamplerStates ||
+         chunk == MetalChunk::MTLComputeCommandEncoder_setSamplerState_lodclamp ||
+         chunk == MetalChunk::MTLComputeCommandEncoder_setSamplerStates_lodclamp))
+    {
+      ResourceId encoder; scan.Serialise("ComputeCommandEncoder"_lit, encoder);
+      const bool single = chunk == MetalChunk::MTLComputeCommandEncoder_setSamplerState ||
+          chunk == MetalChunk::MTLComputeCommandEncoder_setSamplerState_lodclamp;
+      const bool lod = chunk == MetalChunk::MTLComputeCommandEncoder_setSamplerState_lodclamp ||
+          chunk == MetalChunk::MTLComputeCommandEncoder_setSamplerStates_lodclamp;
+      NS::Range range = NS::Range::Make(0, 0);
+      rdcarray<uint8_t> bound; rdcarray<ResourceId> samplers;
+      rdcarray<float> minimums, maximums;
+      if(single)
+      {
+        bool present = false; ResourceId sampler; uint64_t index = 0;
+        if(lod) scan.Serialise("bound"_lit, present);
+        scan.Serialise("sampler"_lit, sampler);
+        if(lod)
+        {
+          float minimum = 0, maximum = 0;
+          scan.Serialise("lodMinClamp"_lit, minimum); scan.Serialise("lodMaxClamp"_lit, maximum);
+          minimums.push_back(minimum); maximums.push_back(maximum);
+        }
+        scan.Serialise("index"_lit, index);
+        range = NS::Range::Make(index, 1); samplers.push_back(sampler);
+        bound.push_back(lod ? uint8_t(present) : uint8_t(sampler != ResourceId()));
+      }
+      else
+      {
+        scan.Serialise("range"_lit, range); scan.Serialise("bound"_lit, bound);
+        scan.Serialise("samplers"_lit, samplers);
+        if(lod) { scan.Serialise("lodMinClamps"_lit, minimums); scan.Serialise("lodMaxClamps"_lit, maximums); }
+      }
+      success = liveEncoders.count(encoder) && range.location < 16 &&
+          range.length <= 16 - range.location && samplers.size() == range.length &&
+          bound.size() == range.length && (!lod ||
+          (minimums.size() == range.length && maximums.size() == range.length));
+      for(size_t i = 0; success && i < samplers.size(); i++)
+      {
+        const ResourceId sampler = samplers[i];
+        success = bound[i] <= 1 && (bound[i] != 0) == (sampler != ResourceId());
+        if(lod) success &= std::isfinite(minimums[i]) && std::isfinite(maximums[i]) &&
+            minimums[i] >= 0.0f && maximums[i] >= minimums[i];
+        if(sampler == ResourceId()) { computes[encoder].samplers.erase(range.location + i); continue; }
+        auto object = GetResourceManager()->GetResource(sampler, true);
+        success &= object && object->m_Type == eResSamplerState && object->m_Device == this && object->m_Real;
+        if(success) { computes[encoder].samplers[range.location + i] = sampler; noteResource(sampler, encoder); }
       }
     }
     else if(m_DescriptorCoverage >= 22 &&
@@ -6644,6 +8714,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         auto &snapshot = graphics[{encoder, stage}];
         snapshot.bytes.erase((uint32_t)index);
         snapshot.inlineData.erase((uint32_t)index);snapshot.pointers.erase((uint32_t)index);
+        snapshot.zeroAddressInline.erase((uint32_t)index);
         if(buffer == ResourceId()) snapshot.buffers.erase((uint32_t)index);
         else
         {
@@ -6661,9 +8732,16 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       ResourceId encoder; uint64_t index = 0; rdcarray<byte> data;
       const uint32_t stage = chunk == MetalChunk::MTLRenderCommandEncoder_setVertexBytes ? 1 : 2;
       scan.Serialise("RenderCommandEncoder"_lit, encoder); scan.Serialise("data"_lit, data); scan.Serialise("index"_lit, index);
-      const auto &layout=m_DescriptorInlineShadow[make_rdcpair(encoder, uint64_t(stage) << 32 | index)];
+      // Reading an absent declaration must not manufacture an empty layout.
+      // setBytes without metadata keeps its original payload; actual pointer
+      // consumers still need independently certified address sources below.
+      const auto layout=m_DescriptorInlineShadow.find(make_rdcpair(encoder, uint64_t(stage) << 32 | index));
       std::map<uint64_t,DescriptorSource> pointers;
-      for(const auto &source:layout.sources)pointers[source.first*layout.stride]=source.second;
+      if(layout!=m_DescriptorInlineShadow.end())
+        for(const auto &source:layout->second.sources)pointers[source.first*layout->second.stride]=source.second;
+      const bool zeroAddress = layout!=m_DescriptorInlineShadow.end() && !layout->second.count &&
+          (m_DescriptorCoverage >= 67 ||
+           (m_DescriptorCoverage >= 14 && ValidInlineDrawConstants(stage, index, data.size())));
       const auto original=data;
       for(const auto &source : pointers)
         noteResource(source.second.resource, encoder);
@@ -6673,6 +8751,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         graphics[{encoder, stage}].bytes[(uint32_t)index] = data.size();
         graphics[{encoder, stage}].inlineData[(uint32_t)index]=original;
         graphics[{encoder, stage}].pointers[(uint32_t)index]=pointers;
+        auto &zeroFields=graphics[{encoder,stage}].zeroAddressInline;
+        zeroFields.erase((uint32_t)index);
+        if(zeroAddress)zeroFields.insert((uint32_t)index);
         if(m_DescriptorCoverage >= 65) graphics[{encoder, stage}].buffers.erase((uint32_t)index);
         if(m_DescriptorCoverage >= 14 && stage == 1 && (index == 4 || index == 5))
           drawConstants[encoder][(uint32_t)index] = data;
@@ -6697,6 +8778,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       int64_t baseVertex = 0;
       MTL::IndexType indexType = MTL::IndexTypeUInt16;
       ResourceId indexBuffer; uint64_t indexOffset = 0;
+      uint64_t indexAPIOffset=0;
+      uint32_t renderIndirectOrdinal=UINT32_MAX;
       scan.Serialise("RenderCommandEncoder"_lit, encoder); scan.Serialise("primitiveType"_lit, primitiveType);
       bool indirectValid=true;
       if(indirect)
@@ -6705,10 +8788,12 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         {
           scan.Serialise("indexType"_lit,indexType);scan.Serialise("indexBuffer"_lit,indexBuffer);
           scan.Serialise("indexBufferOffset"_lit,indexOffset);
+          indexAPIOffset=indexOffset;
         }
         ResourceId buffer;uint64_t offset=0;
         scan.Serialise("indirectBuffer"_lit,buffer);scan.Serialise("indirectBufferOffset"_lit,offset);
         const uint32_t ordinal=capturedRenderIndirectOrdinals[encoder]++;
+        renderIndirectOrdinal=ordinal;
         const auto evidence=m_CapturedRenderIndirectArguments.find(make_rdcpair(encoder,ordinal));
         const ResourceId pass=childParents.count(encoder)?childParents[encoder]:encoder;
         auto object=GetResourceManager()->GetResource(buffer,true);
@@ -6818,6 +8903,11 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         if(m_DescriptorCoverage>=65 && success) {
           ComputeCBVOperation input;input.buffer=indexBuffer;input.offset=indexOffset;
           input.bytes=vertexCount*stride;input.readOffset=chunkOffset;input.indexedInput=true;
+          if(indirect)
+          {
+            input.indexEncoder=encoder;input.indexOrdinal=renderIndirectOrdinal;
+            input.indexAPIOffset=indexAPIOffset;input.indexStride=stride;
+          }
           computeCBVOperations[encoderCommands[encoder]].push_back(input);
           noteResource(indexBuffer,encoder);
         }
@@ -6875,6 +8965,11 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       }
       for(const auto &entry : m_DescriptorSlotShadow)
       {
+        // Allocation is lifetime metadata, not a publication or a shader read.
+        // A whole-table Native binding can coexist with slots allocated for
+        // later work. Relocate every published packet; actual address/consumer
+        // checks below still own required inputs. Do not borrow a later packet.
+        if(m_DescriptorCoverage >= 65 && entry.second.data.empty()) continue;
         bytebuf patched;
         if(entry.second.live && !PatchDescriptorSlot(entry.second, patched))
             {
@@ -6891,7 +8986,28 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         for(const auto &slot:m_DescriptorSlotShadow)
           boundASHeap |= slot.second.live && slot.second.sources.count(3) &&
               encoderResources[encoder].count(slot.first.first);
-      if(boundASHeap)
+      bool graphicsAddressRecovery = boundASHeap;
+      if(success && m_DescriptorCoverage >= 65 && vertexCount && instanceCount)
+        for(uint32_t stage = 1; stage <= 2; stage++)
+        {
+          const auto &snapshot = graphics[{encoder, stage}];
+          for(const auto &binding : snapshot.inlineData)
+          {
+            const auto origins = snapshot.pointers.find(binding.first);
+            // RelocateDescriptorInlineShadow already validated the complete
+            // address layout and every nonzero source for this exact setter.
+            // GPU indexing of those ordinary inputs needs no CPU value proof.
+            const bool sourced = origins != snapshot.pointers.end() && !origins->second.empty();
+            graphicsAddressRecovery |= !snapshot.zeroAddressInline.count(binding.first) && !sourced &&
+                !GetReplay()->IsGraphicsBufferStaticallyUnused(snapshot.pipeline, stage, binding.first);
+          }
+        }
+      // Real pointer restoration is independent of whether this draw binds an
+      // AS heap. Complete zero-field layouts preserve ordinary Native payloads;
+      // unknown inline layouts retain their source obligations. Published
+      // direct table packets are relocated by the existing table mechanism;
+      // a binding alone does not add a CPU access-analysis obligation.
+      if(graphicsAddressRecovery)
       {
         for(uint32_t stage=1;success && stage<=2;stage++)
         {
@@ -6900,24 +9016,31 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           success=GetReplay()->GetGraphicsAIR(snapshot.pipeline,stage,entry,air,linked);
           if(!success || entry.empty())continue;
           RuntimeDispatch draw;draw.pipeline=snapshot.pipeline;draw.stage=stage;draw.graphics=snapshot;
+          draw.indirectGraphics=indirect && m_DescriptorCoverage>=65 && vertexCount && instanceCount;
           draw.nullBufferFields=nullBufferFields;draw.nullGPUOwners=nullGPUOwners;
           draw.opaque=opaqueWrites;draw.indexBuffer=indexed?indexBuffer:ResourceId();
           draw.indexOffset=indexOffset;draw.indexCount=vertexCount;draw.indexStride=indexType==MTL::IndexTypeUInt16?2:4;
           draw.baseVertex=baseVertex;draw.vertexStart=vertexStart;draw.instanceCount=instanceCount;draw.baseInstance=baseInstance;
           for(const auto &slot:m_DescriptorSlotShadow)
-            if(slot.second.live && !slot.second.data.empty())draw.slots.insert(slot);
+            if(slot.second.live)
+            {
+              // Freeze the logical namespace at this draw, as for compute.
+              // Capacity and retired generations are not current candidates;
+              // live but unpublished entries retain their address obligation.
+              draw.slotGenerations[slot.first]=slot.second.generation;
+              if(!slot.second.data.empty())draw.slots.insert(slot);
+            }
           draw.headers=m_RayASHeaderCurrent;draw.structures=m_RayIRASCurrentContents;
           draw.structureOwners=rayASBuildCommands;
-          runtimeDispatches[make_rdcpair(chunkOffset,stage)]=draw;
+          runtimeDispatches[make_rdcpair(chunkOffset,stage)]=std::move(draw);
           ComputeCBVOperation proof={ResourceId(),0,0,false,false,chunkOffset,{}};proof.stage=stage;
           computeCBVOperations[encoderCommands[encoder]].push_back(proof);
         }
         if(success)graphicsConsumerEncoders.insert(encoder);
       }
-      // The captured per-use indirect arguments (or direct API arguments) are
-      // authoritative here. An empty draw executes no shader and consumes no AS
-      // build closure, just as an empty compute grid has no dispatch consumers.
-      // Slot relocation/publication and indirect-input validation above remain.
+      // Original zero work has no shader-consumption closure; replay verifies
+      // it stays empty. Otherwise the sourced non-indexed namespace is restored
+      // with unknown builtins, independently of the recorded numeric counts.
       if(success && vertexCount && instanceCount) noteSubmissionSlots(encoder);
       if(m_DescriptorCoverage >= 15) pendingWork.insert(encoderCommands[encoder]);
       consumed = true;
@@ -6968,6 +9091,13 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         const auto owner=pendingNullGPUOwners.find(key);
         if(event==3 && !word && owner!=pendingNullGPUOwners.end())nullGPUOwners[key]=owner->second;
         pendingNullGPUOwners.erase(key);
+      }
+      if(success)
+      {
+        validatedTypedPublicationOwners.erase(key);
+        const auto producer=gpuCopyEncoders.find(key);
+        if(event==3 && producer!=gpuCopyEncoders.end())
+          validatedTypedPublicationOwners[key]=producer->second;
       }
       if(success && !m_DescriptorGPUCopyExpected.count(key)) gpuCopyEncoders.erase(key);
       if(success && submittedGeneration) {
@@ -7020,6 +9150,15 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           (m_DescriptorCoverage >= 45 ? ++producerCount <= 256 : ++copyCount <= 2) &&
           Serialise_DescriptorSlotProducer(scan, ResourceId(), 0, ResourceId(), ResourceId(), 0);
       if(success) gpuCopyEncoders[make_rdcpair(buffer, offset)] = encoder;
+      if(success)
+      {
+        const auto key=make_rdcpair(buffer,offset);
+        ValidatedTypedCopy proof;
+        proof.command=encoderCommands[encoder];proof.source=source;proof.sourceOffset=sourceOffset;
+        proof.generation=m_DescriptorSlotShadow.at(key).generation;
+        proof.packet=m_DescriptorGPUCopyExpected.at(key);
+        validatedTypedCopies[encoder][key]=proof;
+      }
       if(success)
       {
         setNullBufferField(buffer,offset,false);
@@ -7233,20 +9372,18 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       const bool shared=future!=m_DescriptorFrameBuffers.end()?
           (future->second.options&0xf0ULL)==MTL::ResourceStorageModeShared:
           src && src->storageMode()==MTL::StorageModeShared;
+      uint64_t footprint=0;
       success=liveBlits.count(encoder) && !isTable(source) &&
           shared && length && (future==m_DescriptorFrameBuffers.end() || m_DescriptorPreflightLiveBuffers.count(source)) &&
           !m_DescriptorPreflightAliasedBuffers.count(source) && !m_DescriptorPreflightAliasedBuffers.count(destination) &&
           texture && dstObject->m_Device==this && texture->textureType()==MTL::TextureType2D &&
           texture->storageMode()==MTL::StorageModePrivate && texture->hazardTrackingMode()==MTL::HazardTrackingModeTracked &&
-          (texture->pixelFormat()==MTL::PixelFormatR8Unorm || texture->pixelFormat()==MTL::PixelFormatBGRA8Unorm_sRGB) &&
-          texture->width()<=2048 && texture->height()<=2048 && HasReplayTextureInitialContents(destination) &&
-          ValidateMetalLinearTextureCopy(dst,slice,level,origin,size,length,offset,rowPitch,imagePitch,options);
-      uint64_t footprint=0;
-      if(success) {
-        const uint64_t bytes=texture->pixelFormat()==MTL::PixelFormatR8Unorm?1:4;
-        footprint=(size.height-1)*rowPitch+size.width*bytes;
-        success &= preflightBudget.Consume(footprint);
-      }
+          HasReplayTextureInitialContents(destination) &&
+          ValidateMetalLinearTextureCopy(dst,slice,level,origin,size,length,offset,rowPitch,imagePitch,options,&footprint);
+      // The original Native transfer defines its format and region. Reuse the
+      // same layout/overflow checks as replay instead of a sample-format or
+      // dimension licence; the existing allocation/work budgets remain bounded.
+      if(success) success=preflightBudget.Consume(footprint);
       if(success) {
         plainCopyBytes+=footprint;
         noteResource(source,encoder);noteResource(destination,encoder);
@@ -7327,16 +9464,26 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       scan.Serialise("BlitCommandEncoder"_lit, encoder); scan.Serialise("sourceBuffer"_lit, source);
       scan.Serialise("sourceOffset"_lit, sourceOffset); scan.Serialise("destinationBuffer"_lit, destination);
       scan.Serialise("destinationOffset"_lit, destinationOffset); scan.Serialise("size"_lit, size);
-      if((m_DescriptorCoverage >= 32 && !isTable(source) && !isTable(destination)) ||
+      auto capturedCopyField = [&](ResourceId buffer, uint64_t offset, uint64_t expected) {
+        bytebuf bytes; uint64_t value = 0;
+        if(!readIndexUpload(buffer,encoderCommands[encoder],offset,8,bytes,true)) return false;
+        memcpy(&value,bytes.data(),8); return value == expected;
+      };
+      const bool ordinaryDestination = m_DescriptorCoverage >= 65 &&
+          IsDescriptorOrdinaryWriteRange(destination, destinationOffset, size);
+      if(ordinaryDestination ||
+         (m_DescriptorCoverage >= 32 && !isTable(source) && !isTable(destination)) ||
          (m_DescriptorCoverage >= 30 && m_DescriptorPreludeBlitEncoders.count(encoder)))
       {
-        const uint64_t budget = DescriptorPlainCopyLimit(m_DescriptorCoverage);
-        success = size <= budget && preflightBudget.Consume(size) &&
+        // Record metadata cost, not GPU bytes copied. Allocations/staging are
+        // budgeted separately; optional numeric observations have their own cap.
+        success = preflightBudget.Consume(0) &&
             liveBlits.count(encoder) &&
             (!m_DescriptorFrameBuffers.count(source) || m_DescriptorPreflightLiveBuffers.count(source)) &&
             (!m_DescriptorFrameBuffers.count(destination) || m_DescriptorPreflightLiveBuffers.count(destination)) &&
             !m_DescriptorPreflightAliasedBuffers.count(source) && !m_DescriptorPreflightAliasedBuffers.count(destination) &&
-            TrackDescriptorGPUCopy(source, sourceOffset, destination, destinationOffset, size);
+            TrackDescriptorGPUCopy(source, sourceOffset, destination, destinationOffset, size,
+                encoderCommands[encoder],capturedCopyField);
         if(!success && getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
           fprintf(stderr,"Metal plain buffer copy proof: encoder=%s source=%s destination=%s offsets=%llu/%llu bytes=%llu total=%llu count=%u live=%d aliased=%d/%d\n",
               ToStr(encoder).c_str(),ToStr(source).c_str(),ToStr(destination).c_str(),
@@ -7346,8 +9493,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
               int(m_DescriptorPreflightAliasedBuffers.count(destination)));
         if(success)
         {
-          noteResource(source, encoder); noteResource(destination, encoder);
+          noteResource(source, encoder, sourceOffset, size); noteResource(destination, encoder, destinationOffset, size);
           pendingWork.insert(encoderCommands[encoder]); modifiedBuffers.insert(destination);
+          invalidateNullBufferFields(destination);
           invalidateAliasedBufferContents(destination);
           plainCopyBytes += size;
           ++plainCopyCount;
@@ -7359,7 +9507,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
              cbvLength && cbvLength<=DescriptorFrameBufferLimit(bool(cbvLayout.heap),m_DescriptorCoverage))
           {
             bytebuf known;
-            const bool sourced=readIndexUpload(source,encoderCommands[encoder],sourceOffset,size,known);
+            bool sourced=readIndexUpload(source,encoderCommands[encoder],sourceOffset,size,known);
+            if(sourced && !preflightBudget.Consume(known.size())){known.clear();sourced=false;}
             computeCBVOperations[encoderCommands[encoder]].push_back(
                 {destination,destinationOffset,size,false,sourced,0,known,source,sourceOffset});
           }
@@ -7391,9 +9540,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       }
       else {
         if(m_DescriptorCoverage >= 52) m_DescriptorPartialCopySubmissions[encoderCommands[encoder]].valid = false;
-        const uint64_t budget=DescriptorPlainCopyLimit(m_DescriptorCoverage);
-        success = size<=budget && preflightBudget.Consume(size) && liveBlits.count(encoder) &&
-            TrackDescriptorGPUCopy(source, sourceOffset, destination, destinationOffset, size);
+        success = preflightBudget.Consume(24) && liveBlits.count(encoder) &&
+            TrackDescriptorGPUCopy(source, sourceOffset, destination, destinationOffset, size,
+                encoderCommands[encoder],capturedCopyField);
         if(success)
         {
           ++copyCount;plainCopyBytes+=size;
@@ -7411,6 +9560,15 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
     }
     else if(chunk == MetalChunk::MTLCommandEncoder_DescriptorInlineBinding)
       success = Serialise_DescriptorInlineBinding(scan, ResourceId(), 0, 0, 0, ResourceId(), 0);
+    else if(chunk == MetalChunk::MTLComputeCommandEncoder_setThreadgroupMemoryLength)
+    {
+      ResourceId encoder; uint64_t length=0,index=0;
+      scan.Serialise("ComputeCommandEncoder"_lit,encoder);
+      scan.Serialise("length"_lit,length);scan.Serialise("index"_lit,index);
+      success = liveEncoders.count(encoder) && index < 31 && !(length & 15) &&
+          length <= Unwrap(this)->maxThreadgroupMemoryLength();
+      if(success)computes[encoder].threadgroupMemory[(uint32_t)index]=length;
+    }
     else if(chunk == MetalChunk::MTLComputeCommandEncoder_setBytes)
     {
       ResourceId encoder; uint64_t index = 0; rdcarray<byte> data;
@@ -7419,6 +9577,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       const auto layout=m_DescriptorInlineShadow.find(make_rdcpair(encoder,index));
       if(layout!=m_DescriptorInlineShadow.end())
         for(const auto &source:layout->second.sources)noteResource(source.second.resource,encoder);
+      const bool zeroAddress = m_DescriptorCoverage >= 67 &&
+          layout!=m_DescriptorInlineShadow.end() && !layout->second.count;
       std::map<uint64_t,DescriptorSource> pointers;
       if(layout!=m_DescriptorInlineShadow.end())
         for(const auto &source:layout->second.sources)
@@ -7431,6 +9591,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         computes[encoder].bytes[(uint32_t)index] = data.size();
         computes[encoder].inlineData[(uint32_t)index] = data;
         computes[encoder].pointers[(uint32_t)index] = pointers;
+        auto &zeroFields=computes[encoder].zeroAddressInline;
+        zeroFields.erase((uint32_t)index);
+        if(zeroAddress)zeroFields.insert((uint32_t)index);
       }
     }
     else
@@ -7455,7 +9618,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
             for(ResourceId reservation : reservationOrder)
             {
               if(reservation == command) break;
-              if(!committed.count(reservation)) success = false;
+              if(submissionQueues[reservation] == submissionQueues[command] &&
+                 !committed.count(reservation)) success = false;
             }
           }
           if(m_DescriptorCoverage >= 19)
@@ -7483,12 +9647,20 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
           dispatchEncoder=encoder;
           runtimeConsumerEncoders.erase(encoder);
           ++dispatchCount;
-          success &= liveEncoders.count(encoder) && !appliedInline[encoder].empty() &&
+          // Native shaders with ordinary buffer arguments need no fabricated
+          // inline pointer. Their actual bindings/reflection are validated here;
+          // real inline/runtime roots retain their layout/address checks below.
+          success &= liveEncoders.count(encoder) &&
+              (m_DescriptorCoverage >= 65 || !appliedInline[encoder].empty()) &&
               GetReplay()->ValidateComputeBufferSnapshot(computes[encoder].pipeline,
-                  computes[encoder].buffers, computes[encoder].bytes);
+                  computes[encoder].buffers, computes[encoder].bytes, computes[encoder].textures,
+                  computes[encoder].samplers);
           const bool indirectDispatch = m_DescriptorCoverage >= 57 &&
               chunk == MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups_indirect;
-          if(chunk != MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups && !indirectDispatch) success = false;
+          const bool threadDispatch = chunk == MetalChunk::MTLComputeCommandEncoder_dispatchThreads;
+          MTL::Size invocationGrid={};
+          if(chunk != MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups &&
+             !threadDispatch && !indirectDispatch) success = false;
           else
           {
             ResourceId indirectArguments;
@@ -7526,13 +9698,29 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
                 computeCBVOperations[encoderCommands[encoder]].push_back(input);
               }
             }
-            else scan.Serialise("groups"_lit, groups);
+            else scan.Serialise(threadDispatch ? "grid"_lit : "groups"_lit, groups);
             scan.Serialise("threadsPerGroup"_lit, threads);
+            if(threadDispatch)
+            {
+              invocationGrid=groups;
+              const uint64_t gridAxes[]={groups.width,groups.height,groups.depth};
+              const uint64_t threadAxes[]={threads.width,threads.height,threads.depth};
+              success &= MetalComputeThreadGridExtentFits(gridAxes,threadAxes);
+              if(success)
+                groups=MTL::Size(groups.width/threads.width+(groups.width%threads.width!=0),
+                    groups.height/threads.height+(groups.height%threads.height!=0),
+                    groups.depth/threads.depth+(groups.depth%threads.depth!=0));
+            }
+            else if(!indirectDispatch)
+              invocationGrid=MTL::Size(groups.width*threads.width,groups.height*threads.height,
+                  groups.depth*threads.depth);
             // Capture-time counts are observations of ordinary GPU data. They
             // cannot prove a Native indirect consumer inactive on replay.
             dispatchRuns=indirectDispatch || (groups.width && groups.height && groups.depth);
             if(HasRayQueryHeapPipeline(computes[encoder].pipeline))
             {
+              // Legacy query recipes specify uniform groups, not an exact thread grid.
+              success &= !threadDispatch;
               const auto heap=computes[encoder].buffers[0];
               success &= ValidateRayQueryHeapDispatch(computes[encoder].pipeline,
                   heap.resourceId,heap.byteOffset,computes[encoder].inlineData[2],groups,threads,indirectDispatch,
@@ -7551,7 +9739,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
                   UniformDispatch uniform;
                   uniform.pipeline=computes[encoder].pipeline;uniform.heap=heap.resourceId;
                   uniform.roots=computes[encoder].inlineData[2];uniform.pointers=computes[encoder].pointers[2];
-                  uniform.invocationExtent={groups.width*threads.width,groups.height*threads.height,groups.depth*threads.depth};
+                  uniform.invocationExtent={invocationGrid.width,invocationGrid.height,invocationGrid.depth};
                   uniform.writes=m_IRComputeWriteResources;
                   const auto roots=m_IRComputeRoots.find(uniform.pipeline);
                   if(roots!=m_IRComputeRoots.end())
@@ -7648,7 +9836,7 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
                 if(samplers!=snapshot.buffers.end() && isTable(samplers->second.resourceId))
                 {uniform.samplerHeap=samplers->second.resourceId;uniform.samplerHeapOffset=samplers->second.byteOffset;}
                 if(!indirectDispatch)
-                  uniform.invocationExtent={groups.width*threads.width,groups.height*threads.height,groups.depth*threads.depth};
+                  uniform.invocationExtent={invocationGrid.width,invocationGrid.height,invocationGrid.depth};
                 // Only a direct dispatch supplies statically known Native
                 // builtins. Group coordinates are distinct from global IDs;
                 // the local scalar index spans the full 3D threadgroup.
@@ -7659,12 +9847,16 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
                 uniform.builtins.builtins["threadgroup_position_in_grid"]=group;
                 uniform.builtins.builtins["thread_index_in_threadgroup"]=MetalAIR::Value::Range(
                     0,threads.width*threads.height*threads.depth-1);
-                uniform.opaque=opaqueWrites;
+                uniform.opaque=opaqueWrites;uniform.encoder=encoder;
                 for(const auto &slot:m_DescriptorSlotShadow)
-                  if(slot.second.live && !slot.second.data.empty())uniform.slots.insert(slot);
+                  if(slot.second.live)
+                  {
+                    uniform.slotGenerations[slot.first]=slot.second.generation;
+                    if(!slot.second.data.empty())uniform.slots.insert(slot);
+                  }
                 uniform.headers=m_RayASHeaderCurrent;uniform.structures=m_RayIRASCurrentContents;
                 uniform.structureOwners=rayASBuildCommands;
-                runtimeDispatches[make_rdcpair(chunkOffset,0U)]=uniform;
+                runtimeDispatches[make_rdcpair(chunkOffset,0U)]=std::move(uniform);
                 computeCBVOperations[encoderCommands[encoder]].push_back({ResourceId(),0,0,false,false,chunkOffset,{}});
                 // This only schedules a proof. A failed runtime resource closure
                 // aborts the complete frame before any Native submission.
@@ -7674,10 +9866,12 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
             if(m_DescriptorCoverage >= 46)
             {
               // Reuse the normal dispatch compiler/device/threadgroup checks on
-              // this CPU snapshot. Dynamic threadgroup bindings remain outside
-              // the sourced contract until they have a corresponding snapshot.
+              // this CPU snapshot, including the current per-encoder dynamic
+              // threadgroup allocations. Their contents are Native GPU state,
+              // not captured device-buffer inputs or CPU shader value proofs.
               success &= GetReplay()->ValidateComputeThreadgroupSnapshot(
-                  computes[encoder].pipeline, threads, {});
+                  computes[encoder].pipeline, threads, computes[encoder].threadgroupMemory,
+                  threadDispatch ? &invocationGrid : NULL);
               const auto abi = m_IRComputeRuntimeABIs.find(computes[encoder].pipeline);
               if(abi != m_IRComputeRuntimeABIs.end())
               {
@@ -7697,7 +9891,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
               {
                 const uint64_t groupAxes[] = {groups.width, groups.height, groups.depth};
                 const uint64_t threadAxes[] = {threads.width, threads.height, threads.depth};
-                success &= MetalComputeDispatchExtentFits(groupAxes, threadAxes);
+                const uint64_t gridAxes[]={invocationGrid.width,invocationGrid.height,invocationGrid.depth};
+                success &= threadDispatch ? MetalComputeThreadGridExtentFits(gridAxes,threadAxes) :
+                    MetalComputeDispatchExtentFits(groupAxes, threadAxes);
               }
             }
             else
@@ -7723,7 +9919,8 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
                 ToStr(encoder).c_str(),ToStr(computes[encoder].pipeline).c_str(),dispatchCount,
                 liveEncoders.count(encoder)!=0,appliedInline[encoder].size(),computes[encoder].buffers.size(),
                 computes[encoder].bytes.size(),GetReplay()->ValidateComputeBufferSnapshot(computes[encoder].pipeline,
-                  computes[encoder].buffers,computes[encoder].bytes));
+                  computes[encoder].buffers,computes[encoder].bytes,computes[encoder].textures,
+                  computes[encoder].samplers));
             for(const auto &binding:computes[encoder].buffers)
               fprintf(stderr,"Metal compute buffer proof: slot=%u buffer=%s offset=%llu bytes=%llu\n",binding.first,
                   ToStr(binding.second.resourceId).c_str(),(unsigned long long)binding.second.byteOffset,
@@ -7741,31 +9938,73 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
             // layout, but actual pointer loads still need certified origins.
             // Schedule AIR recovery even if a missing inline declaration has
             // hidden the typed-table root from the declared binding map.
-            bool descriptors=!snapshot.inlineData.empty();
+            bool descriptors=false;
+            for(const auto &binding:snapshot.inlineData)
+              descriptors |= !GetReplay()->IsComputeBufferStaticallyUnused(snapshot.pipeline,binding.first);
             // A typed table can be bound directly, without an inline root.
             // Its actual Native slot/resource/offset has the same restoration
             // obligations as a table reached through declared inline pointers.
             for(const auto &binding:snapshot.buffers)
-              descriptors |= isTable(binding.second.resourceId);
+              if(!GetReplay()->IsComputeBufferStaticallyUnused(snapshot.pipeline,binding.first))
+                descriptors |= isTable(binding.second.resourceId);
             for(const auto &binding:snapshot.pointers)
               for(const auto &pointer:binding.second)descriptors |= isTable(pointer.second.resource);
             if(descriptors)
             {
               RuntimeDispatch native;
               native.nullBufferFields=nullBufferFields;native.nullGPUOwners=nullGPUOwners;
-              native.pipeline=snapshot.pipeline;native.nativeCompute=true;native.graphics=snapshot;native.opaque=opaqueWrites;
+              native.pipeline=snapshot.pipeline;native.encoder=encoder;native.nativeCompute=true;native.graphics=snapshot;native.opaque=opaqueWrites;
               if(!indirectDispatch)
-                native.invocationExtent={groups.width*threads.width,groups.height*threads.height,groups.depth*threads.depth};
+                native.invocationExtent={invocationGrid.width,invocationGrid.height,invocationGrid.depth};
               for(const auto &slot:m_DescriptorSlotShadow)
-                if(slot.second.live && !slot.second.data.empty())native.slots.insert(slot);
+                if(slot.second.live)
+                {
+                  native.slotGenerations[slot.first]=slot.second.generation;
+                  if(!slot.second.data.empty())native.slots.insert(slot);
+                }
               native.headers=m_RayASHeaderCurrent;native.structures=m_RayIRASCurrentContents;
               native.structureOwners=rayASBuildCommands;
-              runtimeDispatches[make_rdcpair(chunkOffset,0U)]=native;
+              runtimeDispatches[make_rdcpair(chunkOffset,0U)]=std::move(native);
               computeCBVOperations[encoderCommands[encoder]].push_back({ResourceId(),0,0,false,false,chunkOffset,{}});
               runtimeConsumerEncoders.insert(encoder);
             }
           }
           success &= validateDrawableReads(encoder);
+          if(success && dispatchRuns)
+            for(const auto &binding : computes[encoder].textures)
+            {
+              if(!GetReplay()->IsComputeTextureActive(computes[encoder].pipeline, binding.first)) continue;
+              const ResourceId texture = binding.second;
+              const ResourceId backing = viewBacking(texture);
+              if(!GetReplay()->IsComputeTextureWriteOnly(computes[encoder].pipeline, binding.first))
+                success &= HasReplayTextureInitialContents(texture) || HasReplayTextureInitialContents(backing) ||
+                           hasRestoredBufferTexturePixels(texture) ||
+                           hasNativeTextureProducer(texture, encoderCommands[encoder]);
+              // Direct Native bindings retain resource/producer dependencies
+              // independently of optional AIR descriptor access display.
+              const auto writer = typedTextureWriteCommands.find(texture);
+              if(writer != typedTextureWriteCommands.end())
+                success &= writer->second == encoderCommands[encoder] || committed.count(writer->second);
+              noteResource(texture, encoder);
+              if(!GetReplay()->IsComputeTextureReadOnly(computes[encoder].pipeline, binding.first))
+              {
+                typedTextureWriteCommands[texture] = encoderCommands[encoder];
+                colorWriteCommands[texture].insert(encoderCommands[encoder]);
+                modifiedBuffers.insert(texture);
+                if(backing != ResourceId() && (m_DescriptorFrameBuffers.count(backing) ||
+                    GetReplay()->GetBuffer(backing).resourceId != ResourceId()))
+                {
+                  // A buffer texture writes the same physical bytes as its
+                  // parent. Do not retain stale scalar/null/address proofs or
+                  // manufacture a typed publication from ordinary pixels.
+                  modifiedBuffers.insert(backing); opaqueWrites.insert(backing);
+                  invalidateAliasedBufferContents(backing); invalidateNullBufferFields(backing);
+                  noteOpaqueScalarWrite(backing, chunkOffset);
+                  if(isTable(backing) && !producerDestinations[encoder].count(backing))
+                    opaqueTableWrites.insert(backing);
+                }
+              }
+            }
           if(success) NoteDescriptorDispatch(encoder);
           if(success && m_DescriptorCoverage>=64)
             writtenSlots.insert(producerSlots[encoder].begin(),producerSlots[encoder].end());
@@ -7816,6 +10055,13 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         if(dispatch || m_DescriptorCoverage<61)
           for(const auto &entry : m_DescriptorSlotShadow)
           {
+            // Allocation/lifetime state is not a dispatch dependency. The
+            // captured Native binding/residency closure (including declared
+            // indirect resources) determines which logical tables are inputs.
+            // Their source identities still undergo the same relocation checks.
+            // Physical byte aliases have separate initial/range obligations.
+            if(m_DescriptorCoverage >= 65 && dispatch &&
+               !encoderResources[dispatchEncoder].count(entry.first.first)) continue;
             if(m_DescriptorCoverage>=63 && dispatch && entry.second.data.empty() &&
                m_DescriptorGPUWrittenBuffers.count(entry.first.first) &&
                producerDestinations[dispatchEncoder].count(entry.first.first)) continue;
@@ -7855,9 +10101,13 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
       fprintf(stderr, "Sourced Metal descriptor preflight rejected: %s streamOffset=%llu\n", GetChunkName((uint32_t)chunk).c_str(),(unsigned long long)chunkOffset);
     scan.EndChunk();
     const uint64_t endOffset = m_FrameReader->GetOffset();
-    if(endOffset < chunkOffset || !preflightBudget.Consume(endOffset - chunkOffset))
+    if(endOffset < chunkOffset || !preflightBudget.ConsumeScanChunk(endOffset - chunkOffset))
     {
       success = false;
+      if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
+        fprintf(stderr,"Metal preflight bookkeeping limit: chunk=%s streamOffset=%llu endOffset=%llu chargedBytes=%llu\n",
+            GetChunkName((uint32_t)chunk).c_str(),(unsigned long long)chunkOffset,
+            (unsigned long long)endOffset,(unsigned long long)preflightBudget.bytes);
       RDCERR("Metal replay preflight bookkeeping budget exhausted");
     }
   }
@@ -7928,7 +10178,16 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
         m_DescriptorInlineShadow.size(),m_DescriptorGPUCopyExpected.size(),liveBlits.size(),
         liveRenders.size(),liveEncoders.size(),liveParallelRenders.size(),activeChildren.size(),
         childParents.size(),committed.size(),commands.size());
-  if(success && m_DescriptorCoverage >= 52) m_DescriptorSubmissionOrder = submissionOrder;
+  m_DescriptorSubmissionQueues.clear();
+  m_DescriptorSubmissionResources.clear();
+  if(success && m_DescriptorCoverage >= 52)
+  {
+    m_DescriptorSubmissionOrder = submissionOrder;
+    m_DescriptorSubmissionQueues = submissionQueues;
+    for(const auto &resource : resourceCommands)
+      for(ResourceId command : resource.second)
+        m_DescriptorSubmissionResources[command].insert(resource.first);
+  }
   m_DescriptorGPUCopyExpected.clear();
   m_DescriptorDispatches.clear();
   m_DescriptorSlotShadow = m_DescriptorSlotInitial;
@@ -7939,8 +10198,9 @@ bool WrappedMTLDevice::ValidateDescriptorSlotFrame()
   m_DescriptorPreflight = false;
   m_RayIRASCurrentContents=m_ReplayASInitialContents;
   if(!success) m_DescriptorSubmissionSlots.clear();
-  if(!success) { m_ValidatedDescriptorBackingAliases.clear(); m_DescriptorBackingAliasConsumers.clear(); m_RetiredTextureAliasConsumers.clear(); m_DescriptorValidatedComputeResources.clear(); m_DescriptorSubmissionSnapshotOwners.clear(); m_DescriptorPartialCopySubmissions.clear(); m_DescriptorFrameBufferBirthOffsets.clear(); m_DescriptorSubmissionOrder.clear(); }
+  if(!success) { m_DescriptorCoexistingTextureViews.clear(); m_ValidatedDescriptorBackingAliases.clear(); m_DescriptorCoexistingBackingViews.clear(); m_DescriptorBackingAliasConsumers.clear(); m_RetiredTextureAliasConsumers.clear(); m_DescriptorValidatedComputeResources.clear(); m_DescriptorSubmissionSnapshotOwners.clear(); m_DescriptorPartialCopySubmissions.clear(); m_DescriptorFrameBufferBirthOffsets.clear(); m_DescriptorSubmissionOrder.clear(); }
   m_FrameReader->SetOffset(0);
+  if(success && m_DescriptorCoverage>=65) GetReplay()->SetSourcedRenderWorkBudget(drawWork);
   return success;
 }
 

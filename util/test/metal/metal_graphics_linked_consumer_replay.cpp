@@ -21,6 +21,8 @@ int main(int argc,char **argv)
   const bool gpuIndices=getenv("RENDERDOC_METAL_GRAPHICS_GPU_INDICES")!=nullptr;
   const bool early=getenv("RENDERDOC_METAL_GRAPHICS_EARLY_FRAGMENT")!=nullptr;
   const bool independent=getenv("RENDERDOC_METAL_GRAPHICS_FRAGMENT_INDEPENDENT")!=nullptr;
+  const bool dynamicIndex=getenv("RENDERDOC_METAL_GRAPHICS_DYNAMIC_INDEX")!=nullptr;
+  const bool fragmentTexture=getenv("RENDERDOC_METAL_GRAPHICS_DYNAMIC_TEXTURE")!=nullptr;
   const unsigned width=independent?37:16,height=independent?23:16;
   GlobalEnvironment env;env.enumerateGPUs=false;RENDERDOC_InitialiseReplay(env,{argv[0]});
   auto file=RENDERDOC_OpenCaptureFile();auto result=file->OpenFile(argv[1],"rdc",nullptr);
@@ -28,7 +30,7 @@ int main(int argc,char **argv)
   if(result.OK())rdctie(result,controller)=file->OpenCapture(ReplayOptions(),nullptr);
   file->Shutdown();
   if(!result.OK() || !controller){fprintf(stderr,"OpenCapture failed: %s\n",result.internal_msg?result.internal_msg->c_str():"unknown");return 4;}
-  ResourceId texture,table,data,color,indices;
+  ResourceId texture,table,data,color,indices,fragmentImage,fragmentTable;
   for(const auto &r:controller->GetResources())
   {
     if(r.name=="Linked graphics indices")indices=r.resourceId;
@@ -36,6 +38,8 @@ int main(int argc,char **argv)
     if(r.name=="Linked graphics resource heap")table=r.resourceId;
     if(r.name=="Linked graphics depth values")data=r.resourceId;
     if(r.name=="Linked graphics fragment output")color=r.resourceId;
+    if(r.name=="Linked graphics dynamic texture input")fragmentImage=r.resourceId;
+    if(r.name=="Linked graphics dynamic texture table")fragmentTable=r.resourceId;
   }
   rdcarray<uint32_t> draws;uint32_t last=0;
   if(!Actions(controller->GetRootActions(),draws,last) || draws.size()!=2 || texture==ResourceId() || table==ResourceId() || data==ResourceId() || (early && color==ResourceId()))return 5;
@@ -80,13 +84,33 @@ int main(int argc,char **argv)
         for(const auto &access:accesses)
           used+=access.stage==ShaderStage::Vertex && access.descriptorStore==table &&
               access.byteOffset==24 && access.type==DescriptorType::Buffer;
-        if(used!=1)return 9;
+        // A dynamic binding's candidate namespace is not actual per-draw
+        // descriptor feedback. The full Native pixels and real packet below
+        // remain mandatory, while optional access display may be unknown.
+        if(used!=(dynamicIndex?0:1))return 9;
         DescriptorRange range;range.offset=24;range.count=1;range.descriptorSize=24;range.type=DescriptorType::Buffer;
         const auto values=controller->GetDescriptors(table,{range});
         const auto locations=controller->GetDescriptorLocations(table,{range});
         if(values.size()!=1 || values[0].type!=DescriptorType::Buffer || values[0].resource!=data || values[0].byteOffset || values[0].byteSize!=16)return 8;
         if(locations.size()!=1 || locations[0].category!=DescriptorCategory::ReadOnlyResource)return 11;
         descriptors++;
+        if(fragmentTexture)
+        {
+          range.type=DescriptorType::Image;
+          const auto images=controller->GetDescriptors(fragmentTable,{range});
+          // Optional dynamic image display may be unknown. If it exposes an
+          // identity it must be real; the full pixels and packet remain checked.
+          if(images.size()!=1 || (images[0].resource!=ResourceId() &&
+             (images[0].resource!=fragmentImage || images[0].type!=DescriptorType::Image)))return 14;
+          const auto bytes=controller->GetBufferData(fragmentTable,0,48);
+          if(bytes.size()!=48)return 14;
+          for(unsigned row=0;row<2;row++)
+          {
+            uint64_t zero=1,metadata=0,handle=0;memcpy(&zero,bytes.data()+24*row,8);memcpy(&handle,bytes.data()+24*row+8,8);memcpy(&metadata,bytes.data()+24*row+16,8);
+            if(zero || !handle || metadata!=(row?0x2222222222222222ULL:0x1111111111111111ULL))
+            {fprintf(stderr,"texture packet row=%u zero=%llu metadata=%llx\n",row,(unsigned long long)zero,(unsigned long long)metadata);return 14;}
+          }
+        }
       }
     }
   controller->Shutdown();RENDERDOC_ShutdownReplay();

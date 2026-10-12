@@ -90,7 +90,8 @@ bool MetalResourceRecord::MarkResourceFrameReferenced(ResourceId id, FrameRefTyp
   // write cannot establish a full overwrite of the parent allocation.
   if(state && state->m_Type == eResTexture && state->textureParent != ResourceId())
     ResourceRecord::MarkResourceFrameReferenced(state->textureParent, eFrameRef_ReadBeforeWrite);
-  if(state && (state->m_Type == eResDepthStencilState || state->m_Type == eResSamplerState))
+  if(state && (state->m_Type == eResDepthStencilState || state->m_Type == eResSamplerState ||
+               state->m_Type == eResComputePipelineState || state->m_Type == eResRenderPipelineState))
     AddParent(state);
   UnlockChunks();
   return added;

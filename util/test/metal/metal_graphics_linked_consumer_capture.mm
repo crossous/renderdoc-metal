@@ -17,6 +17,15 @@ int main(int argc,char **argv)
     const bool gpuIndices=getenv("RENDERDOC_METAL_GRAPHICS_GPU_INDICES")!=nullptr;
     const bool early=getenv("RENDERDOC_METAL_GRAPHICS_EARLY_FRAGMENT")!=nullptr;
     const bool independent=getenv("RENDERDOC_METAL_GRAPHICS_FRAGMENT_INDEPENDENT")!=nullptr;
+    const bool pendingConsumed=getenv("RENDERDOC_METAL_GRAPHICS_PENDING_CONSUMED")!=nullptr;
+    const bool pendingSlot=pendingConsumed || getenv("RENDERDOC_METAL_GRAPHICS_PENDING_SLOT")!=nullptr;
+    const bool retiredRow=getenv("RENDERDOC_METAL_GRAPHICS_RETIRED_ROW")!=nullptr;
+    const bool dynamicIndex=getenv("RENDERDOC_METAL_GRAPHICS_DYNAMIC_INDEX")!=nullptr;
+    const bool fragmentTexture=getenv("RENDERDOC_METAL_GRAPHICS_DYNAMIC_TEXTURE")!=nullptr;
+    if(fragmentTexture && (!early || !dynamicIndex))return 14;
+    const char *rebindCountText=getenv("RENDERDOC_METAL_GRAPHICS_REBIND_COUNT");
+    const unsigned rebindCount=rebindCountText?unsigned(strtoul(rebindCountText,nullptr,10)):0;
+    if(rebindCount>32768)return 15;
     const unsigned width=independent?37:16,height=independent?23:16;
     const unsigned fragmentSlot=independent?11:3;
     __attribute__((objc_precise_lifetime)) id<MTLDevice> device=MTLCreateSystemDefaultDevice();
@@ -57,7 +66,7 @@ int main(int argc,char **argv)
     auto header=[device newBufferWithLength:64 options:MTLResourceStorageModeShared];memset(header.contents,0,64);
     ((uint64_t *)header.contents)[0]=tlas.gpuResourceID._impl;((uint64_t *)header.contents)[1]=contributions.gpuAddress;
     const float depths[4]={.9f,.25f,.75f,.9f},positions[12]={-1,-1,0,1,3,-1,0,1,-1,3,0,1};
-    const uint32_t selectors[2]={1,2},settingsValue=1;const uint16_t indexValues[3]={0,1,2};
+    const uint32_t selectors[2]={1,2},settingsValue=dynamicIndex?0x40000000U:pendingConsumed?2:1;const uint16_t indexValues[3]={0,1,2};
     auto data=[device newBufferWithBytes:depths length:sizeof(depths) options:MTLResourceStorageModeShared];data.label=@"Linked graphics depth values";
     auto vertices=[device newBufferWithBytes:positions length:sizeof(positions) options:MTLResourceStorageModeShared];vertices.label=@"Linked graphics positions";
     auto selections=[device newBufferWithBytes:selectors length:sizeof(selectors) options:MTLResourceStorageModeShared];selections.label=@"Linked graphics instance selectors";
@@ -74,8 +83,29 @@ int main(int argc,char **argv)
     id<MTLComputePipelineState> indexPipeline=nil;
     if(gpuIndices){indexPipeline=[device newComputePipelineStateWithFunction:[main newFunctionWithName:@"native_indices"] error:&error];
       if(!indexPipeline)return 12;}
-    auto heap=[device newBufferWithLength:48 options:MTLResourceStorageModeShared];heap.label=@"Linked graphics resource heap";
+    const Entry creationRows[3]={{header.gpuAddress,0,0},{data.gpuAddress,0,sizeof(depths)},
+        {data.gpuAddress,0,sizeof(depths)}};
+    auto heap=retiredRow?[device newBufferWithBytes:creationRows length:sizeof(creationRows) options:MTLResourceStorageModeShared]:
+        [device newBufferWithLength:pendingSlot?72:48 options:MTLResourceStorageModeShared];heap.label=@"Linked graphics resource heap";
+    if(!retiredRow)memset(heap.contents,0,heap.length);
     ((Entry *)heap.contents)[0]={header.gpuAddress,0,0};((Entry *)heap.contents)[1]={data.gpuAddress,0,sizeof(depths)};
+    id<MTLTexture> fragmentImage=nil,fragmentParent=nil;
+    id<MTLBuffer> fragmentTable=nil;
+    if(fragmentTexture)
+    {
+      auto td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:independent?MTLPixelFormatRGBA16Float:MTLPixelFormatRGBA32Float width:2 height:1 mipmapped:NO];
+      td.storageMode=MTLStorageModeShared;td.usage=MTLTextureUsageShaderRead|(independent?MTLTextureUsagePixelFormatView:0);
+      fragmentParent=[device newTextureWithDescriptor:td];
+      const float fp[8]={.25f,0,0,1,.75f,0,0,1};
+      const uint16_t hp[8]={0x3400,0,0,0x3c00,0x3a00,0,0,0x3c00};
+      [fragmentParent replaceRegion:MTLRegionMake2D(0,0,2,1) mipmapLevel:0 withBytes:independent?(const void *)hp:(const void *)fp bytesPerRow:independent?16:32];
+      fragmentImage=independent?[fragmentParent newTextureViewWithPixelFormat:td.pixelFormat textureType:MTLTextureType2D levels:NSMakeRange(0,1) slices:NSMakeRange(0,1)]:fragmentParent;
+      fragmentImage.label=@"Linked graphics dynamic texture input";
+      const Entry rows[2]={{0,fragmentImage.gpuResourceID._impl,0x1111111111111111ULL},
+          {0,fragmentImage.gpuResourceID._impl,0x2222222222222222ULL}};
+      fragmentTable=[device newBufferWithBytes:rows length:sizeof(rows) options:MTLResourceStorageModeShared];
+      fragmentTable.label=@"Linked graphics dynamic texture table";
+    }
     auto textureDesc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:width height:height mipmapped:NO];
     textureDesc.storageMode=MTLStorageModePrivate;textureDesc.usage=MTLTextureUsageRenderTarget;
     auto depth=[device newTextureWithDescriptor:textureDesc];depth.label=@"Linked graphics depth output";
@@ -99,12 +129,27 @@ int main(int argc,char **argv)
     {
       RENDERDOC_AnnotationValue coverage={};coverage.uint32=65;
       if(api->SetObjectAnnotation((__bridge void *)device,(__bridge void *)device,"metal.descriptorCoverage",eRENDERDOC_UInt32,0,&coverage) ||
-         annotate(heap,"metal.descriptorTable",2,0,2,24) ||
+         annotate(heap,"metal.descriptorTable",2,0,pendingSlot||retiredRow?3:2,24) ||
          annotate(header,"metal.rayASHeader",0,(uint64_t)(__bridge void *)tlas,(uint64_t)(__bridge void *)contributions,0))return 4;
       for(unsigned i=0;i<2;i++)
         if(annotate(heap,"metal.descriptorSlotEvent",24*i,1,0,i?0:4) ||
            annotate(heap,"metal.descriptorSlotEvent",24*i,1,2,i?0:4) ||
            annotate(heap,"metal.descriptorSlotBinding",24*i,i?0:3,(uint64_t)(__bridge void *)(i?data:header),0))return 4;
+      if(retiredRow)
+      {
+        ((Entry *)heap.contents)[2]={data.gpuAddress,0,sizeof(depths)};
+        if(annotate(heap,"metal.descriptorSlotEvent",48,1,0,0) ||
+           annotate(heap,"metal.descriptorSlotEvent",48,1,2,0) ||
+           annotate(heap,"metal.descriptorSlotBinding",48,0,(uint64_t)(__bridge void *)data,0))return 4;
+      }
+      if(fragmentTexture)
+      {
+        if(annotate(fragmentTable,"metal.descriptorTable",1,0,2,24))return 4;
+        for(unsigned i=0;i<2;i++)
+          if(annotate(fragmentTable,"metal.descriptorSlotEvent",24*i,1,0,4) ||
+             annotate(fragmentTable,"metal.descriptorSlotEvent",24*i,1,2,4) ||
+             annotate(fragmentTable,"metal.descriptorSlotBinding",24*i,1,(uint64_t)(__bridge void *)fragmentImage,0))return 4;
+      }
       api->SetCaptureFilePathTemplate(argv[1]);api->StartFrameCapture(nullptr,nullptr);
     }
     auto command=[queue commandBuffer];
@@ -118,7 +163,12 @@ int main(int argc,char **argv)
     auto render=[command renderCommandEncoderWithDescriptor:makePass()];
     [render setRenderPipelineState:pipeline];[render setDepthStencilState:depthState];[render setCullMode:MTLCullModeNone];
     [render setViewport:MTLViewport{0,0,double(width),double(height),0,1}];[render setVertexBuffer:heap offset:0 atIndex:0];
-    if(early)[render setFragmentBuffer:heap offset:0 atIndex:fragmentSlot];
+    if(early)[render setFragmentBuffer:fragmentTexture?fragmentTable:heap offset:0 atIndex:fragmentSlot];
+    if(fragmentTexture)
+    {
+      [render setFragmentBuffer:settings offset:0 atIndex:2];
+      [render useResource:fragmentImage usage:MTLResourceUsageRead];
+    }
     const uint64_t root=settings.gpuAddress;const Input inputs[2]={{vertices.gpuAddress,sizeof(positions),16},{selections.gpuAddress,sizeof(selectors),4}};
     if(annotate(render,"metal.descriptorInlineLayout",1,2,1,8) ||
        annotate(render,"metal.descriptorInlineBinding",(1ULL<<32)|2,0,(uint64_t)(__bridge void *)settings,0) ||
@@ -126,16 +176,38 @@ int main(int argc,char **argv)
        annotate(render,"metal.descriptorInlineBinding",(1ULL<<32)|6,0,(uint64_t)(__bridge void *)vertices,0) ||
        annotate(render,"metal.descriptorInlineBinding",(1ULL<<32)|6,1,(uint64_t)(__bridge void *)selections,0)){[render endEncoding];return 4;}
     [render setVertexBytes:&root length:8 atIndex:2];[render setVertexBytes:inputs length:sizeof(inputs) atIndex:6];
+    // Legal setters overwrite one binding, without one retained allocation
+    // per call or any change to the defined Native output.
+    for(unsigned i=0;i<rebindCount;i++)[render setVertexBuffer:heap offset:0 atIndex:0];
     for(id<MTLResource> resource in @[vertices,selections,data,settings])[render useResource:resource usage:MTLResourceUsageRead];
+    // Allocation records do not publish bytes. The shaders use entries 0/1;
+    // entry 2 is allocated while this encoder is live and published only later.
+    if(pendingSlot && annotate(heap,"metal.descriptorSlotEvent",48,1,0,0))return 4;
+    // Contract negative: Native bytes are valid, but the address identity is
+    // deliberately published after its consuming draw. A later publication
+    // must not substitute for the missing per-use restoration fact.
+    if(pendingConsumed)((Entry *)heap.contents)[2]={data.gpuAddress,0,sizeof(depths)};
     for(unsigned base=0;base<2;base++)
     {
+      // Keep an actual preceding use: a leading retirement can legitimately
+      // invalidate the initial stale identity before any shader consumes the
+      // table. Here only the second draw sees the retired logical generation,
+      // while the Native bytes and selected row remain untouched.
+      if(retiredRow && base==1 && annotate(heap,"metal.descriptorSlotEvent",48,1,1,0))return 4;
       const uint32_t arguments[5]={3,1,indexOffset,0,base};const uint16_t kind=wideIndices?2:1;
       if(annotate(render,"metal.inlineDrawConstants",1,4,20,0) ||
          annotate(render,"metal.inlineDrawConstants",1,5,2,0)){[render endEncoding];return 4;}
       [render setVertexBytes:arguments length:20 atIndex:4];[render setVertexBytes:&kind length:2 atIndex:5];
       [render drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:3 indexType:wideIndices?MTLIndexTypeUInt32:MTLIndexTypeUInt16 indexBuffer:indices indexBufferOffset:indexOffset instanceCount:1 baseVertex:0 baseInstance:base];
     }
-    [render endEncoding];[command commit];[command waitUntilCompleted];if(command.status!=MTLCommandBufferStatusCompleted)return 5;
+    [render endEncoding];
+    if(pendingSlot)
+    {
+      ((Entry *)heap.contents)[2]={data.gpuAddress,0,sizeof(depths)};
+      if(annotate(heap,"metal.descriptorSlotEvent",48,1,2,0) ||
+         annotate(heap,"metal.descriptorSlotBinding",48,0,(uint64_t)(__bridge void *)data,0))return 4;
+    }
+    [command commit];[command waitUntilCompleted];if(command.status!=MTLCommandBufferStatusCompleted)return 5;
     if(gpuIndices)for(unsigned i=0;i<3;i++) {
       uint32_t actual=0;memcpy(&actual,(char *)indices.contents+indexOffset+i*(wideIndices?4:2),wideIndices?4:2);
       if(actual!=(1+i+(independent?1:0))%3)return 13;

@@ -13,6 +13,10 @@ int main()
   @autoreleasepool
   {
     const bool interleavedProducer = getenv("RENDERDOC_METAL_INTERLEAVED_PRODUCER") != nullptr;
+    const bool dynamicProducer = getenv("RENDERDOC_METAL_DYNAMIC_TYPED_PRODUCER") != nullptr;
+    const unsigned selectedRow = getenv("RENDERDOC_METAL_DYNAMIC_TYPED_SECOND_ROW") ? 2 : 1;
+    const bool retiredRow = getenv("RENDERDOC_METAL_DYNAMIC_TYPED_RETIRED_ROW") != nullptr;
+    const bool unpublishedRow = getenv("RENDERDOC_METAL_DYNAMIC_TYPED_UNPUBLISHED_ROW") != nullptr;
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     NSError *error = nil;
     id<MTLLibrary> library = [device newLibraryWithSource:@R"MSL(
@@ -36,11 +40,23 @@ kernel void copy_sourced(const device ulong *root [[buffer(0)]], device uint *ma
     for(uint index = 0; index < 3; ++index) destination[index] = source[index];
   marker[1] = 0xdeadbeefU;
 }
+struct Packet { ulong buffer; ulong texture; ulong length; };
+kernel void copy_selected(const device ulong *root [[buffer(0)]], device uint *marker [[buffer(1)]])
+{
+  const device Packet *arguments = reinterpret_cast<const device Packet *>(root[0]);
+  const device uint *settings = reinterpret_cast<const device uint *>(root[2]);
+  const device ulong *source = reinterpret_cast<const device ulong *>(arguments[0].buffer);
+  device ulong *destination = reinterpret_cast<device ulong *>(arguments[clz(settings[0])].buffer);
+  for(uint index = 0; index < 3; ++index) destination[index] = source[index];
+  marker[1] = 0xdeadbeefU;
+}
 )MSL" options:nil error:&error];
+    if(const char *binary = getenv("RENDERDOC_METAL_TEST_METALLIB"))
+      library = [device newLibraryWithURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:binary]] error:&error];
     id<MTLFunction> function = [library newFunctionWithName:@"sourced"];
     id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function error:&error];
     id<MTLComputePipelineState> producerPipeline = [device newComputePipelineStateWithFunction:
-        [library newFunctionWithName:@"copy_sourced"] error:&error];
+        [library newFunctionWithName:dynamicProducer ? @"copy_selected" : @"copy_sourced"] error:&error];
     MTLHeapDescriptor *hd = [MTLHeapDescriptor new];
     hd.type = MTLHeapTypePlacement; hd.storageMode = MTLStorageModeShared;
     hd.hazardTrackingMode = MTLHazardTrackingModeTracked; hd.size = 65536;
@@ -52,6 +68,8 @@ kernel void copy_sourced(const device ulong *root [[buffer(0)]], device uint *ma
     id<MTLBuffer> table = [device newBufferWithLength:48 options:MTLResourceStorageModeShared];
     id<MTLBuffer> output = [device newBufferWithLength:64 options:MTLResourceStorageModeShared];
     id<MTLBuffer> payload = [device newBufferWithLength:24 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> arguments = dynamicProducer ? [device newBufferWithLength:72 options:MTLResourceStorageModeShared] : nil;
+    id<MTLBuffer> settings = dynamicProducer ? [device newBufferWithLength:16 options:MTLResourceStorageModeShared] : nil;
     if(!pipeline || !producerPipeline || !a || !b || !table || !output || !payload) return 2;
     const uint32_t values[] = {0xbadU, 41U, 80U};
     memcpy(a.contents, values, sizeof(values));
@@ -64,7 +82,7 @@ kernel void copy_sourced(const device ulong *root [[buffer(0)]], device uint *ma
       auto get = (pRENDERDOC_GetAPI)dlsym(RTLD_DEFAULT, "RENDERDOC_GetAPI");
       if(!get || !get(eRENDERDOC_API_Version_1_7_0, (void **)&api)) return 4;
       api->SetCaptureFilePathTemplate(path);
-      RENDERDOC_AnnotationValue coverage = {}; coverage.uint32 = interleavedProducer ? 65 : 6;
+      RENDERDOC_AnnotationValue coverage = {}; coverage.uint32 = interleavedProducer || dynamicProducer ? 65 : 6;
       if(api->SetObjectAnnotation((__bridge void *)device, (__bridge void *)device,
           "metal.descriptorCoverage", eRENDERDOC_UInt32, 0, &coverage)) return 5;
     }
@@ -95,6 +113,23 @@ kernel void copy_sourced(const device ulong *root [[buffer(0)]], device uint *ma
     memset(table.contents, 0, 48);
     if(annotate(table, "metal.descriptorSlotEvent", 0, 1, 0, 5) || write(table, vaA, a, 4) ||
        annotate(payload, "metal.descriptorSlotEvent", 0, 1, 0, 5) || write(payload, vaB, b, 8)) return 7;
+    if(dynamicProducer)
+    {
+      if(!arguments || !settings || annotate(arguments, "metal.descriptorTable", 1, 0, 3, 24)) return 18;
+      uint64_t entries[] = {vaPayload, 0, 24, vaPayload, 0, 24, vaPayload, 0, 24};
+      entries[selectedRow * 3] = vaTable;entries[selectedRow * 3 + 2] = 48;
+      const uint32_t selection[] = {0x80000000U >> selectedRow, 0, 0, 0};
+      memcpy(arguments.contents, entries, sizeof(entries));
+      memcpy(settings.contents, selection, sizeof(selection));
+      for(uint64_t row = 0; row < 3; ++row)
+      {
+        id<MTLBuffer> source = row == selectedRow ? table : payload;
+        if(annotate(arguments, "metal.descriptorSlotEvent", row * 24, row + 1, 0, row == selectedRow ? 1 : 0)) return 19;
+        if(unpublishedRow && row == selectedRow)continue;
+        if(annotate(arguments, "metal.descriptorSlotEvent", row * 24, row + 1, 2, row == selectedRow ? 1 : 0) ||
+           annotate(arguments, "metal.descriptorSlotBinding", row * 24, 0, (uint64_t)(__bridge void *)source, 0)) return 19;
+      }
+    }
     CAMetalLayer *layer = [CAMetalLayer layer];
     layer.device=device; layer.pixelFormat=MTLPixelFormatBGRA8Unorm;
     layer.framebufferOnly=NO; layer.drawableSize=CGSizeMake(2, 2);
@@ -142,17 +177,24 @@ kernel void copy_sourced(const device ulong *root [[buffer(0)]], device uint *ma
         return true;
       };
       if(!consume(capture ? b : a, capture ? vaB : vaA, capture ? 8 : 4, 0)) return 10;
-      const uint64_t producerRoot[] = {vaPayload, 0xabcdef0123456789ULL,
-                                       vaTable, 0xfeedfacec001d00dULL};
+      if(dynamicProducer && retiredRow && capture == 0 &&
+         annotate(arguments, "metal.descriptorSlotEvent", 48, 3, 1, 0)) return 22;
+      const uint64_t producerRoot[] = {dynamicProducer ? arguments.gpuAddress : vaPayload, 0xabcdef0123456789ULL,
+                                       dynamicProducer ? settings.gpuAddress : vaTable, 0xfeedfacec001d00dULL};
       id<MTLComputeCommandEncoder> producer = [command computeCommandEncoder];
       [producer setComputePipelineState:producerPipeline];
       if(annotate(producer, "metal.descriptorInlineLayout", 0, 0, 2, 16) ||
-         annotate(producer, "metal.descriptorInlineBinding", 0, 0, (uint64_t)(__bridge void *)payload, 0) ||
-         annotate(producer, "metal.descriptorInlineBinding", 0, 1, (uint64_t)(__bridge void *)table, 0)) return 15;
+         annotate(producer, "metal.descriptorInlineBinding", 0, 0, (uint64_t)(__bridge void *)(dynamicProducer ? arguments : payload), 0) ||
+         annotate(producer, "metal.descriptorInlineBinding", 0, 1, (uint64_t)(__bridge void *)(dynamicProducer ? settings : table), 0)) return 15;
       [producer setBytes:producerRoot length:sizeof(producerRoot) atIndex:0];
       [producer setBuffer:output offset:0 atIndex:1];
       [producer useResource:payload usage:MTLResourceUsageRead];
       [producer useResource:table usage:MTLResourceUsageWrite];
+      if(dynamicProducer)
+      {
+        [producer useResource:arguments usage:MTLResourceUsageRead];
+        [producer useResource:settings usage:MTLResourceUsageRead];
+      }
       [producer dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(1,1,1)];
       if(annotate(table, "metal.descriptorSlotProducer", 0, (uint64_t)(__bridge void *)producer,
                    (uint64_t)(__bridge void *)payload, 0)) return 16;
@@ -178,6 +220,17 @@ kernel void copy_sourced(const device ulong *root [[buffer(0)]], device uint *ma
       const uint32_t *result = (const uint32_t *)output.contents;
       if(command.error || result[0] != (capture ? 80U : 41U) || result[1] != 0xdeadbeefU ||
          result[8] != (capture ? 41U : 80U) || result[9] != 0xdeadbeefU) return 11;
+      const uint64_t *words = (const uint64_t *)output.contents;
+      const uint64_t beforeVA = capture ? vaB : vaA;
+      if(words[1] != beforeVA || words[2] != vaTable || words[3] != beforeVA ||
+         words[5] != nextVA || words[6] != vaTable || words[7] != nextVA) return 20;
+      if(const char *oracle = getenv("RENDERDOC_METAL_TEST_ORACLE"))
+      {
+        char path[4096];snprintf(path,sizeof(path),"%s.%d.bin",oracle,capture);
+        FILE *file=fopen(path,"wbx");if(!file)return 21;
+        const bool saved=fwrite(output.contents,1,64,file)==64;
+        fclose(file);if(!saved)return 21;
+      }
       if(independent)
       {
         uint8_t pixel[4] = {};

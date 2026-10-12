@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include "renderdoc/api/replay/renderdoc_replay.h"
 
@@ -8,10 +9,12 @@ REPLAY_PROGRAM_MARKER()
 
 int main(int argc, char **argv)
 {
-  if(argc != 3) return 1;
+  const bool background=argc>=4 && !strcmp(argv[3],"background");
+  if(argc<3 || argc>5 || (argc>=4 && !background))return 1;
   const uint64_t size = strtoull(argv[2], nullptr, 10);
-  const uint64_t backing = 1024 * 1024, offset = 128 * 1024, prefix = 64 * 1024;
-  if(size != 229376 && size != backing) return 1;
+  const uint64_t backing=1024*1024, prefix=64*1024;
+  const uint64_t offset=argc==5?strtoull(argv[4],nullptr,10):128*1024;
+  if(!size || size>backing || offset<prefix || offset>=backing || size>backing-offset)return 1;
   GlobalEnvironment env; env.enumerateGPUs = false;
   RENDERDOC_InitialiseReplay(env, {argv[0]});
   auto file = RENDERDOC_OpenCaptureFile(); auto result = file->OpenFile(argv[1], "rdc", {});
@@ -73,7 +76,12 @@ int main(int argc, char **argv)
       auto bytes = replay->GetBufferData(original, 0, backing);
       if(bytes != expectedA(event)) { fprintf(stderr, "Original alias bytes mismatch event=%u\n", event); good = false; }
       auto aliasBytes = replay->GetBufferData(alias, 0, size);
-      if(event == 0) good &= aliasBytes.empty();
+      if(event==0 && !background)good &= aliasBytes.empty();
+      if(background && event<second)
+      {
+        good &= aliasBytes.size()==size;
+        for(byte value:aliasBytes)good &= value==0x11;
+      }
       if(event >= second)
       {
         good &= aliasBytes.size() == size;

@@ -45,6 +45,20 @@ int main(){@autoreleasepool {
   [[cb renderCommandEncoderWithDescriptor:present] endEncoding];[cb presentDrawable:dr];[cb commit];[cb waitUntilCompleted];if(cb.error)return 7;
   if(terminal && ([source setPurgeableState:MTLPurgeableStateEmpty]!=MTLPurgeableStateNonVolatile ||
                   [patch setPurgeableState:MTLPurgeableStateEmpty]!=MTLPurgeableStateNonVolatile))return 11;
+  id<MTLBuffer>lateOutput=nil;
+  if(terminal && getenv("RENDERDOC_METAL_LINEAR_PURGE_PAYLOAD")) {
+   // Ordinary integers may coincide with capture object IDs. They are data,
+   // and cannot extend the lifetime of an unrelated terminally purged source.
+   uint64_t values[512];for(unsigned n=0;n<512;n++)values[n]=n+1;
+   id<MTLBuffer>late=[d newBufferWithBytes:values length:sizeof(values) options:MTLResourceStorageModeShared];
+   ((uint64_t*)late.contents)[511]=0x12345678ULL+i;
+   lateOutput=[d newBufferWithLength:sizeof(values) options:MTLResourceStorageModeShared];
+   lateOutput.label=@"Ordinary payload after purge";
+   id<MTLCommandBuffer>later=[q commandBuffer];id<MTLBlitCommandEncoder>lateCopy=[later blitCommandEncoder];
+   [lateCopy copyFromBuffer:late sourceOffset:0 toBuffer:lateOutput destinationOffset:0 size:sizeof(values)];
+   [lateCopy endEncoding];[later commit];[later waitUntilCompleted];if(later.error)return 12;
+   for(unsigned n=0;n<512;n++)if(((const uint64_t*)lateOutput.contents)[n]!=(n==511?0x12345678ULL+i:n+1))return 13;
+  }
   if(api&&!api->EndFrameCapture(nullptr,nullptr))return 8;
 
   id<MTLBuffer>read=[d newBufferWithLength:256*4 options:MTLResourceStorageModeShared];id<MTLCommandBuffer>copy=[q commandBuffer];id<MTLBlitCommandEncoder>blit=[copy blitCommandEncoder];

@@ -2,13 +2,16 @@
 // Bounded uniform-address evaluation of AIR. Unknown expressions stay unknown;
 // this is static descriptor access, not per-invocation GPU feedback.
 #pragma once
+#include "metal_load_profile.h"
 #include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <regex>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -91,7 +94,7 @@ inline bool RegisterBitIntrinsicDeclaration(const std::string &line)
 }
 struct Value
 {
-  enum Kind { Unknown, Integer, Pointer, Texture, AccelerationStructure, Sampler, Buffer, ThreadGrid, Aggregate, PointerSet, LiteralPointer, NullBasedPointer, NativeQuery, DescriptorPointer, ShaderConstant } kind = Unknown;
+  enum Kind { Unknown, Integer, Pointer, Texture, AccelerationStructure, Sampler, Buffer, ThreadGrid, Aggregate, PointerSet, LiteralPointer, NullBasedPointer, NativeQuery, DescriptorPointer, ShaderConstant, ASHeaderPointer } kind = Unknown;
   // Complete pointer-free numeric storage embedded in the original module.
   // Native bytecode owns it; this is not an external object/address or a CPU
   // value proof. Loads remain numerically unknown, including GPU dynamic indices.
@@ -118,10 +121,23 @@ struct Value
   // namespaceEnd is an exclusive row boundary from a proved API invocation
   // range, not a selected GPU row or shader result. Zero means unbounded.
   uint64_t layoutStride=0, namespaceBase=0, namespaceStride=0, namespaceField=0, namespaceEnd=0;
+  // Typed public-header provenance: 1 header, 2 ordinary contribution data.
+  // This is an API namespace role, never a selected AS or a numerical index.
+  unsigned namespaceRole=0;
   std::vector<Value> fields;
   // Bytecode alternatives survive numerical selection for independent
   // relocation checks; they never become resource identities or GPU facts.
   std::vector<Value> literalOrigins;
+  // Missing entries already resolve to Value(). Retain every symbolic/typed
+  // fact, including Unknown row stride and literal origins; only the exact
+  // empty numerical observation can be omitted from the invocation-local map.
+  bool EmptyUnknown() const
+  {
+    return kind==Unknown && !object && !offset && !descriptorObject && !descriptorOffset &&
+        slot==-1 && !write && !read && !ordering && !numeric && !metadata && offsetKnown &&
+        !ranged && !resourceOnly && !maximum && !layoutStride && !namespaceBase &&
+        !namespaceStride && !namespaceField && !namespaceEnd && !namespaceRole && fields.empty() && literalOrigins.empty();
+  }
   uint64_t High() const { return ranged ? maximum : offset; }
   static Value Number(uint64_t n) { Value v; v.kind = Integer; v.offset = n; return v; }
   static Value Range(uint64_t low, uint64_t high)
@@ -145,6 +161,7 @@ inline Value MergePointerProvenance(const Value &a, const Value &b)
             old.descriptorObject==candidate.descriptorObject && old.descriptorOffset==candidate.descriptorOffset &&
             old.namespaceBase==candidate.namespaceBase && old.namespaceStride==candidate.namespaceStride &&
             old.namespaceField==candidate.namespaceField && old.namespaceEnd==candidate.namespaceEnd &&
+            old.namespaceRole==candidate.namespaceRole &&
             old.literalOrigins.empty() && candidate.literalOrigins.empty();
       if(!duplicate)result.fields.push_back(candidate);
     }
@@ -173,7 +190,7 @@ inline std::map<unsigned,std::vector<std::string>> PrivatePointerSpillOrigins(
   for(unsigned i=0;i<body.size();i++)
   {
     std::smatch m;
-    if(ImmutableSyntaxMatch(body[i],m,allocation) && !m[2].str().empty() && m[2].str().back()=='*')
+    if(body[i].find(" = alloca ")!=std::string::npos && ImmutableSyntaxMatch(body[i],m,allocation) && !m[2].str().empty() && m[2].str().back()=='*')
       allocations[m[1]]=i;
   }
   if(allocations.empty() || allocations.size()>128)return {};
@@ -184,7 +201,7 @@ inline std::map<unsigned,std::vector<std::string>> PrivatePointerSpillOrigins(
   for(unsigned i=0;i<body.size();i++)
   {
     std::smatch m;
-    if(ImmutableSyntaxMatch(body[i],m,label))
+    if(!body[i].empty() && body[i][0]!=' ' && ImmutableSyntaxMatch(body[i],m,label))
     {
       // LLVM may name the first block or omit its label entirely.
       if(!instructions[block].empty())
@@ -200,6 +217,7 @@ inline std::map<unsigned,std::vector<std::string>> PrivatePointerSpillOrigins(
     {
       const auto &line=body[i];
       if(line.find("  indirectbr ")==0 || line.find("  invoke ")==0 || line.find("callbr ")!=std::string::npos)return {};
+      if(line.find("label %")==std::string::npos)continue;
       for(std::sregex_iterator j(line.begin(),line.end(),target),end;j!=end;++j)
       {
         const auto next=labels.find((*j)[1]);if(next==labels.end())return {};
@@ -222,7 +240,8 @@ inline std::map<unsigned,std::vector<std::string>> PrivatePointerSpillOrigins(
     for(unsigned i=0;i<body.size();i++)
     {
       std::smatch m;
-      if(ImmutableSyntaxMatch(body[i],m,lifetimeAlias) && aliases.count(m[2]))
+      if(body[i].find(" = bitcast ")!=std::string::npos &&
+         ImmutableSyntaxMatch(body[i],m,lifetimeAlias) && aliases.count(m[2]))
       {aliases.insert(m[1]);aliasInstructions.insert(i);}
     }
     for(unsigned i=0;i<body.size();i++)
@@ -381,14 +400,345 @@ inline void AppendBufferCandidates(UniformAccessReport &report, const Value &add
     report.conditionalAccesses=true;
   }
 }
-inline UniformAccessReport UniformResourceAccess(const std::string &input,
-    const std::string &entry, const std::map<unsigned, Value> &bindings, const Loader &load,
-    const std::vector<uint64_t> &invocationExtent = {}, bool rangedIntegerLoads = false,
-    const InvocationValues &invocation = {}, const CallResolver &resolveCall = {},
-    bool pureFloatingMath = false)
+
+// Captured module syntax contains no resources, loader values or replay verdicts.
+// Content identity invalidates edits/replacements; entry-local metadata never
+// borrows another module's ordinals. Call/CFG data is reused by all dispatches.
+struct CallEffects { bool none=false,argumentsOnly=false,inaccessibleOnly=false,convergent=false,readOnly=false,writeOnly=false; };
+namespace InstructionGrammar
 {
-  try
+inline const std::regex &cast()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^bitcast .* " + memorySymbol + " to .*$");
+  return pattern;
+}
+inline const std::regex &constantGEP()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^getelementptr(?: inbounds)? .*?, .*? " + memorySymbol +
+      "(?:, i(?:32|64) [^,]+)+$");
+  return pattern;
+}
+inline const std::regex &pointerPhi()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern(R"(^phi [^\[]*\* (\[.*)$)");
+  return pattern;
+}
+inline const std::regex &intToPtr()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^inttoptr i64 " + symbol + " to .*$");
+  return pattern;
+}
+inline const std::regex &gep()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^getelementptr(?: inbounds)? (i8|i16|i32|i64|half|float|double), .* " + symbol + ", i(?:32|64) ([^ ,]+)$");
+  return pattern;
+}
+inline const std::regex &structGEP()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^getelementptr(?: inbounds)? (\\{[^}]+\\}|%[^,]+), .*? " + symbol + "((?:, i(?:32|64) [^,]+)+)$");
+  return pattern;
+}
+inline const std::regex &scalar()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^(mul|add|sub|and|shl|lshr|udiv|urem)(?: nuw| nsw)* i(32|64) ([^ ,]+), ([^ ,]+)$");
+  return pattern;
+}
+inline const std::regex &extend()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^(zext|sext|trunc) i(32|64) ([^ ,]+) to i(32|64)$");
+  return pattern;
+}
+inline const std::regex &extract()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^extractelement <3 x i32> " + symbol + ", i(?:32|64) ([0-2])$");
+  return pattern;
+}
+inline const std::regex &extractField()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^extractvalue [^ ]+ " + symbol + ", ([0-9]+)$");
+  return pattern;
+}
+inline const std::regex &insertField()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^insertvalue [^ ]+ ([^,]+), [^,]+, ([0-9]+)$");
+  return pattern;
+}
+inline const std::regex &compare()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^icmp (eq|ne|ugt|uge|ult|ule) i(32|64) ([^ ,]+), ([^ ,]+)$");
+  return pattern;
+}
+inline const std::regex &choose()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^select i1 ([^ ,]+), ([^,]+), (.+)$");
+  return pattern;
+}
+inline const std::regex &read()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^load (?:volatile )?(.*), .* " + memorySymbol + ", align [0-9]+.*$");
+  return pattern;
+}
+inline const std::regex &assign()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^  " + symbol + " = (.*)$");
+  return pattern;
+}
+inline const std::regex &functionCall()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern(R"(^.*\bcall [^@]+@([-a-zA-Z$._0-9]+)\((.*)\).*$)");
+  return pattern;
+}
+inline const std::regex &store()
+{
+  static const std::string symbol=R"((%[-a-zA-Z$._0-9]+))";
+  static const std::string memorySymbol=R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex pattern("^  store ([^,]+), (.*) " + symbol + ", align [0-9]+.*$");
+  return pattern;
+}
+}
+// Exact lexical equivalent of the anchored assignment grammar. Line scanning
+// avoids two regex passes/capture allocations per instruction; values remain
+// interpreted only against current invocation state.
+inline bool ParseAssignment(const std::string &line,std::string &symbol,std::string &expression)
+{
+  if(line.compare(0,3,"  %")!=0)return false;
+  const size_t end=line.find(" = ",3);
+  if(end==std::string::npos || end==3 ||
+     line.find_first_not_of("-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$._0123456789",3)<end ||
+     line.find_first_of("\r\n",end+3)!=std::string::npos)return false;
+  symbol=line.substr(2,end-2);expression=line.substr(end+3);return true;
+}
+enum class InstructionOp { cast, constantGEP, pointerPhi, intToPtr, gep, structGEP, scalar, extend, extract, extractField, insertField, compare, choose, read };
+// Preserve exact grammar captures as line-relative slices. std::match_results
+// carries several vectors even for an instruction with no matching operation;
+// keeping it per instruction evicted immutable modules on every reopen. These
+// arenas contain syntax only, never current bindings or replay eligibility.
+struct SyntaxCapture { uint32_t offset=0, length=0; };
+struct SyntaxMatchRef { uint32_t first=0, count=0; };
+struct SyntaxMatchView
+{
+  const std::string *line=nullptr;
+  const SyntaxCapture *groups=nullptr;
+  uint32_t count=0;
+  std::string operator[](size_t i) const
   {
+    if(i>=count)return {};
+    return line->substr(groups[i].offset,groups[i].length);
+  }
+  bool empty() const { return count==0; }
+};
+struct SyntaxOperation { InstructionOp op; SyntaxMatchRef match; };
+struct InstructionSyntax
+{
+  // An assigned result is line[2..expressionOffset-3); no duplicate strings.
+  uint32_t expressionOffset=0, firstOperation=0, operationCount=0;
+  SyntaxMatchRef call, stored;
+  bool Get(InstructionOp op, const std::string &line,
+           const std::vector<SyntaxCapture> &captures,
+           const std::vector<SyntaxOperation> &operations, SyntaxMatchView &result) const
+  {
+    for(uint32_t i=0;i<operationCount;i++)
+    {
+      const auto &p=operations[firstOperation+i];
+      if(p.op==op)
+      {result={&line,captures.data()+p.match.first,p.match.count};return true;}
+    }
+    result={};return false;
+  }
+};
+inline SyntaxMatchRef SaveSyntaxMatch(const std::smatch &match,
+    std::vector<SyntaxCapture> &captures, uint32_t base=0)
+{
+  if(captures.size()>UINT32_MAX || match.size()>UINT32_MAX-captures.size())
+    throw std::length_error("AIR syntax capture arena overflow");
+  SyntaxMatchRef ref={uint32_t(captures.size()),uint32_t(match.size())};
+  for(size_t i=0;i<match.size();i++)
+    captures.push_back({match[i].matched?base+uint32_t(match.position(i)):0,
+                       uint32_t(match.length(i))});
+  return ref;
+}
+inline bool CopySyntaxMatch(const SyntaxMatchRef &source,const std::string &line,
+    const std::vector<SyntaxCapture> &captures,SyntaxMatchView &target)
+{
+  target={&line,source.count?captures.data()+source.first:nullptr,source.count};
+  return source.count!=0;
+}
+inline void ParseInstructionSyntax(const std::string &line,InstructionSyntax &syntax,
+    std::vector<SyntaxCapture> &captures,std::vector<SyntaxOperation> &operations)
+{
+  if(line.size()>UINT32_MAX || operations.size()>UINT32_MAX)
+    throw std::length_error("AIR instruction syntax overflow");
+  std::string resultSymbol,expression;
+  if(ParseAssignment(line,resultSymbol,expression))
+    syntax.expressionOffset=uint32_t(line.size()-expression.size());
+  syntax.firstOperation=uint32_t(operations.size());
+  auto add=[&](InstructionOp op,const std::smatch &match) {
+    operations.push_back({op,SaveSyntaxMatch(match,captures,syntax.expressionOffset)});
+    syntax.operationCount++;
+  };
+  std::smatch call,stored;
+  if(line.find("call ")!=std::string::npos)
+    if(std::regex_match(line,call,InstructionGrammar::functionCall()))
+      syntax.call=SaveSyntaxMatch(call,captures);
+  if(line.compare(0,8,"  store ")==0)
+    if(std::regex_match(line,stored,InstructionGrammar::store()))
+      syntax.stored=SaveSyntaxMatch(stored,captures);
+  if(!syntax.expressionOffset)return;
+  // Each original expression grammar is anchored at a literal opcode. Select
+  // its grammar family before matching; GEP retains all three overlapping
+  // alternatives because the dynamic value kind still selects their meaning.
+  const std::string opcode=expression.substr(0,expression.find(' '));
+  if(opcode=="bitcast")
+  {
+    std::smatch cast;if(std::regex_match(expression,cast,InstructionGrammar::cast()))
+      add(InstructionOp::cast,cast);
+  }
+  else if(opcode=="getelementptr")
+  {
+    std::smatch constantGEP;if(std::regex_match(expression,constantGEP,InstructionGrammar::constantGEP()))
+      add(InstructionOp::constantGEP,constantGEP);
+    std::smatch gep;if(std::regex_match(expression,gep,InstructionGrammar::gep()))
+      add(InstructionOp::gep,gep);
+    std::smatch structGEP;if(std::regex_match(expression,structGEP,InstructionGrammar::structGEP()))
+      add(InstructionOp::structGEP,structGEP);
+  }
+  else if(opcode=="phi")
+  {
+    std::smatch pointerPhi;if(std::regex_match(expression,pointerPhi,InstructionGrammar::pointerPhi()))
+      add(InstructionOp::pointerPhi,pointerPhi);
+  }
+  else if(opcode=="inttoptr")
+  {
+    std::smatch intToPtr;if(std::regex_match(expression,intToPtr,InstructionGrammar::intToPtr()))
+      add(InstructionOp::intToPtr,intToPtr);
+  }
+  else if(opcode=="mul" || opcode=="add" || opcode=="sub" || opcode=="and" || opcode=="shl" || opcode=="lshr" || opcode=="udiv" || opcode=="urem")
+  {
+    std::smatch scalar;if(std::regex_match(expression,scalar,InstructionGrammar::scalar()))
+      add(InstructionOp::scalar,scalar);
+  }
+  else if(opcode=="zext" || opcode=="sext" || opcode=="trunc")
+  {
+    std::smatch extend;if(std::regex_match(expression,extend,InstructionGrammar::extend()))
+      add(InstructionOp::extend,extend);
+  }
+  else if(opcode=="extractelement")
+  {
+    std::smatch extract;if(std::regex_match(expression,extract,InstructionGrammar::extract()))
+      add(InstructionOp::extract,extract);
+  }
+  else if(opcode=="extractvalue")
+  {
+    std::smatch extractField;if(std::regex_match(expression,extractField,InstructionGrammar::extractField()))
+      add(InstructionOp::extractField,extractField);
+  }
+  else if(opcode=="insertvalue")
+  {
+    std::smatch insertField;if(std::regex_match(expression,insertField,InstructionGrammar::insertField()))
+      add(InstructionOp::insertField,insertField);
+  }
+  else if(opcode=="icmp")
+  {
+    std::smatch compare;if(std::regex_match(expression,compare,InstructionGrammar::compare()))
+      add(InstructionOp::compare,compare);
+  }
+  else if(opcode=="select")
+  {
+    std::smatch choose;if(std::regex_match(expression,choose,InstructionGrammar::choose()))
+      add(InstructionOp::choose,choose);
+  }
+  else if(opcode=="load")
+  {
+    std::smatch read;if(std::regex_match(expression,read,InstructionGrammar::read()))
+      add(InstructionOp::read,read);
+  }
+}
+struct FunctionSyntax
+{
+  bool valid=false, directArguments=false, hasAIR=false, internal=false;
+  bool hasDiscardDeclaration=false;
+  std::vector<std::pair<uint64_t,uint64_t>> bindingOrdinals;
+  std::vector<std::pair<uint64_t,std::string>> builtinOrdinals;
+  std::vector<uint64_t> gridOrdinals;
+  std::vector<std::string> args, body;
+  std::vector<InstructionSyntax> instructions;
+  std::vector<SyntaxCapture> captures;
+  std::vector<SyntaxOperation> operations;
+  std::vector<uint64_t> literalPointers;
+  std::map<std::string,CallEffects> callEffects;
+  std::map<std::string,std::string> types, loopBounds;
+  std::map<std::string,Value> constants;
+  std::map<unsigned,std::vector<std::string>> privatePointerSpills;
+};
+struct ModuleSyntax
+{
+  std::string input;
+  size_t contentHash=0;
+  std::map<std::string,std::string> aliases;
+  std::set<std::string> localDefinitions;
+};
+inline std::shared_ptr<const ModuleSyntax> ParseModuleSyntax(const std::string &input)
+{
+  MetalLoadProfile::Scope profile("AIR_module_parse");
+  auto module=std::make_shared<ModuleSyntax>(); module->input=input;
+  module->contentHash=std::hash<std::string>()(input);
+  static const std::regex reference(R"ref(!"air.visible_function_reference", [^\n]*@([-a-zA-Z$._0-9]+), !"([^"\n]+)")ref");
+  // The reference grammar cannot span lines. Avoid searching instructions which
+  // cannot contain this metadata (the old unanchored search was quadratic).
+  std::istringstream lines(input);std::string line;
+  while(std::getline(lines,line))
+  {
+    if(line.find("!\"air.visible_function_reference\"")!=std::string::npos)
+    {
+      for(std::sregex_iterator i(line.begin(),line.end(),reference),end;i!=end;++i)
+        module->aliases[(*i)[1]]=(*i)[2];
+    }
+    if(line.compare(0,16,"define internal ")==0 || line.compare(0,15,"define private ")==0)
+    {
+      const size_t begin=line.find('@'),end=line.find('(',begin);
+      if(begin!=std::string::npos && end!=std::string::npos)
+        module->localDefinitions.insert(line.substr(begin+1,end-begin-1));
+    }
+  }
+  return module;
+}
+inline std::shared_ptr<const FunctionSyntax> ParseFunctionSyntax(
+    const std::string &input,const std::string &entry)
+{
+  MetalLoadProfile::Scope profile("AIR_function_parse");
+  auto parsed=std::make_shared<FunctionSyntax>();
   // Grammar patterns are immutable across invocations. Compile them once;
   // resource bindings, loaders and access reports remain invocation-local.
   // metal-objdump emits a separate AIR module for each library function. Metadata
@@ -430,7 +780,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
   // Select one actual definition, rather than requiring the entire Native
   // module to contain only one function. Other helpers/entries do not supply
   // this function's body, argument ordinals or binding metadata.
-  if(definitions != 1 || signature.empty()) return {};
+  if(definitions != 1 || signature.empty()) return parsed;
   static const std::regex argument(R"((%[-a-zA-Z$._0-9]+)(?:,|\)))");
   std::vector<std::string> args;
   for(std::sregex_iterator i(signature.begin(), signature.end(), argument), end; i != end; ++i)
@@ -442,8 +792,9 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
   std::istringstream metadataStream(text);std::string metadataText,argumentList;
   while(std::getline(metadataStream,metadataText))
   {
+    if(metadataText.empty() || metadataText[0]!='!')continue;
     std::smatch record;
-    if(ImmutableSyntaxMatch(metadataText,record,metadataLine))
+    if(std::regex_match(metadataText,record,metadataLine))
     {
       metadata[record[1]]=record[2];
       // The first two entry references describe outputs and direct arguments.
@@ -458,102 +809,47 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
   if(!argumentList.empty())
   {
     const auto list=metadata.find(argumentList);
-    if(list==metadata.end())return {};
+    if(list==metadata.end())return parsed;
     argumentMetadata.clear();static const std::regex reference(R"(!([0-9]+))");
     for(std::sregex_iterator i(list->second.begin(),list->second.end(),reference),end;i!=end;++i)
     {
-      const auto field=metadata.find((*i)[1]);if(field==metadata.end())return {};
+      const auto field=metadata.find((*i)[1]);if(field==metadata.end())return parsed;
       argumentMetadata+=field->second+"\n";
     }
   }
-  else if(invocation.localDefinition)
-  {
-    // The actual same-module call supplies every ordinal. Never borrow another
-    // entry's direct metadata or an indirect member's binding location.
-    if(!bindings.empty() || invocation.arguments.size()!=args.size() ||
-       (signature.compare(0,16,"define internal ") &&
-        signature.compare(0,15,"define private ")))return {};
-    argumentMetadata.clear();
-  }
-  else if(text.find("!air.kernel =")!=std::string::npos || text.find("!air.vertex =")!=std::string::npos ||
-          text.find("!air.fragment =")!=std::string::npos || text.find("!air.visible =")!=std::string::npos)return {};
-  static const std::regex binding(R"binding(!\{i32 ([0-9]+), !"air.(?:indirect_buffer|buffer)", (?:!"air.buffer_size", i32 [0-9]+, )?!"air.location_index", i32 ([0-9]+),)binding");
-  for(std::sregex_iterator i(argumentMetadata.begin(), argumentMetadata.end(), binding), end; i != end; ++i)
-  {
-    uint64_t arg = std::stoull((*i)[1]), slot = std::stoull((*i)[2]);
-    if(slot > 30) continue;
-    auto b = bindings.find(unsigned(slot));
-    if(arg < args.size() && b != bindings.end()) values[args[arg]] = b->second;
-  }
-  for(const auto &parameter:invocation.arguments)
-  {
-    if(parameter.first>=args.size())return {};
-    values[args[parameter.first]]=parameter.second;
-  }
-  static const std::regex builtin(R"builtin(!\{i32 ([0-9]+), !"air.([^"\n]+)",)builtin");
-  for(std::sregex_iterator i(argumentMetadata.begin(),argumentMetadata.end(),builtin),end;i!=end;++i)
-  {
-    const auto b=invocation.builtins.find((*i)[2]);const auto arg=std::stoull((*i)[1]);
-    if(b!=invocation.builtins.end() && arg<args.size())values[args[arg]]=b->second;
-  }
-  static const std::regex gridArgument(R"grid(!\{i32 ([0-9]+), !"air.thread_position_in_grid",)grid");
-  if(invocationExtent.size()==3)
-    for(std::sregex_iterator i(argumentMetadata.begin(),argumentMetadata.end(),gridArgument),end;i!=end;++i)
-    {
-      const auto arg=std::stoull((*i)[1]);
-      if(arg<args.size()){Value v;v.kind=Value::ThreadGrid;values[args[arg]]=v;}
-    }
-  const std::string symbol = R"((%[-a-zA-Z$._0-9]+))";
-  static const std::regex literalPointerExpression(R"(inttoptr \(i64 ([0-9]+) to [^)]*\))");
-  static const std::regex nullExpression(R"((?:^| )null$)");
-  static const std::regex integerScalarType("i(8|16|32|64)");
-  static const std::regex assignedCall("^  " + symbol + " = ");
-  static const std::regex discardInstruction(R"(^.*\bcall void @air\.discard_fragment\(\)(?: .*)?$)");
-  static const std::regex discardDeclaration(R"((?:^|\n)declare void @air\.discard_fragment\(\)(?: |\n))");
-  static const std::regex floatingMath(R"(^.*\bcall (?:float|half|double|<[0-9]+ x (?:float|half|double)>) @air\.(?:fma|fabs|sqrt|rsqrt|dot)\.(?:f(?:16|32|64)|v[0-9]+f(?:16|32|64))\([^*]*\).*$)");
-  const std::string memorySymbol = R"(([%@][-a-zA-Z$._0-9]+))";
-  static const std::regex assign("^  " + symbol + " = (.*)$");
-  static const std::regex cast("^bitcast .* " + memorySymbol + " to .*$");
-  static const std::regex intToPtr("^inttoptr i64 " + symbol + " to .*$");
-  static const std::regex gep("^getelementptr(?: inbounds)? (i8|i16|i32|i64|half|float|double), .* " + symbol + ", i(?:32|64) ([^ ,]+)$");
-  static const std::regex scalar("^(mul|add|sub|and|shl|lshr|udiv|urem)(?: nuw| nsw)* i(32|64) ([^ ,]+), ([^ ,]+)$");
-  static const std::regex extend("^(zext|sext|trunc) i(32|64) ([^ ,]+) to i(32|64)$");
-  static const std::regex extract("^extractelement <3 x i32> " + symbol + ", i(?:32|64) ([0-2])$");
-  static const std::regex extractField("^extractvalue [^ ]+ " + symbol + ", ([0-9]+)$");
-  static const std::regex insertField("^insertvalue [^ ]+ ([^,]+), [^,]+, ([0-9]+)$");
-  static const std::regex functionCall(R"(^.*\bcall [^@]+@([-a-zA-Z$._0-9]+)\((.*)\).*$)");
-  static const std::regex compare("^icmp (eq|ne|ugt|uge|ult|ule) i(32|64) ([^ ,]+), ([^ ,]+)$");
-  static const std::regex choose("^select i1 ([^ ,]+), ([^,]+), (.+)$");
-  static const std::regex operand("(?:^| )(%[-a-zA-Z$._0-9]+|[0-9]+|true|false)$");
-  static const std::regex read("^load (?:volatile )?(.*), .* " + memorySymbol + ", align [0-9]+.*$");
-  static const std::regex store("^  store ([^,]+), (.*) " + symbol + ", align [0-9]+.*$");
-  static const std::regex deviceStoreType(R"((?:addrspace\([12]\)\*|ptr addrspace\([12]\))$)");
-  static const std::regex storedType(R"(^((?:i[0-9]+|float|half|double|<[^>]+>|%[^ ]+)) )");
-  static const std::regex atomicBufferArg("(i(8|16|32|64)) addrspace\\([12]\\)\\* (?:nocapture |readonly |nonnull |noundef )*"+symbol);
-  const std::string syncOperand="i32 (?:%[-a-zA-Z$._0-9]+|[0-9]+)";
-  static const std::regex synchronizationCall(
-        "^.*\\bcall void @air\\.(?:(?:wg|simdgroup)\\.barrier\\("+syncOperand+", "+syncOperand+
-        "|atomic\\.fence\\("+syncOperand+", "+syncOperand+", "+syncOperand+")\\).*$");
-  struct CallEffects { bool none=false,argumentsOnly=false,inaccessibleOnly=false,convergent=false,readOnly=false,writeOnly=false; };
+  parsed->directArguments = !argumentList.empty();
+  parsed->hasAIR = text.find("!air.kernel =")!=std::string::npos ||
+      text.find("!air.vertex =")!=std::string::npos ||
+      text.find("!air.fragment =")!=std::string::npos || text.find("!air.visible =")!=std::string::npos;
+  parsed->internal = signature.compare(0,16,"define internal ")==0 ||
+      signature.compare(0,15,"define private ")==0;
   std::map<std::string,std::string> attributeGroups;
   static const std::regex attributes(R"(^attributes #([0-9]+) = \{ ([^\n]+) \}$)");
   std::istringstream declarations(text);
   while(std::getline(declarations,line))
-  {std::smatch m;if(ImmutableSyntaxMatch(line,m,attributes))attributeGroups[m[1]]=m[2];}
+  {if(line.compare(0,12,"attributes #")!=0)continue;
+   std::smatch m;if(std::regex_match(line,m,attributes))attributeGroups[m[1]]=m[2];}
   std::map<std::string,CallEffects> callEffects;
   static const std::regex declaration(R"(^declare [^@]+@([-a-zA-Z$._0-9]+)\([^\n]*\)(.*)$)");
   declarations.clear();declarations.str(text);
   while(std::getline(declarations,line))
   {
-    std::smatch m;if(!ImmutableSyntaxMatch(line,m,declaration))continue;
+    if(line.compare(0,8,"declare ")!=0)continue;
+    std::smatch m;if(!std::regex_match(line,m,declaration))continue;
     std::string effects=m[2];std::smatch group;
-    if(std::regex_search(effects,group,std::regex(R"(#([0-9]+))")))
+    static const std::regex attributeGroup(R"(#([0-9]+))");
+    if(std::regex_search(effects,group,attributeGroup))
     {const auto found=attributeGroups.find(group[1]);if(found!=attributeGroups.end())effects+=" "+found->second;}
     CallEffects e;
     auto attribute=[&](const std::string &name) {
-      return std::regex_search(effects,std::regex("(?:^| )"+name+"(?: |$)"));
+      // Exact literal-token equivalent of (?:^| )name(?: |$). Do not
+      // compile nine identical regular expressions for every declaration.
+      for(size_t pos=0;(pos=effects.find(name,pos))!=std::string::npos;pos++)
+        if((pos==0 || effects[pos-1]==' ') &&
+           (pos+name.size()==effects.size() || effects[pos+name.size()]==' '))return true;
+      return false;
     };
-    e.none=attribute("readnone") || attribute(R"(memory\(none\))") ||
+    e.none=attribute("readnone") || attribute("memory(none)") ||
         RegisterBitIntrinsicDeclaration(line);
     // inaccessiblemem_or_argmemonly is not argument-memory-only.
     e.argumentsOnly=attribute("argmemonly");
@@ -563,13 +859,6 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
     e.writeOnly=attribute("writeonly");
     callEffects[m[1]]=e;
   }
-  static const std::regex numericBufferArg("(i[0-9]+|float|half|double|<[^>]+>) addrspace\\(([12])\\)\\* (?:nocapture |readonly |writeonly |nonnull |noundef )*"+symbol);
-  static const std::regex textureArg("%struct\\._(?:texture|depth)_[^ ]+ addrspace\\([0-9]+\\)\\* (?:nocapture |readonly |readnone |nonnull |noundef )*" + symbol);
-  static const std::regex samplerArg("%struct\\._sampler_t addrspace\\([0-9]+\\)\\* (?:nocapture |readonly |readnone |nonnull |noundef )*" + symbol);
-  static const std::regex structureArg("%struct\\._(?:instance|primitive)_acceleration_structure_t addrspace\\([0-9]+\\)\\* (?:nocapture |readonly |readnone |nonnull |noundef )*" + symbol);
-  // Native MSL retains typed struct GEPs, whereas UE's converted AIR mostly uses byte
-  // GEPs. Resolve only layouts composed of known scalar/pointer/struct fields.
-  struct Layout { uint64_t size = 0, align = 1; std::vector<std::string> fields; std::vector<uint64_t> offsets; };
   std::map<std::string, std::string> types;
   static const std::regex typeDefinition(R"((%[^\n=]+) = type \{ ([^\n]+) \})");
   // Unanchored search over all instructions is quadratic for long percent-
@@ -580,8 +869,352 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
   {
     if(typeLine.find(" = type { ") == std::string::npos) continue;
     std::smatch type;
-    if(ImmutableSyntaxMatch(typeLine, type, typeDefinition, true)) types[type[1]] = type[2];
+    if(std::regex_search(typeLine, type, typeDefinition)) types[type[1]] = type[2];
   }
+  // Classify ownership, not initializer values. Only complete internal/private
+  // numeric constant definitions belong to this bytecode. External declarations,
+  // pointer/handle types and address-containing initializers are not certified.
+  auto trim=[](std::string value) {
+    const auto first=value.find_first_not_of(' '),last=value.find_last_not_of(' ');
+    return first==std::string::npos?std::string():value.substr(first,last-first+1);
+  };
+  std::function<bool(std::string,unsigned)> numericStorage=[&](std::string type,unsigned depth) {
+    type=trim(type);
+    if(depth>16 || type.empty())return false;
+    if(type=="i1" || type=="i8" || type=="i16" || type=="i32" || type=="i64" ||
+       type=="half" || type=="float" || type=="double")return true;
+    std::smatch aggregate;
+    static const std::regex arrayType(R"(^\[([0-9]+) x (.+)\]$)");
+    static const std::regex vectorType(R"(^<([0-9]+) x (.+)>$)");
+    if(std::regex_match(type,aggregate,arrayType) ||
+       std::regex_match(type,aggregate,vectorType))
+      return std::stoull(aggregate[1])>0 && numericStorage(aggregate[2],depth+1);
+    const auto named=types.find(type);
+    if(named!=types.end())type="{ "+named->second+" }";
+    if(type.front()!='{' || type.back()!='}')return false;
+    std::string field;int nesting=0;bool member=false;
+    for(size_t i=1;i<type.size();i++)
+    {
+      const char c=i==type.size()-1?',':type[i];
+      if(c=='[' || c=='<' || c=='{')nesting++;
+      if(c==']' || c=='>' || c=='}')nesting--;
+      if(c==',' && !nesting)
+      {if(!numericStorage(field,depth+1))return false;field.clear();member=true;}
+      else field+=c;
+    }
+    return member && !nesting;
+  };
+  static const std::regex globalConstant(R"(^(@[-a-zA-Z$._0-9]+) = (?:internal|private) (?:unnamed_addr |local_unnamed_addr )?addrspace\(2\) constant (.+)$)");
+  std::istringstream globals(text);std::string global;
+  while(std::getline(globals,global))
+  {
+    if(global.empty() || global[0]!='@')continue;
+    std::smatch constantDefinition;
+    if(!std::regex_match(global,constantDefinition,globalConstant))continue;
+    const std::string data=constantDefinition[2];size_t end=0;
+    if(data.empty())continue;
+    if(data[0]=='[' || data[0]=='<' || data[0]=='{')
+    {
+      int nesting=0;
+      for(;end<data.size();end++)
+      {
+        if(data[end]=='[' || data[end]=='<' || data[end]=='{')nesting++;
+        if(data[end]==']' || data[end]=='>' || data[end]=='}')nesting--;
+        if(!nesting){end++;break;}
+      }
+    }
+    else end=data.find(' ');
+    if(end==std::string::npos || end>=data.size() ||
+       !numericStorage(data.substr(0,end),0))continue;
+    const std::string initializer=trim(data.substr(end));
+    if(initializer.empty() || initializer[0]==',' || initializer.find('@')!=std::string::npos ||
+       initializer.find("ptr")!=std::string::npos || initializer.find("blockaddress")!=std::string::npos ||
+       initializer.find("getelementptr")!=std::string::npos)continue;
+    Value owned;owned.kind=Value::ShaderConstant;owned.offsetKnown=false;
+    values[constantDefinition[1]]=owned;
+  }
+  const std::string symbol = R"((%[-a-zA-Z$._0-9]+))";
+  static const std::regex assign("^  " + symbol + " = (.*)$");
+  static const std::regex scalar("^(mul|add|sub|and|shl|lshr|udiv|urem)(?: nuw| nsw)* i(32|64) ([^ ,]+), ([^ ,]+)$");
+  static const std::regex compare("^icmp (eq|ne|ugt|uge|ult|ule) i(32|64) ([^ ,]+), ([^ ,]+)$");
+  // Only a canonical single-block, zero-based unit-step loop has a derived
+  // counter range. The bound must be independent of every phi recurrence.
+  // Its actual scalar bytes still require the caller's submission proof, and
+  // callers authorising execution must reject writers overlapping these facts.
+  static const std::regex label(R"(^([-a-zA-Z$._0-9]+):.*$)");
+  static const std::regex phi("^phi i(32|64) \\[ ([^,]+), " + symbol + " \\], \\[ ([^,]+), " + symbol + " \\]$");
+  static const std::regex branch("^  br i1 " + symbol + ", label " + symbol + ", label " + symbol + ".*$");
+  static const std::regex symbols(symbol);
+  std::map<std::string,std::string> loopBounds;
+  // Only scalar integer phis can match the existing loop grammar. Do not
+  // build full SSA/block maps for modules without such a recurrence. This is
+  // lexical dispatch of identical syntax, not a shader eligibility shortcut.
+  const bool integerPhi=std::any_of(body.begin(),body.end(),[](const std::string &line) {
+    return line.find(" = phi i32 ")!=std::string::npos ||
+           line.find(" = phi i64 ")!=std::string::npos;
+  });
+  if(integerPhi)
+  {
+    std::map<std::string,std::string> expressions,blocks;
+    std::map<std::string,std::vector<std::string>> blockInstructions;
+    std::string block;
+    for(const auto &instruction:body)
+    {
+      std::smatch m;
+      if(!instruction.empty() && instruction[0]!=' ' && std::regex_match(instruction,m,label))block="%"+m[1].str();
+      else
+      {
+        blockInstructions[block].push_back(instruction);
+        std::string name,expression;
+        if(ParseAssignment(instruction,name,expression))
+        {expressions[name]=std::move(expression);blocks[name]=block;}
+      }
+    }
+    auto invariant = [&](const std::string &bound) {
+      std::set<std::string> visiting,done;
+      std::function<bool(const std::string &,unsigned)> check=[&](const std::string &name,unsigned depth) {
+        if(depth>128)return false;
+        auto expression=expressions.find(name);
+        if(expression==expressions.end() || done.count(name))return true;
+        if(!visiting.insert(name).second || expression->second.compare(0,4,"phi ")==0)return false;
+        for(std::sregex_iterator i(expression->second.begin(),expression->second.end(),symbols),end;i!=end;++i)
+          if(!check((*i)[1],depth+1))return false;
+        visiting.erase(name);done.insert(name);return true;
+      };
+      return check(bound,0);
+    };
+    for(const auto &expression:expressions)
+    {
+      std::smatch p;
+      if(!std::regex_match(expression.second,p,phi))continue;
+      const auto &loop=blocks[expression.first];
+      if(loop.empty())continue;
+      const bool first=p[3]==loop && p[4]=="0" && p[5]!=loop;
+      const bool second=p[5]==loop && p[2]=="0" && p[3]!=loop;
+      if(!first && !second)continue;
+      const std::string next=first?p[2].str():p[4].str();
+      auto step=expressions.find(next);std::smatch advance;
+      if(step==expressions.end() || blocks[next]!=loop ||
+         !std::regex_match(step->second,advance,scalar) || advance[1]!="add" ||
+         advance[2]!=p[1] || advance[3]!=expression.first || advance[4]!="1")continue;
+      unsigned branches=0;std::smatch backedge;
+      for(const auto &instruction:blockInstructions[loop])
+        if(instruction.compare(0,5,"  br ")==0)
+        {branches++;std::regex_match(instruction,backedge,branch);}
+      if(branches!=1 || backedge.empty() || (backedge[2]==loop)==(backedge[3]==loop))continue;
+      auto condition=expressions.find(backedge[1]);std::smatch comparison;
+      if(condition==expressions.end() || blocks[condition->first]!=loop ||
+         !std::regex_match(condition->second,comparison,compare) || comparison[2]!=p[1])continue;
+      const bool repeat=backedge[2]==loop;
+      if(!((repeat && (comparison[1]=="ult" || comparison[1]=="ne")) ||
+           (!repeat && comparison[1]=="eq")))continue;
+      std::string bound;
+      if(comparison[3]==next)bound=comparison[4];
+      else if(comparison[1]!="ult" && comparison[4]==next)bound=comparison[3];
+      if(bound.empty() || !invariant(bound))continue;
+      loopBounds[expression.first]=bound;
+    }
+  }
+  // Binding ordinals and builtin syntax are immutable; only the current
+  // bindings and invocation values are interpreted by UniformResourceAccess.
+  static const std::regex binding(R"binding(!\{i32 ([0-9]+), !"air.(?:indirect_buffer|buffer)", (?:!"air.buffer_size", i32 [0-9]+, )?!"air.location_index", i32 ([0-9]+),)binding");
+  static const std::regex builtin(R"builtin(!\{i32 ([0-9]+), !"air.([^"\n]+)",)builtin");
+  static const std::regex grid(R"grid(!\{i32 ([0-9]+), !"air.thread_position_in_grid",)grid");
+  for(std::sregex_iterator i(argumentMetadata.begin(),argumentMetadata.end(),binding),end;i!=end;++i)
+    parsed->bindingOrdinals.push_back({std::stoull((*i)[1]),std::stoull((*i)[2])});
+  for(std::sregex_iterator i(argumentMetadata.begin(),argumentMetadata.end(),builtin),end;i!=end;++i)
+    parsed->builtinOrdinals.push_back({std::stoull((*i)[1]),(*i)[2]});
+  for(std::sregex_iterator i(argumentMetadata.begin(),argumentMetadata.end(),grid),end;i!=end;++i)
+    parsed->gridOrdinals.push_back(std::stoull((*i)[1]));
+  static const std::regex discardDeclaration(R"((?:^|\n)declare void @air\.discard_fragment\(\)(?: |\n))");
+  parsed->hasDiscardDeclaration=text.find("declare void @air.discard_fragment()")!=std::string::npos &&
+      std::regex_search(text,discardDeclaration);
+  parsed->valid=true;
+  parsed->args=std::move(args);parsed->body=std::move(body);
+  parsed->callEffects=std::move(callEffects);parsed->types=std::move(types);
+  parsed->constants=std::move(values);parsed->loopBounds=std::move(loopBounds);
+  parsed->privatePointerSpills=PrivatePointerSpillOrigins(parsed->body);
+  parsed->instructions.resize(parsed->body.size());
+  static const std::regex literalPointer(R"(inttoptr \(i64 ([0-9]+) to [^)]*\))");
+  for(size_t i=0;i<parsed->body.size();i++)
+  {
+    ParseInstructionSyntax(parsed->body[i],parsed->instructions[i],parsed->captures,parsed->operations);
+    const auto &line=parsed->body[i];
+    if(line.find("inttoptr (i64 ")==std::string::npos)continue;
+    for(std::sregex_iterator p(line.begin(),line.end(),literalPointer),end;p!=end;++p)
+      parsed->literalPointers.push_back(std::stoull((*p)[1]));
+  }
+  parsed->captures.shrink_to_fit();
+  parsed->operations.shrink_to_fit();
+  parsed->body.shrink_to_fit();
+  return parsed;
+}
+
+struct SyntaxCache
+{
+  struct Entry
+  {
+    std::shared_ptr<const ModuleSyntax> module;
+    std::map<std::string,std::shared_ptr<const FunctionSyntax>> functions;
+    size_t bytes=0;
+    uint64_t lastUse=0;
+  };
+  std::map<size_t,std::vector<Entry>> modules;
+  size_t bytes=0, moduleParses=0, functionParses=0, moduleHits=0, functionHits=0;
+  uint64_t clock=0;
+  bool MakeRoom(size_t extra,const std::shared_ptr<const ModuleSyntax> &keep={})
+  {
+    constexpr size_t budget=64*1024*1024;
+    if(extra>budget)return false;
+    while(extra>budget-bytes)
+    {
+      auto oldest=modules.end();size_t index=0;uint64_t age=UINT64_MAX;
+      for(auto m=modules.begin();m!=modules.end();++m)
+        for(size_t i=0;i<m->second.size();i++)
+          if(m->second[i].module!=keep && m->second[i].lastUse<age)
+          {oldest=m;index=i;age=m->second[i].lastUse;}
+      if(oldest==modules.end())return false;
+      bytes-=oldest->second[index].bytes;
+      oldest->second.erase(oldest->second.begin()+index);
+      if(oldest->second.empty())modules.erase(oldest);
+    }
+    return true;
+  }
+};
+inline SyntaxCache &GetSyntaxCache() { static thread_local SyntaxCache cache;return cache; }
+inline size_t SyntaxStorage(const FunctionSyntax &f)
+{
+  size_t bytes=sizeof(f)+f.bindingOrdinals.capacity()*sizeof(f.bindingOrdinals[0])+
+      f.gridOrdinals.capacity()*sizeof(uint64_t)+f.builtinOrdinals.capacity()*sizeof(f.builtinOrdinals[0]);
+  for(const auto &p:f.builtinOrdinals)bytes+=p.second.capacity();
+  auto strings=[&](const auto &v) {
+    bytes+=v.capacity()*sizeof(v[0]);
+    for(const auto &s:v)bytes+=s.capacity()+1;
+  };
+  strings(f.args);strings(f.body);
+  bytes+=f.instructions.capacity()*sizeof(InstructionSyntax)+
+      f.literalPointers.capacity()*sizeof(uint64_t)+
+      f.captures.capacity()*sizeof(SyntaxCapture)+
+      f.operations.capacity()*sizeof(SyntaxOperation);
+  for(const auto &m:{&f.types,&f.loopBounds})
+    for(const auto &p:*m)bytes+=sizeof(p)+p.first.capacity()+p.second.capacity()+64;
+  bytes+=f.callEffects.size()*256+f.constants.size()*256;
+  for(const auto &p:f.privatePointerSpills){bytes+=128;strings(p.second);}
+  return bytes;
+}
+inline std::shared_ptr<const ModuleSyntax> GetModuleSyntax(const std::string &input)
+{
+  auto &cache=GetSyntaxCache();const size_t key=std::hash<std::string>()(input);
+  auto found=cache.modules.find(key);
+  if(found!=cache.modules.end())for(auto &e:found->second)
+    if(e.module->input==input){cache.moduleHits++;e.lastUse=++cache.clock;return e.module;}
+  auto module=ParseModuleSyntax(input);cache.moduleParses++;
+  size_t bytes=sizeof(ModuleSyntax)+input.size()+128;
+  for(const auto &p:module->aliases)bytes+=sizeof(p)+p.first.capacity()+p.second.capacity()+64;
+  for(const auto &p:module->localDefinitions)bytes+=sizeof(p)+p.capacity()+64;
+  if(cache.MakeRoom(bytes))
+  {
+    // Eviction affects acceleration only. Active analyses own their syntax and
+    // reparse identically when absent; no binding/dependency decisions survive.
+    cache.modules[key].push_back({module,{},bytes,++cache.clock});cache.bytes+=bytes;
+  }
+  return module;
+}
+inline std::shared_ptr<const FunctionSyntax> GetFunctionSyntax(
+    const std::shared_ptr<const ModuleSyntax> &module,const std::string &entry)
+{
+  auto &cache=GetSyntaxCache();const size_t key=module->contentHash;
+  auto found=cache.modules.find(key);SyntaxCache::Entry *owner=nullptr;
+  if(found!=cache.modules.end())for(auto &e:found->second)
+    if(e.module==module){owner=&e;break;}
+  if(owner)
+  {
+    owner->lastUse=++cache.clock;
+    const auto f=owner->functions.find(entry);
+    if(f!=owner->functions.end()){cache.functionHits++;return f->second;}
+  }
+  auto f=ParseFunctionSyntax(module->input,entry);cache.functionParses++;
+  const size_t bytes=SyntaxStorage(*f)+sizeof(std::string)+entry.size()+64;
+  if(owner && cache.MakeRoom(bytes,module))
+  {
+    // Eviction can move a hash bucket's entries. Re-find the retained owner.
+    for(auto &e:cache.modules.at(key))if(e.module==module)
+    {e.functions[entry]=f;e.bytes+=bytes;cache.bytes+=bytes;break;}
+  }
+  return f;
+}
+
+inline UniformAccessReport UniformResourceAccess(const std::string &input,
+    const std::string &entry, const std::map<unsigned, Value> &bindings, const Loader &load,
+    const std::vector<uint64_t> &invocationExtent = {}, bool rangedIntegerLoads = false,
+    const InvocationValues &invocation = {}, const CallResolver &resolveCall = {},
+    bool pureFloatingMath = false)
+{
+  MetalLoadProfile::Scope profile("AIR_dynamic_analysis");
+  try
+  {
+  const auto syntax=GetFunctionSyntax(GetModuleSyntax(input),entry);
+  if(!syntax->valid)return {};
+  const auto &args=syntax->args,&body=syntax->body;
+  const auto &callEffects=syntax->callEffects;const auto &types=syntax->types;
+  const auto &loopBounds=syntax->loopBounds;const auto &privatePointerSpills=syntax->privatePointerSpills;
+  std::map<std::string,Value> values=syntax->constants;
+  bool useMetadata=true;
+  if(!syntax->directArguments)
+  {
+    if(invocation.localDefinition)
+    {
+      if(!bindings.empty() || invocation.arguments.size()!=args.size() || !syntax->internal)return {};
+      useMetadata=false;
+    }
+    else if(syntax->hasAIR)return {};
+  }
+  if(useMetadata)
+    for(const auto &ordinal:syntax->bindingOrdinals)
+    {
+      if(ordinal.second>30)continue;
+      const auto binding=bindings.find(unsigned(ordinal.second));
+      if(ordinal.first<args.size() && binding!=bindings.end())values[args[ordinal.first]]=binding->second;
+    }
+  for(const auto &parameter:invocation.arguments)
+  {
+    if(parameter.first>=args.size())return {};
+    values[args[parameter.first]]=parameter.second;
+  }
+  if(useMetadata)
+  {
+    for(const auto &ordinal:syntax->builtinOrdinals)
+    {
+      const auto builtin=invocation.builtins.find(ordinal.second);
+      if(builtin!=invocation.builtins.end() && ordinal.first<args.size())values[args[ordinal.first]]=builtin->second;
+    }
+    if(invocationExtent.size()==3)
+      for(const auto ordinal:syntax->gridOrdinals)
+        if(ordinal<args.size()){Value v;v.kind=Value::ThreadGrid;values[args[ordinal]]=v;}
+  }
+  const std::string symbol = R"((%[-a-zA-Z$._0-9]+))";
+  static const std::regex literalPointerExpression(R"(inttoptr \(i64 ([0-9]+) to [^)]*\))");
+  static const std::regex nullExpression(R"((?:^| )null$)");
+  static const std::regex integerScalarType("i(8|16|32|64)");
+  static const std::regex assignedCall("^  " + symbol + " = ");
+  static const std::regex discardInstruction(R"(^.*\bcall void @air\.discard_fragment\(\)(?: .*)?$)");
+  static const std::regex floatingMath(R"(^.*\bcall (?:float|half|double|<[0-9]+ x (?:float|half|double)>) @air\.(?:fma|fabs|sqrt|rsqrt|dot)\.(?:f(?:16|32|64)|v[0-9]+f(?:16|32|64))\([^*]*\).*$)");
+  const std::string memorySymbol = R"(([%@][-a-zA-Z$._0-9]+))";
+  static const std::regex operand("(?:^| )(%[-a-zA-Z$._0-9]+|[0-9]+|true|false)$");
+  static const std::regex deviceStoreType(R"((?:addrspace\([12]\)\*|ptr addrspace\([12]\))$)");
+  static const std::regex storedType(R"(^((?:i[0-9]+|float|half|double|<[^>]+>|%[^ ]+)) )");
+  static const std::regex atomicBufferArg("(i(8|16|32|64)) addrspace\\([12]\\)\\* (?:nocapture |readonly |nonnull |noundef )*"+symbol);
+  const std::string syncOperand="i32 (?:%[-a-zA-Z$._0-9]+|[0-9]+)";
+  static const std::regex synchronizationCall(
+        "^.*\\bcall void @air\\.(?:(?:wg|simdgroup)\\.barrier\\("+syncOperand+", "+syncOperand+
+        "|atomic\\.fence\\("+syncOperand+", "+syncOperand+", "+syncOperand+")\\).*$");
+  static const std::regex numericBufferArg("(i[0-9]+|float|half|double|<[^>]+>) addrspace\\(([12])\\)\\* (?:nocapture |readonly |writeonly |nonnull |noundef )*"+symbol);
+  static const std::regex textureArg("%struct\\._(?:texture|depth)_[^ ]+ addrspace\\([0-9]+\\)\\* (?:nocapture |readonly |readnone |nonnull |noundef )*" + symbol);
+  static const std::regex samplerArg("%struct\\._sampler_t addrspace\\([0-9]+\\)\\* (?:nocapture |readonly |readnone |nonnull |noundef )*" + symbol);
+  static const std::regex structureArg("%struct\\._(?:instance|primitive)_acceleration_structure_t addrspace\\([0-9]+\\)\\* (?:nocapture |readonly |readnone |nonnull |noundef )*" + symbol);
+  // Native MSL retains typed struct GEPs, whereas UE's converted AIR mostly uses byte
+  // GEPs. Resolve only layouts composed of known scalar/pointer/struct fields.
+  struct Layout { uint64_t size = 0, align = 1; std::vector<std::string> fields; std::vector<uint64_t> offsets; };
   std::function<Layout(std::string, unsigned)> layout = [&](std::string type, unsigned depth) -> Layout {
     Layout result;
     if(depth > 16 || type.empty()) return result;
@@ -591,7 +1224,8 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
     if(type == "i32" || type == "float") { result.size = result.align = 4; return result; }
     if(type == "i64" || type == "double") { result.size = result.align = 8; return result; }
     std::smatch vector;
-    if(std::regex_match(type,vector,std::regex(R"(^<([0-9]+) x (.+)>$)")))
+    static const std::regex vectorType(R"(^<([0-9]+) x (.+)>$)");
+    if(std::regex_match(type,vector,vectorType))
     {
       auto member=layout(vector[2],depth+1);const auto count=std::stoull(vector[1]);
       if(!member.size || !count || count>16)return result;
@@ -623,141 +1257,35 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
     result.size = (result.size + result.align - 1) / result.align * result.align;
     return result;
   };
-  static const std::regex structGEP("^getelementptr(?: inbounds)? (\\{[^}]+\\}|%[^,]+), .*? " + symbol + "((?:, i(?:32|64) [^,]+)+)$");
+  auto publicASProjection=[&](const std::string &type,bool fieldOnly) {
+    if(type.empty() || type.back()!='*')return false;
+    const std::string pointee=type.substr(0,type.rfind(" addrspace("));
+    if(fieldOnly && pointee.find("%struct._instance_acceleration_structure_t")==0 &&
+       !pointee.empty() && pointee.back()=='*')return true;
+    const auto header=layout(pointee,0);
+    if(header.fields.empty())return false;
+    std::string structure=header.fields[0];
+    const auto wrapper=layout(structure,0);
+    if(wrapper.size==8 && wrapper.fields.size()==1 && !wrapper.offsets[0])
+      structure=wrapper.fields[0];
+    if(structure.find("%struct._instance_acceleration_structure_t")!=0 ||
+       structure.empty() || structure.back()!='*')return false;
+    return (header.fields.size()==2 && header.size==16 && header.offsets[1]==8 &&
+            !header.fields[1].empty() && header.fields[1].back()=='*') ||
+           (fieldOnly && header.size==8 && header.fields.size()==1 && !header.offsets[0]);
+  };
   static const std::regex gepIndex(R"(, i(?:32|64) ([^, ]+))");
-  // Classify ownership, not initializer values. Only complete internal/private
-  // numeric constant definitions belong to this bytecode. External declarations,
-  // pointer/handle types and address-containing initializers are not certified.
-  auto trim=[](std::string value) {
-    const auto first=value.find_first_not_of(' '),last=value.find_last_not_of(' ');
-    return first==std::string::npos?std::string():value.substr(first,last-first+1);
-  };
-  std::function<bool(std::string,unsigned)> numericStorage=[&](std::string type,unsigned depth) {
-    type=trim(type);
-    if(depth>16 || type.empty())return false;
-    if(type=="i1" || type=="i8" || type=="i16" || type=="i32" || type=="i64" ||
-       type=="half" || type=="float" || type=="double")return true;
-    std::smatch aggregate;
-    if(std::regex_match(type,aggregate,std::regex(R"(^\[([0-9]+) x (.+)\]$)")) ||
-       std::regex_match(type,aggregate,std::regex(R"(^<([0-9]+) x (.+)>$)")))
-      return std::stoull(aggregate[1])>0 && numericStorage(aggregate[2],depth+1);
-    const auto named=types.find(type);
-    if(named!=types.end())type="{ "+named->second+" }";
-    if(type.front()!='{' || type.back()!='}')return false;
-    std::string field;int nesting=0;bool member=false;
-    for(size_t i=1;i<type.size();i++)
-    {
-      const char c=i==type.size()-1?',':type[i];
-      if(c=='[' || c=='<' || c=='{')nesting++;
-      if(c==']' || c=='>' || c=='}')nesting--;
-      if(c==',' && !nesting)
-      {if(!numericStorage(field,depth+1))return false;field.clear();member=true;}
-      else field+=c;
-    }
-    return member && !nesting;
-  };
-  static const std::regex globalConstant(R"(^(@[-a-zA-Z$._0-9]+) = (?:internal|private) (?:unnamed_addr |local_unnamed_addr )?addrspace\(2\) constant (.+)$)");
-  std::istringstream globals(text);std::string global;
-  while(std::getline(globals,global))
-  {
-    std::smatch constantDefinition;
-    if(!ImmutableSyntaxMatch(global,constantDefinition,globalConstant))continue;
-    const std::string data=constantDefinition[2];size_t end=0;
-    if(data.empty())continue;
-    if(data[0]=='[' || data[0]=='<' || data[0]=='{')
-    {
-      int nesting=0;
-      for(;end<data.size();end++)
-      {
-        if(data[end]=='[' || data[end]=='<' || data[end]=='{')nesting++;
-        if(data[end]==']' || data[end]=='>' || data[end]=='}')nesting--;
-        if(!nesting){end++;break;}
-      }
-    }
-    else end=data.find(' ');
-    if(end==std::string::npos || end>=data.size() ||
-       !numericStorage(data.substr(0,end),0))continue;
-    const std::string initializer=trim(data.substr(end));
-    if(initializer.empty() || initializer[0]==',' || initializer.find('@')!=std::string::npos ||
-       initializer.find("ptr")!=std::string::npos || initializer.find("blockaddress")!=std::string::npos ||
-       initializer.find("getelementptr")!=std::string::npos)continue;
-    Value owned;owned.kind=Value::ShaderConstant;owned.offsetKnown=false;
-    values[constantDefinition[1]]=owned;
-  }
-  static const std::regex constantGEP("^getelementptr(?: inbounds)? .*?, .*? " + memorySymbol +
-      "(?:, i(?:32|64) [^,]+)+$");
   auto value = [&](const std::string &s) -> Value {
     if(!s.empty() && (s[0] == '%' || s[0]=='@')) { auto v = values.find(s); return v == values.end() ? Value() : v->second; }
     if(s.empty() || s.find_first_not_of("-0123456789") != std::string::npos) return {};
     try { return Value::Number(std::stoull(s)); } catch(...) { return {}; }
   };
-  // Only a canonical single-block, zero-based unit-step loop has a derived
-  // counter range. The bound must be independent of every phi recurrence.
-  // Its actual scalar bytes still require the caller's submission proof, and
-  // callers authorising execution must reject writers overlapping these facts.
-  static const std::regex label(R"(^([-a-zA-Z$._0-9]+):.*$)");
-  static const std::regex phi("^phi i(32|64) \\[ ([^,]+), " + symbol + " \\], \\[ ([^,]+), " + symbol + " \\]$");
-  static const std::regex branch("^  br i1 " + symbol + ", label " + symbol + ", label " + symbol + ".*$");
-  static const std::regex symbols(symbol);
-  std::map<std::string,std::string> expressions,blocks;
-  std::map<std::string,std::vector<std::string>> blockInstructions;
-  std::string block;
-  for(const auto &instruction:body)
-  {
-    std::smatch m;
-    if(ImmutableSyntaxMatch(instruction,m,label))block="%"+m[1].str();
-    else
-    {
-      blockInstructions[block].push_back(instruction);
-      if(ImmutableSyntaxMatch(instruction,m,assign))
-      {expressions[m[1]]=m[2];blocks[m[1]]=block;}
-    }
-  }
-  auto invariant = [&](const std::string &bound) {
-    std::set<std::string> visiting,done;
-    std::function<bool(const std::string &,unsigned)> check=[&](const std::string &name,unsigned depth) {
-      if(depth>128)return false;
-      auto expression=expressions.find(name);
-      if(expression==expressions.end() || done.count(name))return true;
-      if(!visiting.insert(name).second || expression->second.compare(0,4,"phi ")==0)return false;
-      for(std::sregex_iterator i(expression->second.begin(),expression->second.end(),symbols),end;i!=end;++i)
-        if(!check((*i)[1],depth+1))return false;
-      visiting.erase(name);done.insert(name);return true;
-    };
-    return check(bound,0);
+  auto assignValue=[&](const std::string &name,const Value &result) {
+    // Erase an earlier pass's fact as well; omission must not resurrect a
+    // stale value. Resource inputs/producers and loader calls are unchanged.
+    if(result.EmptyUnknown())values.erase(name);
+    else values[name]=result;
   };
-  std::map<std::string,std::string> loopBounds;
-  for(const auto &expression:expressions)
-  {
-    std::smatch p;
-    if(!ImmutableSyntaxMatch(expression.second,p,phi))continue;
-    const auto &loop=blocks[expression.first];
-    if(loop.empty())continue;
-    const bool first=p[3]==loop && p[4]=="0" && p[5]!=loop;
-    const bool second=p[5]==loop && p[2]=="0" && p[3]!=loop;
-    if(!first && !second)continue;
-    const std::string next=first?p[2].str():p[4].str();
-    auto step=expressions.find(next);std::smatch advance;
-    if(step==expressions.end() || blocks[next]!=loop ||
-       !ImmutableSyntaxMatch(step->second,advance,scalar) || advance[1]!="add" ||
-       advance[2]!=p[1] || advance[3]!=expression.first || advance[4]!="1")continue;
-    unsigned branches=0;std::smatch backedge;
-    for(const auto &instruction:blockInstructions[loop])
-      if(instruction.compare(0,5,"  br ")==0)
-      {branches++;ImmutableSyntaxMatch(instruction,backedge,branch);}
-    if(branches!=1 || backedge.empty() || (backedge[2]==loop)==(backedge[3]==loop))continue;
-    auto condition=expressions.find(backedge[1]);std::smatch comparison;
-    if(condition==expressions.end() || blocks[condition->first]!=loop ||
-       !ImmutableSyntaxMatch(condition->second,comparison,compare) || comparison[2]!=p[1])continue;
-    const bool repeat=backedge[2]==loop;
-    if(!((repeat && (comparison[1]=="ult" || comparison[1]=="ne")) ||
-         (!repeat && comparison[1]=="eq")))continue;
-    std::string bound;
-    if(comparison[3]==next)bound=comparison[4];
-    else if(comparison[1]!="ult" && comparison[4]==next)bound=comparison[3];
-    if(bound.empty() || !invariant(bound))continue;
-    loopBounds[expression.first]=bound;
-  }
   UniformAccessReport report; report.validModule = true;
   auto pointerOperand=[&](const std::string &text) {
     std::smatch m;
@@ -768,27 +1296,26 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
     if(ImmutableSyntaxMatch(text,m,operand, true))return value(m[1]);
     return Value();
   };
-  const auto privatePointerSpills=PrivatePointerSpillOrigins(body);
-  static const std::regex pointerPhi(R"(^phi [^\[]*\* (\[.*)$)");
   static const std::regex phiIncoming(R"(\[ ([^\]]+), %[A-Za-z0-9_.$-]+ \])");
   // A loop's invariant reload can occur after its phi. Bounded forward passes
   // resolve that dependency without executing iterations or shader outputs.
   for(unsigned pass=0;pass<(loopBounds.empty()?1U:3U);pass++)
   {
   report={};report.validModule=true;
-  static const std::regex literalPointer(R"(inttoptr \(i64 ([0-9]+) to [^)]*\))");
-  for(const auto &instruction:body)
-    for(std::sregex_iterator i(instruction.begin(),instruction.end(),literalPointer),end;i!=end;++i)
-      report.literalPointers.push_back(std::stoull((*i)[1]));
+  report.literalPointers=syntax->literalPointers;
   unsigned instructionIndex=0;
   for(const std::string &instruction : body)
   {
     const unsigned currentInstruction=instructionIndex++;
+    const auto &parsedInstruction=syntax->instructions[currentInstruction];
     const bool callInstruction = instruction.find("call ") != std::string::npos;
-    std::smatch match, operation;
+    SyntaxMatchView operation;
+    auto getOperation=[&](InstructionOp op,SyntaxMatchView &result) {
+      return parsedInstruction.Get(op,instruction,syntax->captures,syntax->operations,result);
+    };
     bool resolvedCall=false;
     Value callResult;
-    if(resolveCall && callInstruction && ImmutableSyntaxMatch(instruction,operation,functionCall))
+    if(resolveCall && callInstruction && CopySyntaxMatch(parsedInstruction.call,instruction,syntax->captures,operation))
     {
       std::vector<Value> parameters;std::string list=operation[2],parameter;
       int nesting=0;
@@ -830,25 +1357,40 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
         }
       }
     }
-    if(ImmutableSyntaxMatch(instruction, match, assign))
+    if(parsedInstruction.expressionOffset)
     {
-      std::string expr = match[2]; Value result;
+      const auto name=instruction.substr(2,parsedInstruction.expressionOffset-5);
+      const auto expr=instruction.substr(parsedInstruction.expressionOffset); Value result;
       if(resolvedCall)result=callResult;
-      else if(loopBounds.count(match[1]))
+      else if(loopBounds.count(name))
       {
-        const auto bound=value(loopBounds.at(match[1]));
+        const auto bound=value(loopBounds.at(name));
         if(bound.kind==Value::Integer && !bound.ranged && bound.offset && bound.offset<=65536)
         {result=Value::Range(0,bound.offset-1);report.boundedLoops++;}
       }
-      else if(ImmutableSyntaxMatch(expr, operation, cast)) result = value(operation[1]);
-      else if(ImmutableSyntaxMatch(expr,operation,constantGEP) &&
+      else if(getOperation(InstructionOp::cast,operation))
+      {
+        result=value(operation[1]);
+        const size_t target=expr.rfind(" to ");
+        if(target!=std::string::npos && result.kind==Value::DescriptorPointer &&
+           !result.namespaceRole && result.namespaceStride && !result.namespaceField &&
+           publicASProjection(expr.substr(target+4),true))
+        {
+          // A compiler projection after an opaque pointer load retains the
+          // original typed namespace. The loader must still prove its real
+          // source/publication/header; the opaque type name grants no identity.
+          Value request=result;request.metadata=true;
+          result=load(request,8,Value::ASHeaderPointer);
+        }
+      }
+      else if(getOperation(InstructionOp::constantGEP,operation) &&
               value(operation[1]).kind==Value::ShaderConstant)
       {
         // Original Native code performs the projection, index and bounds. No
         // CPU scalar lookup or external buffer identity is manufactured.
         result=value(operation[1]);
       }
-      else if(ImmutableSyntaxMatch(expr, operation, pointerPhi))
+      else if(getOperation(InstructionOp::pointerPhi,operation))
       {
         // Control-flow joins preserve all incoming resource identities. Do
         // not evaluate the branch, or infer a cyclic/GPU-produced pointer.
@@ -860,7 +1402,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
         }
         if(!first)report.pointerSelections++;
       }
-      else if(ImmutableSyntaxMatch(expr, operation, intToPtr))
+      else if(getOperation(InstructionOp::intToPtr,operation))
       {
         // Raw ulong roots in native MSL are pointers only when the loader has
         // authoritative typed provenance. Never interpret a scalar GPU address.
@@ -872,7 +1414,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
            (address.kind == Value::Sampler &&
             expr.find(" to %struct._sampler_t") != std::string::npos)) result = address;
       }
-      else if(ImmutableSyntaxMatch(expr, operation, gep))
+      else if(getOperation(InstructionOp::gep,operation))
       {
         Value base = value(operation[2]), index = value(operation[3]);
         unsigned stride = unsigned(layout(operation[1],0).size);
@@ -915,7 +1457,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
         {result=base;for(auto &v:result.fields)v=offset(v);}
         else result=offset(base);
       }
-      else if(ImmutableSyntaxMatch(expr, operation, structGEP))
+      else if(getOperation(InstructionOp::structGEP,operation))
       {
         Value base = value(operation[2]);
         std::string type = operation[1], indices = operation[3];
@@ -951,6 +1493,9 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
           if(candidate.kind!=Value::Pointer && candidate.kind!=Value::DescriptorPointer && candidate.kind!=Value::LiteralPointer &&
              candidate.kind!=Value::NullBasedPointer)return Value();
           if(candidate.kind==Value::LiteralPointer && (!known || offset!=highOffset))candidate.metadata=true;
+          if(candidate.namespaceRole==1 && known && offset==highOffset &&
+             offset<=8 && candidate.namespaceField<=8-offset)
+          {candidate.namespaceField+=offset;return candidate;}
           if(known && candidate.offsetKnown && highOffset<=UINT64_MAX-candidate.High())
           {
             const auto high=candidate.High();
@@ -980,7 +1525,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
         {result=base;for(auto &candidate:result.fields)candidate=project(candidate);}
         else result=project(base);
       }
-      else if(ImmutableSyntaxMatch(expr, operation, scalar))
+      else if(getOperation(InstructionOp::scalar,operation))
       {
         Value a = value(operation[3]), b = value(operation[4]);
         // Preserve the compiler's ABI row-address form, without calculating
@@ -1016,7 +1561,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
             {known=a.High()<=(limit>>b.offset);if(known){lo=a.offset<<b.offset;hi=a.High()<<b.offset;}}
             else known=false;
             if(known)result=Value::Range(lo,hi);
-            values[match[1]]=result;continue;
+            assignValue(name,result);continue;
           }
           std::string op = operation[1]; uint64_t n = 0;
           if(op == "mul") n = a.offset * b.offset;
@@ -1026,15 +1571,15 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
           else if(op == "udiv" || op == "urem")
           {const uint64_t numerator=operation[2]=="32"?uint32_t(a.offset):a.offset;
            const uint64_t denominator=operation[2]=="32"?uint32_t(b.offset):b.offset;
-           if(!denominator){values[match[1]]={};continue;}
+           if(!denominator){values.erase(name);continue;}
            n=op=="udiv"?numerator/denominator:numerator%denominator;}
           else if(op == "lshr" && b.offset < std::stoul(operation[2])) n = a.offset >> b.offset;
           else if(b.offset < std::stoul(operation[2])) n = a.offset << b.offset;
-          else { values[match[1]] = {}; continue; }
+          else { values.erase(name); continue; }
           result = Value::Number(operation[2] == "32" ? uint32_t(n) : n);
         }
       }
-      else if(ImmutableSyntaxMatch(expr, operation, extend))
+      else if(getOperation(InstructionOp::extend,operation))
       {
         Value a = value(operation[3]);
         if(a.kind==Value::Unknown && (operation[1]=="zext" || operation[1]=="sext"))
@@ -1045,26 +1590,26 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
           {
             const uint64_t limit=operation[4]=="32"?UINT32_MAX:UINT64_MAX;
             if(a.High()<=limit && !(operation[1]=="sext" && a.High()>INT32_MAX))result=a;
-            values[match[1]]=result;continue;
+            assignValue(name,result);continue;
           }
           uint64_t n = operation[2] == "32" ? uint32_t(a.offset) : a.offset;
           if(operation[1] == "sext" && operation[2] == "32") n = int64_t(int32_t(n));
           result = Value::Number(operation[4] == "32" ? uint32_t(n) : n);
         }
       }
-      else if(ImmutableSyntaxMatch(expr,operation,extract))
+      else if(getOperation(InstructionOp::extract,operation))
       {
         const auto vector=value(operation[1]);const auto component=std::stoul(operation[2]);
         if(vector.kind==Value::ThreadGrid && invocationExtent.size()==3)
         {const auto count=invocationExtent[component];if(count<=UINT32_MAX)result=Value::Range(0,count?count-1:0);}
         else if(vector.kind==Value::Aggregate && vector.fields.size()==3)result=vector.fields[component];
       }
-      else if(ImmutableSyntaxMatch(expr,operation,extractField))
+      else if(getOperation(InstructionOp::extractField,operation))
       {
         const auto aggregate=value(operation[1]);const auto field=std::stoull(operation[2]);
         if(aggregate.kind==Value::Aggregate && field<aggregate.fields.size())result=aggregate.fields[field];
       }
-      else if(ImmutableSyntaxMatch(expr,operation,insertField))
+      else if(getOperation(InstructionOp::insertField,operation))
       {
         const auto field=std::stoull(operation[2]);std::smatch inserted;
         const auto comma=expr.rfind(',');const auto first=expr.find(',');
@@ -1076,7 +1621,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
           if(ImmutableSyntaxMatch(fieldText,inserted,operand, true))result.fields[field]=value(inserted[1]);
         }
       }
-      else if(ImmutableSyntaxMatch(expr, operation, compare))
+      else if(getOperation(InstructionOp::compare,operation))
       {
         const Value a = value(operation[3]), b = value(operation[4]);
         if(a.kind == Value::Integer && b.kind == Value::Integer)
@@ -1102,7 +1647,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
           }
         }
       }
-      else if(ImmutableSyntaxMatch(expr, operation, choose))
+      else if(getOperation(InstructionOp::choose,operation))
       {
         const std::string predicate = operation[1];
         const Value condition = predicate == "true" ? Value::Number(1) :
@@ -1112,7 +1657,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
         // the original Native control flow never executes. Retain every real
         // source and literal address instead of turning that block into an
         // unsourced input; unknown alternatives still fail qualification.
-        if(operation[2].str().find('*')!=std::string::npos)
+        if(operation[2].find('*')!=std::string::npos)
         {
           result=MergePointerProvenance(pointerOperand(operation[2]),pointerOperand(operation[3]));
           report.pointerSelections++;
@@ -1134,9 +1679,28 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
           }
         }
       }
-      else if(ImmutableSyntaxMatch(expr, operation, read))
+      else if(getOperation(InstructionOp::read,operation))
       {
         Value address = value(operation[2]); std::string type = operation[1];
+        // Anonymous aggregate pointer types contain commas in both the
+        // value type and the address operand. The regex capture is greedy;
+        // select the actual first operand boundary using immutable syntax.
+        // This preserves the public header ABI, without evaluating shader data.
+        if(expr.compare(0,5,"load ")==0 && expr.find('{')!=std::string::npos)
+        {
+          const size_t begin=expr.compare(5,9,"volatile ")==0?14:5;
+          unsigned nesting=0;bool quoted=false;
+          for(size_t i=begin;i<expr.size();i++)
+          {
+            const char c=expr[i];
+            if(c=='"')quoted=!quoted;
+            if(quoted)continue;
+            if(c=='{' || c=='[' || c=='<' || c=='(')nesting++;
+            else if(c=='}' || c==']' || c=='>' || c==')')
+            {if(!nesting)break;nesting--;}
+            else if(c==',' && !nesting){type=expr.substr(begin,i-begin);break;}
+          }
+        }
         const auto size=layout(type,0).size;
         const bool data=!type.empty() && type.back()!='*';
         if(data && (expr.find("addrspace(1)")!=std::string::npos ||
@@ -1168,11 +1732,34 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
             result=first?pointer:MergePointerProvenance(result,pointer);first=false;
           }
         }
-        else if(address.kind==Value::Pointer && address.metadata && (!address.offsetKnown || address.ranged) && address.namespaceStride)
+        else if((address.kind==Value::Pointer || (address.kind==Value::DescriptorPointer && address.namespaceRole==1)) &&
+                address.metadata && (!address.offsetKnown || address.ranged) && address.namespaceStride)
         {
-          if((!type.empty() && type.back()=='*') || type=="i64")result=load(address,8,Value::Pointer);
-          // Numerical descriptor fields stay unknown. They cannot choose a row
-          // or manufacture a GPU VA; texture/AS selection needs its own closure.
+          // Retain only the compiler's typed field projection. Native chooses
+          // the row; the backend restores its live texture namespace separately.
+          if(publicASProjection(type,false))
+            result=load(address,8,Value::ASHeaderPointer);
+          else if(type.find("%struct._instance_acceleration_structure_t")==0 && type.back()=='*')
+            result=load(address,8,Value::AccelerationStructure);
+          else if((type.find("%struct._texture_")==0 || type.find("%struct._depth_")==0) && type.back()=='*')
+            result=load(address,8,Value::Texture);
+          else if(type.find("%struct._sampler_t")==0 && type.back()=='*')
+            result=load(address,8,Value::Sampler);
+          else if((!type.empty() && type.back()=='*') || type=="i64")
+          {
+            result=load(address,8,Value::Pointer);
+            if(type=="i64" && result.kind==Value::Unknown)
+              result=load(address,8,Value::Texture);
+            if(type=="i64" && result.kind==Value::Unknown)
+              result=load(address,8,Value::Sampler);
+          }
+          if(result.namespaceRole==2)
+          {
+            Value header=address;header.kind=Value::AccelerationStructure;
+            header.namespaceField=0;report.accesses.push_back(header);
+          }
+          // Numerical fields remain unknown. This does not evaluate a GPU
+          // index, guess integer handles, or establish a resource identity.
         }
         else if(address.kind == Value::Pointer && address.offsetKnown && address.ranged &&
            rangedIntegerLoads && (type=="i32" || type=="i64"))
@@ -1199,7 +1786,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
           else if(!type.empty() && type.back() == '*') result = load(address, 8, Value::Pointer);
         }
       }
-      values[match[1]] = result;
+      assignValue(name,result);
     }
     if(instruction.compare(0,6,"  ret ")==0)
     {
@@ -1207,19 +1794,19 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
       if(report.returns==1 && ImmutableSyntaxMatch(instruction,returned,operand, true))report.returned=value(returned[1]);
       else report.returned={};
     }
-    std::smatch storeOperands;
-    const bool parsedStore=ImmutableSyntaxMatch(instruction,storeOperands,store);
+    SyntaxMatchView storeOperands;
+    const bool parsedStore=CopySyntaxMatch(parsedInstruction.stored,instruction,syntax->captures,storeOperands);
     // Classify the destination's outer storage space, not a pointer value's
     // pointee space. A device pointer stored in Native private query state
     // does not write a captured device allocation.
-    if(parsedStore && ImmutableSyntaxMatch(storeOperands[2].str(),deviceStoreType, true))
+    if(parsedStore && ImmutableSyntaxMatch(storeOperands[2],deviceStoreType, true))
     {
       report.bufferWrites++;
       const auto address=value(storeOperands[3]);std::smatch type;
       const std::string stored=storeOperands[1];
       const auto size=ImmutableSyntaxMatch(stored,type,storedType, true)?layout(type[1],0).size:0;
       AppendLiteralAccesses(report,address,size);
-      if(address.kind==Value::PointerSet && size)
+      if((address.kind==Value::PointerSet || address.kind==Value::DescriptorPointer) && size)
         AppendBufferCandidates(report,address,size,true);
       else if(address.kind!=Value::Pointer || !address.object || address.metadata || !size)report.unresolvedBuffers++;
       else
@@ -1289,13 +1876,13 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
     // the original GPU operation; only resource and sampler effects are needed
     // for restoration. Coordinates, reference values and compare results are
     // not interpreted as CPU numerical facts or guaranteed output producers.
-    std::smatch depthCall;
+    SyntaxMatchView depthCall;
     static const std::regex depthOperation(
         R"(^air\.(sample|sample_compare|gather|gather_compare|read)_depth_(2d|2d_array|cube|cube_array)\.(?:[^ ]+)$)");
-    const bool depthTextureCall=callInstruction && ImmutableSyntaxMatch(instruction,depthCall,functionCall) &&
-        ImmutableSyntaxMatch(depthCall[1].str(),depthOperation);
+    const bool depthTextureCall=callInstruction && CopySyntaxMatch(parsedInstruction.call,instruction,syntax->captures,depthCall) &&
+        ImmutableSyntaxMatch(depthCall[1],depthOperation);
     const bool depthSamplerCall=depthTextureCall &&
-        depthCall[1].str().find("air.read_")!=0;
+        depthCall[1].find("air.read_")!=0;
     const bool resourceQuery=instruction.find("call ")!=std::string::npos &&
         instruction.find("@air.get_")!=std::string::npos &&
         (instruction.find("_texture_")!=std::string::npos || instruction.find("_depth_")!=std::string::npos);
@@ -1383,11 +1970,11 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
     static const std::regex queryFacing(
         R"(^is_(?:candidate|committed)_triangle_front_facing$)");
     static const std::regex queryArgument("%struct\\._intersection_query_t\\* (?:nocapture |readonly |nonnull |noundef )*" + symbol);
-    std::smatch queryCall;
-    if(callInstruction && ImmutableSyntaxMatch(instruction,queryCall,functionCall))
+    SyntaxMatchView queryCall;
+    if(callInstruction && CopySyntaxMatch(parsedInstruction.call,instruction,syntax->captures,queryCall))
     {
       if(queryCall[1]=="air.allocate_intersection_query.instancing.triangle_data" &&
-         queryCall[2].str().empty() &&
+         queryCall[2].empty() &&
          instruction.find("call %struct._intersection_query_t* ")!=std::string::npos)
       {
         std::smatch assigned;
@@ -1439,8 +2026,8 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
     // These AIR floating intrinsics cannot read/write resource pointers. Their
     // numerical results remain unknown, so they cannot authorise addresses.
     bool nativeNoResources=false,nativeArgumentMemory=false;
-    std::smatch nativeCall;
-    if(!resolvedCall && callInstruction && ImmutableSyntaxMatch(instruction,nativeCall,functionCall))
+    SyntaxMatchView nativeCall;
+    if(!resolvedCall && callInstruction && CopySyntaxMatch(parsedInstruction.call,instruction,syntax->captures,nativeCall))
     {
       const auto effect=callEffects.find(nativeCall[1]);
       const std::string operands=nativeCall[2];
@@ -1453,12 +2040,12 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
         // A no-argument Native readonly call confined to driver-private memory
         // has no captured resource input (e.g. an implicit texture-load sampler).
         // Keep its opaque return unknown; never invent descriptor provenance.
-        nativeNoResources |= nativeCall[1].str().compare(0,4,"air.")==0 &&
+        nativeNoResources |= nativeCall[1].compare(0,4,"air.")==0 &&
             effect->second.inaccessibleOnly && effect->second.readOnly && operands.empty();
         // Native inter-lane collectives exchange scalar/vector registers and
         // execute on the original GPU. Their convergent declaration is not a
         // CPU result proof, nor permission for device-pointer arguments.
-        nativeNoResources |= nativeCall[1].str().compare(0,9,"air.simd_")==0 &&
+        nativeNoResources |= nativeCall[1].compare(0,9,"air.simd_")==0 &&
             effect->second.convergent && operands.find('*')==std::string::npos &&
             operands.find("ptr ")==std::string::npos && operands.find("%struct.")==std::string::npos;
         if(effect->second.argumentsOnly && !atomicBuffer && !nativeLocalAtomic)
@@ -1485,7 +2072,7 @@ inline UniformAccessReport UniformResourceAccess(const std::string &input,
     // not evaluate its predicate or manufacture covered output bytes.
     const bool nativeFragmentControl=callInstruction && pureFloatingMath &&
         ImmutableSyntaxMatch(instruction,discardInstruction) &&
-        ImmutableSyntaxMatch(text,discardDeclaration, true);
+        syntax->hasDiscardDeclaration;
     report.conditionalAccesses |= nativeFragmentControl;
     const bool math=callInstruction && pureFloatingMath && ImmutableSyntaxMatch(instruction,floatingMath);
     if(instruction.find("call ") != std::string::npos && !resolvedCall && !math && !nativeFragmentControl && !nativeNoResources && !nativeArgumentMemory && !nativeSynchronization && !nativeLocalAtomic && !nativeQuery && !atomicBuffer && !textureOperation &&

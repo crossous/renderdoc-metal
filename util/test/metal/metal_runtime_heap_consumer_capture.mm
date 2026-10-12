@@ -12,6 +12,17 @@ int main(int argc,char **argv)
 {
   if(argc<3 || argc>6)return 1;
   const char *mode=argc>3?argv[3]:"direct";
+  const NSUInteger ordinaryBytes=getenv("RENDERDOC_METAL_TEST_ORDINARY_COPY_BYTES")?
+      strtoull(getenv("RENDERDOC_METAL_TEST_ORDINARY_COPY_BYTES"),nullptr,10):0;
+  const unsigned ordinaryCount=getenv("RENDERDOC_METAL_TEST_ORDINARY_COPY_COUNT")?
+      atoi(getenv("RENDERDOC_METAL_TEST_ORDINARY_COPY_COUNT")):0;
+  const NSUInteger ordinarySpan=getenv("RENDERDOC_METAL_TEST_ORDINARY_COPY_SPAN")?
+      strtoull(getenv("RENDERDOC_METAL_TEST_ORDINARY_COPY_SPAN"),nullptr,10):ordinaryBytes;
+  if((!ordinaryBytes)!=(!ordinaryCount) || (ordinaryCount && (ordinarySpan<4 || ordinarySpan>ordinaryBytes)) ||
+     ordinaryBytes>8*1024*1024 || ordinaryCount>32 ||
+     ordinaryBytes*ordinaryCount>64*1024*1024)return 1;
+
+  const bool queryDynamicAS=getenv("RENDERDOC_METAL_RUNTIME_QUERY_DYNAMIC_AS")!=nullptr;
   const bool queryDynamicHeap=getenv("RENDERDOC_METAL_RUNTIME_QUERY_DYNAMIC_HEAP")!=nullptr;
   const bool queryRetiredRow=getenv("RENDERDOC_METAL_RUNTIME_QUERY_RETIRED_ROW")!=nullptr;
   const unsigned queryNullRows=getenv("RENDERDOC_METAL_RUNTIME_QUERY_NULL_ROWS")?atoi(getenv("RENDERDOC_METAL_RUNTIME_QUERY_NULL_ROWS")):0;
@@ -109,6 +120,16 @@ int main(int argc,char **argv)
         scalarRootOffset>scalarRootBytes || 24>scalarRootBytes-scalarRootOffset))return 4;
     id<MTLBuffer> scalarRoot=scalarRootBytes?[device newBufferWithLength:scalarRootBytes options:MTLResourceStorageModeShared]:nil;
     if(scalarRoot)memset(scalarRoot.contents,0,scalarRootBytes);
+    const unsigned retiredScalarType=getenv("RENDERDOC_METAL_RUNTIME_RETIRED_SCALAR_ROOT")?
+        atoi(getenv("RENDERDOC_METAL_RUNTIME_RETIRED_SCALAR_ROOT")):0;
+    if(retiredScalarType && (!scalarRoot || scalarRootOffset%8 ||
+        (retiredScalarType!=4 && retiredScalarType!=6)))return 4;
+    if(retiredScalarType)
+    {
+      scalarRoot.label=@"Runtime recycled scalar root";
+      const uint64_t packet[3]={outputA.gpuAddress,0,256};
+      memcpy((unsigned char *)scalarRoot.contents+scalarRootOffset,packet,24);
+    }
     auto indexUpload=[device newBufferWithLength:16 options:MTLResourceStorageModeShared];
     auto sourceUpload=[device newBufferWithLength:64 options:MTLResourceStorageModeShared];
     memset(sourceUpload.contents,9,64);
@@ -145,6 +166,7 @@ int main(int argc,char **argv)
     tlasDesc.instanceDescriptorStride=sizeof(*instance);tlasDesc.instanceCount=queryInstances;tlasDesc.instancedAccelerationStructures=@[blas];
     auto tlasSizes=[device accelerationStructureSizesWithDescriptor:tlasDesc];
     auto tlas=[device newAccelerationStructureWithSize:tlasSizes.accelerationStructureSize];tlas.label=@"Runtime query TLAS";
+    auto tlas2=queryDynamicAS?[device newAccelerationStructureWithSize:tlasSizes.accelerationStructureSize]:nil;
     auto tlasScratch=[device newBufferWithLength:tlasSizes.buildScratchBufferSize options:privateOptions];
     id<MTLBuffer> initialA=upload,initialB=upload;
     if(queryDynamicHeap)
@@ -176,6 +198,7 @@ int main(int argc,char **argv)
     auto as=[initial accelerationStructureCommandEncoder];
     [as buildAccelerationStructure:blas descriptor:blasDesc scratchBuffer:blasScratch scratchBufferOffset:0];
     [as buildAccelerationStructure:tlas descriptor:tlasDesc scratchBuffer:tlasScratch scratchBufferOffset:0];
+    if(queryDynamicAS)[as buildAccelerationStructure:tlas2 descriptor:tlasDesc scratchBuffer:tlasScratch scratchBufferOffset:0];
     [as endEncoding];[initial commit];[initial waitUntilCompleted];
     if(initial.status!=MTLCommandBufferStatusCompleted)return 3;
     auto contributions=[device newBufferWithLength:queryContributionOffset+queryInstances*4 options:MTLResourceStorageModeShared];memset(contributions.contents,contributionProducer?0x6a:0,contributions.length);
@@ -183,7 +206,12 @@ int main(int argc,char **argv)
       memset((char *)contributions.contents+queryContributionOffset,0xff,queryInstances*4);}
     auto header=[device newBufferWithLength:queryHeaderOffset+64 options:MTLResourceStorageModeShared];memset(header.contents,0,header.length);
     auto words=(uint64_t *)((uint8_t *)header.contents+queryHeaderOffset);words[0]=tlas.gpuResourceID._impl;words[1]=contributions.gpuAddress+queryContributionOffset;
-    const unsigned baseSlots=loop?5:opaque || scalarCounter || queryPartialHeap?4:3;
+    auto contributions2=queryDynamicAS?[device newBufferWithLength:queryContributionOffset+32+queryInstances*4 options:MTLResourceStorageModeShared]:nil;
+    if(contributions2){memset(contributions2.contents,0x6a,contributions2.length);memset((char *)contributions2.contents+queryContributionOffset+32,0,queryInstances*4);}
+    auto header2=queryDynamicAS?[device newBufferWithLength:queryHeaderOffset+96 options:MTLResourceStorageModeShared]:nil;
+    if(header2){memset(header2.contents,0,header2.length);auto ptr=(uint64_t *)((char *)header2.contents+queryHeaderOffset+16);
+      ptr[0]=tlas2.gpuResourceID._impl;ptr[1]=contributions2.gpuAddress+queryContributionOffset+32;}
+    const unsigned baseSlots=loop?5:opaque || scalarCounter || queryPartialHeap || queryDynamicAS?4:3;
     const unsigned slots=queryNullRows?3+queryNullRows:textureDimensions?5:baseSlots+queryColdRows+(queryRetiredRow?1:0);
     auto heap=[device newBufferWithLength:slots*sizeof(Entry) options:MTLResourceStorageModeShared];heap.label=@"Runtime resource heap";
     memset(heap.contents,0,heap.length);
@@ -191,6 +219,7 @@ int main(int argc,char **argv)
     entries[1]={gpuDescriptors?outputB.gpuAddress:outputA.gpuAddress,0,256};entries[2]={gpuDescriptors?outputA.gpuAddress:outputB.gpuAddress,0,256};
     auto payload=gpuDescriptors?[device newBufferWithLength:48 options:MTLResourceStorageModeShared]:nil;payload.label=@"Runtime descriptor payload";
     if(payload){auto p=(Entry *)payload.contents;p[0]={outputA.gpuAddress,0,256};p[1]={outputB.gpuAddress,0,256};}
+    if(queryDynamicAS)entries[3]={header2.gpuAddress+queryHeaderOffset+16,0,0};
     if(scalarCounter)entries[3]={counter.gpuAddress,0,64};
     if(opaque)entries[3]={staging.gpuAddress,0,64};
     if(loop){entries[3]={indices.gpuAddress+16,0,16};entries[4]={source.gpuAddress,0,16};}
@@ -243,6 +272,8 @@ int main(int argc,char **argv)
       if(api->SetObjectAnnotation((__bridge void *)device,(__bridge void *)pipeline,"metal.irComputeReflection",eRENDERDOC_String,0,&abi) ||
           annotate(heap,"metal.descriptorTable",2,0,slots,24) || annotate(samplers,"metal.descriptorTable",2,0,samplerSlots,24) ||
           annotate(header,"metal.rayASHeader",queryHeaderOffset,(uint64_t)(__bridge void *)tlas,(uint64_t)(__bridge void *)contributions,queryContributionOffset))return 4;
+      if(queryDynamicAS && annotate(header2,"metal.rayASHeader",queryHeaderOffset+16,
+          (uint64_t)(__bridge void *)tlas2,(uint64_t)(__bridge void *)contributions2,queryContributionOffset+32))return 4;
       if(gpuDescriptors)
       {
         RENDERDOC_AnnotationValue writes={};writes.uint32=1;
@@ -258,10 +289,10 @@ int main(int argc,char **argv)
         const unsigned legacyType=i==1 || i==2 || ((opaque || scalarCounter) && i==3)?5:4;
         const unsigned bufferType=i==1?1:i==2?3:i==3?0:i==4?2:4;
         const unsigned type=bufferTypes?bufferType:legacyType;
-        id buffer=i==0?header:i==1?(gpuDescriptors?outputB:outputA):i==2?(gpuDescriptors?outputA:outputB):scalarCounter?counter:opaque?staging:i==3?indices:source;
+        id buffer=i==3 && queryDynamicAS?header2:i==0?header:i==1?(gpuDescriptors?outputB:outputA):i==2?(gpuDescriptors?outputA:outputB):scalarCounter?counter:opaque?staging:i==3?indices:source;
         if(annotate(heap,"metal.descriptorSlotEvent",i*24,1,0,type) ||
            annotate(heap,"metal.descriptorSlotEvent",i*24,1,2,type) ||
-           annotate(heap,"metal.descriptorSlotBinding",i*24,i?0:3,(uint64_t)(__bridge void *)buffer,i==0?queryHeaderOffset:loop && i==3?16:0))return 4;
+           annotate(heap,"metal.descriptorSlotBinding",i*24,i==0 || (i==3 && queryDynamicAS)?3:0,(uint64_t)(__bridge void *)buffer,i==3 && queryDynamicAS?queryHeaderOffset+16:i==0?queryHeaderOffset:loop && i==3?16:0))return 4;
       }
       if(queryRetiredRow && (annotate(heap,"metal.descriptorSlotEvent",retiredRow*24,1,0,4) ||
          annotate(heap,"metal.descriptorSlotEvent",retiredRow*24,1,2,4) ||
@@ -269,6 +300,10 @@ int main(int argc,char **argv)
          annotate(heap,"metal.descriptorSlotEvent",retiredRow*24,1,1,4)))return 4;
       if(annotate(samplers,"metal.descriptorSlotEvent",0,1,0,7) || annotate(samplers,"metal.descriptorSlotEvent",0,1,2,7) ||
          annotate(samplers,"metal.descriptorSlotBinding",0,2,(uint64_t)(__bridge void *)sampler,0))return 4;
+      if(retiredScalarType && (annotate(scalarRoot,"metal.descriptorSlotEvent",scalarRootOffset,1,0,retiredScalarType) ||
+         annotate(scalarRoot,"metal.descriptorSlotEvent",scalarRootOffset,1,2,retiredScalarType) ||
+         annotate(scalarRoot,"metal.descriptorSlotBinding",scalarRootOffset,0,(uint64_t)(__bridge void *)outputA,0) ||
+         annotate(scalarRoot,"metal.descriptorSlotEvent",scalarRootOffset,1,1,retiredScalarType)))return 4;
       if(queryNullRows && (annotate(heap,"metal.descriptorSlotEvent",72,1,0,4) ||
          annotate(heap,"metal.descriptorSlotEvent",72,1,2,4) ||
          annotate(heap,"metal.descriptorSlotBinding",72,1,(uint64_t)(__bridge void *)nullTexture,0)))return 4;
@@ -332,6 +367,13 @@ int main(int argc,char **argv)
     // This invalid, released descriptor is never accessed by the Native query.
     // Keep its old raw field to distinguish initial invalidation from zero input.
     retiredSource=nil;
+    if(retiredScalarType)
+    {
+      // Ordinary CPU data reuses a released packet's memory before capture.
+      // There is no new typed publication and no permanent descriptor table.
+      const uint32_t ordinary[6]={19,23,29,31,37,41};
+      memcpy((unsigned char *)scalarRoot.contents+scalarRootOffset,ordinary,24);
+    }
     if(queryRetiredRow)printf("Native namespace retired row=%u oldAddress=%llu before capture\n",retiredRow,(unsigned long long)entries[retiredRow].buffer);
     id<MTLHeap> coldHeap=nil;
     if(queryColdRows)
@@ -341,7 +383,32 @@ int main(int argc,char **argv)
       const auto layout=[device heapBufferSizeAndAlignWithLength:queryPartialSize options:privateOptions];
       hd.size=layout.size*queryColdRows;coldHeap=[device newHeapWithDescriptor:hd];if(!coldHeap)return 3;
     }
+    auto ordinaryUpload=ordinaryBytes?[device newBufferWithLength:ordinaryBytes options:MTLResourceStorageModeShared]:nil;
+    auto ordinaryRead=ordinaryCount?[device newBufferWithLength:ordinaryCount*4 options:MTLResourceStorageModeShared]:nil;
+    NSMutableArray *ordinaryCopies=[NSMutableArray array];
+    if(ordinaryCount)
+    {
+      if(!ordinaryUpload || !ordinaryRead)return 3;
+      memset(ordinaryUpload.contents,0x3b,ordinaryBytes);memset(ordinaryRead.contents,0xcc,ordinaryCount*4);
+      ordinaryRead.label=@"Runtime ordinary copy readback";
+    }
     if(api){api->SetCaptureFilePathTemplate(argv[1]);api->StartFrameCapture(nullptr,nullptr);}
+    if(ordinaryCount)
+    {
+      // Defined ordinary API data and same-queue dependencies. Retain multiple
+      // allocations to exercise optional scalar-cache exhaustion independently
+      // of shader syntax, API range checks, descriptor publication or support.
+      auto command=[queue commandBuffer];auto blit=[command blitCommandEncoder];
+      for(unsigned i=0;i<ordinaryCount;i++)
+      {
+        auto destination=[device newBufferWithLength:ordinaryBytes options:privateOptions];
+        if(!destination)return 3;[ordinaryCopies addObject:destination];
+        [blit copyFromBuffer:ordinaryUpload sourceOffset:0 toBuffer:destination destinationOffset:0 size:ordinarySpan];
+        [blit copyFromBuffer:destination sourceOffset:ordinarySpan-4 toBuffer:ordinaryRead destinationOffset:i*4 size:4];
+      }
+      [blit endEncoding];[command commit]; // no intermediate readback/wait
+    }
+
     if(queryBirthPrefix || queryBirthPending)
     {
       // A completed operation on a disjoint allocation in this same physical
@@ -645,6 +712,7 @@ int main(int argc,char **argv)
       if(dimensionTexture)[compute useResource:dimensionTexture usage:textureAtomics || textureBufferView?
           MTLResourceUsageRead|MTLResourceUsageWrite:MTLResourceUsageRead];
       if(scalarCounter)[compute useResource:counter usage:MTLResourceUsageRead];
+      if(queryDynamicAS){[compute useResource:tlas2 usage:MTLResourceUsageRead];[compute useResource:header2 usage:MTLResourceUsageRead];[compute useResource:contributions2 usage:MTLResourceUsageRead];}
       if(nativeRayQuery){[compute useResource:header usage:MTLResourceUsageRead];[compute useResource:contributions usage:MTLResourceUsageRead];[compute useResource:tlas usage:MTLResourceUsageRead];[compute useResource:blas usage:MTLResourceUsageRead];}
       if(loop){[compute useResource:indices usage:MTLResourceUsageRead];[compute useResource:source usage:MTLResourceUsageRead];}
       [compute dispatchThreadgroups:queryGroupIndices?MTLSizeMake(3,1,1):groupBuiltins?MTLSizeMake(2,2,2):MTLSizeMake(1,1,1) threadsPerThreadgroup:groupBuiltins?MTLSizeMake(2,1,1):guardedIndex?MTLSizeMake(64,1,1):MTLSizeMake(1,1,1)];[compute endEncoding];
@@ -668,6 +736,12 @@ int main(int argc,char **argv)
     }
     [final commit];[final waitUntilCompleted];if(final.status!=MTLCommandBufferStatusCompleted)return 5;
     if(api && !api->EndFrameCapture(nullptr,nullptr))return 6;
+    if(ordinaryCount)
+    {
+      for(unsigned i=0;i<ordinaryCount*4;i++)if(((unsigned char *)ordinaryRead.contents)[i]!=0x3b)return 9;
+      printf("PASS Native ordinary copy coverage: %u allocations x %lu bytes; no intermediate wait\n",ordinaryCount,(unsigned long)ordinaryBytes);
+    }
+
     if(readView)for(unsigned i=0;i<256;i++)
     {
       const uint32_t settings[4]={2,7,callEffects?568U:456U,1};

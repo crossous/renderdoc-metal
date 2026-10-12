@@ -36,6 +36,130 @@
 #include "metal_sampler_state.h"
 #include "metal_acceleration_structure.h"
 
+void WrappedMTLComputeCommandEncoder::TrackInputSnapshotResources(
+    const rdcarray<WrappedMTLResource *> &resources, MTL::ResourceUsage usage)
+{
+  if(!Process::GetEnvVariable("RENDERDOC_METAL_END_RESOURCES_DIR").empty())
+  {
+    // A Native encoder can begin recording before the frame cutoff and
+    // submit inside the frame. Preserve all of its original declarations.
+    const uint64_t epoch = IsCaptureMode(m_State) ? 0 : m_Device->GetReplayEpoch();
+    if(epoch != m_EndSnapshotEpoch) { m_EndSnapshotEpoch = epoch; m_EndSnapshotResources.clear(); }
+    // Explicit API declaration order is a diagnostic locator across fresh
+    // captures. It is neither an access proof nor production eligibility.
+    for(auto resource : resources)
+      if(m_EndSnapshotResources.size() < 4096) m_EndSnapshotResources.push_back(GetResID(resource));
+  }
+  if(Process::GetEnvVariable("RENDERDOC_METAL_INPUT_SNAPSHOT_DIR").empty()) return;
+  const uint64_t epoch = IsCaptureMode(m_State) ? m_Device->GetCaptureEpoch() : m_Device->GetReplayEpoch();
+  if(epoch != m_InputSnapshotEpoch)
+  {
+    m_InputSnapshotEpoch = epoch; m_InputSnapshotDone = false; m_InputSnapshotResources.clear();
+  }
+  for(auto resource : resources)
+    if(resource && ((WrappedMTLObject *)resource)->m_Type == eResBuffer && m_InputSnapshotResources.size() < 256)
+      m_InputSnapshotResources[GetResID(resource)] |= uint64_t(usage);
+}
+
+void WrappedMTLComputeCommandEncoder::SnapshotSelectedInputs(uint32_t ordinal)
+{
+  const rdcstr directory = Process::GetEnvVariable("RENDERDOC_METAL_INPUT_SNAPSHOT_DIR");
+  const rdcstr selected = Process::GetEnvVariable("RENDERDOC_METAL_INPUT_SNAPSHOT_PIPELINE");
+  const rdcstr selectedEncoder = Process::GetEnvVariable("RENDERDOC_METAL_INPUT_SNAPSHOT_ENCODER");
+  const rdcstr ranges = Process::GetEnvVariable("RENDERDOC_METAL_INPUT_SNAPSHOT_RANGES");
+  if(directory.empty() || directory[0] != '/' || m_InputSnapshotDone ||
+     !m_Pipeline) return;
+  if(!selectedEncoder.empty())
+  { if(selectedEncoder != ToStr(m_ID)) return; }
+  else if(selected.empty() || selected != m_DiagnosticPipelineLabel) return;
+  // A test locator only. Neither this label nor these byte observations decide
+  // production eligibility. Declared residency is not proof of actual access.
+  m_InputSnapshotDone = true;
+  if(IsReplayMode(m_State))
+  {
+    const auto state = m_Device->GetReplay()->SaveEncoderState();
+    m_IndirectCapture.BindPipeline(Unwrap(m_Pipeline));
+    for(uint32_t slot = 0; slot < 2; slot++)
+    {
+      if(m_VisibleTables[slot] || m_IntersectionTables[slot] ||
+         (slot < state.pipeline.computeAccelerationStructures.size() &&
+          state.pipeline.computeAccelerationStructures[slot] != ResourceId())) return;
+      auto bytes = state.computeInlineData.find(slot);
+      if(bytes != state.computeInlineData.end()) m_IndirectCapture.BindBytes(bytes->second, slot);
+      else
+      {
+        const auto binding = m_Device->GetReplay()->GetComputeBuffer(slot);
+        auto object = m_Device->GetResourceManager()->GetResource(binding.resourceId, true);
+        auto native = object && object->m_Type == eResBuffer && object->m_Real ? Unwrap((WrappedMTLBuffer *)object) : NULL;
+        m_IndirectCapture.BindBuffer(native, binding.byteOffset, slot);
+      }
+    }
+  }
+  struct Range { ResourceId id; uint64_t offset, length; };
+  rdcarray<Range> requested;
+  const char *cursor = ranges.c_str();
+  while(*cursor)
+  {
+    char *end = NULL;
+    const uint64_t number = strtoull(cursor, &end, 10);
+    if(!number || end == cursor || *end != ':' || requested.size() >= 256) return;
+    cursor = end + 1; const uint64_t offset = strtoull(cursor, &end, 10);
+    if(end == cursor || *end != ':') return;
+    cursor = end + 1; const uint64_t length = strtoull(cursor, &end, 10);
+    if(end == cursor || !length || (*end && *end != ',') || (offset & 3)) return;
+    ResourceId id; memcpy(&id, &number, sizeof(id)); requested.push_back({id, offset, length});
+    cursor = *end ? end + 1 : end;
+  }
+  struct SavedInput { ResourceId id; uint64_t usage, offset; MetalIndirectReadback readback; };
+  rdcarray<SavedInput> inputs;
+  uint64_t bytes = 0;
+  if(ranges.empty())
+    for(const auto &entry : m_InputSnapshotResources)
+    {
+      auto object = m_Device->GetResourceManager()->GetResource(entry.first, true);
+      auto native = object && object->m_Type == eResBuffer && object->m_Real ? Unwrap((WrappedMTLBuffer *)object) : NULL;
+      if(native) requested.push_back({entry.first, 0, native->length()});
+    }
+  for(const auto &range : requested)
+  {
+    const auto entry = m_InputSnapshotResources.find(range.id);
+    if(entry == m_InputSnapshotResources.end() || !(entry->second & MTL::ResourceUsageRead)) continue;
+    auto object = m_Device->GetResourceManager()->GetResource(range.id, true);
+    auto native = object && object->m_Type == eResBuffer && object->m_Real ? Unwrap((WrappedMTLBuffer *)object) : NULL;
+    if(!native || !range.length || range.offset > native->length() ||
+       range.length > native->length() - range.offset || range.length > 1048576 ||
+       range.length > (8ULL << 20) - bytes)
+    {
+      fprintf(stderr, "Metal input snapshot unobserved: encoder=%s buffer=%s reason=logical-range-or-budget\n", ToStr(m_ID).c_str(), ToStr(range.id).c_str());
+      continue;
+    }
+    SavedInput saved; saved.id = range.id; saved.usage = entry->second; saved.offset = range.offset;
+    if(!m_IndirectCapture.SnapshotBytes(Unwrap(m_Device), Unwrap(this), native, saved.readback, range.offset, range.length))
+    {
+      fprintf(stderr, "Metal input snapshot unobserved: encoder=%s buffer=%s reason=binding-or-allocation\n", ToStr(m_ID).c_str(), ToStr(range.id).c_str());
+      continue;
+    }
+    bytes += range.length; inputs.push_back(saved);
+  }
+  const ResourceId command = GetResID(m_CommandBuffer), encoder = m_ID;
+  const uint64_t epoch = m_InputSnapshotEpoch;
+  // All Native owners survive even an unretained command buffer. Export after
+  // its real completion, without an additional CPU wait or a future snapshot.
+  Unwrap(m_CommandBuffer)->addCompletedHandler([inputs, directory, command, encoder, epoch, ordinal, ranges](MTL::CommandBuffer *completed) {
+    if(completed->status() != MTL::CommandBufferStatusCompleted || completed->error()) return;
+    for(const auto &saved : inputs)
+    {
+      auto native = saved.readback.snapshot;
+      const rdcstr suffix = ranges.empty() ? "" : StringFormat::Fmt("-offset-%llu-length-%llu", saved.offset, uint64_t(native->length()));
+      const rdcstr path = StringFormat::Fmt("%s/epoch-%llu-command-%s-encoder-%s-ordinal-%u-buffer-%s-usage-%llu%s.bin", directory.c_str(), (unsigned long long)epoch, ToStr(command).c_str(), ToStr(encoder).c_str(), ordinal, ToStr(saved.id).c_str(), (unsigned long long)saved.usage, suffix.c_str());
+      FILE *file = fopen(path.c_str(), "wbx");
+      const bool exported = file && native && native->contents() && fwrite(native->contents(), 1, native->length(), file) == native->length();
+      if(file) fclose(file);
+      fprintf(stderr, "Metal input snapshot export: encoder=%s ordinal=%u buffer=%s bytes=%llu result=%s path=%s\n", ToStr(encoder).c_str(), ordinal, ToStr(saved.id).c_str(), native ? (unsigned long long)native->length() : 0ULL, exported ? "EXPORTED" : "FAILED", path.c_str());
+    }
+  });
+}
+
 WrappedMTLComputeCommandEncoder::WrappedMTLComputeCommandEncoder(MTL::ComputeCommandEncoder *real,
                                                                  ResourceId id,
                                                                  WrappedMTLDevice *device)
@@ -95,6 +219,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_declareHeaps(
       Unwrap(ComputeCommandEncoder)->useHeap(real[0]);
     else if(!real.empty())
       Unwrap(ComputeCommandEncoder)->useHeaps(real.data(), real.size());
+    if(!m_Device->DeclareReplayASHeapDependencies(Unwrap(ComputeCommandEncoder), heaps))
+      return false;
   }
   return true;
 }
@@ -163,12 +289,17 @@ bool WrappedMTLComputeCommandEncoder::Serialise_useResource(SerialiserType &ser,
       return false;
     }
     Unwrap(ComputeCommandEncoder)->useResource(Unwrap(resource), (MTL::ResourceUsage)usageValue);
+    if(((WrappedMTLObject *)resource)->m_Type == eResAccelerationStructure &&
+       !m_Device->DeclareReplayASDependencies(Unwrap(ComputeCommandEncoder), {GetResID(resource)}))
+      return false;
+    ComputeCommandEncoder->TrackInputSnapshotResources({resource}, (MTL::ResourceUsage)usageValue);
   }
   return true;
 }
 
 void WrappedMTLComputeCommandEncoder::useResource(WrappedMTLResource *resource, MTL::ResourceUsage usage)
 {
+  TrackInputSnapshotResources({resource}, usage);
   SERIALISE_TIME_CALL(Unwrap(this)->useResource(Unwrap(resource), usage));
   if(IsCaptureMode(m_State))
   {
@@ -203,12 +334,19 @@ bool WrappedMTLComputeCommandEncoder::Serialise_useResources(SerialiserType &ser
     const auto real = UnwrapMetalResources(resources);
     if(!real.empty())
       Unwrap(ComputeCommandEncoder)->useResources(real.data(), real.size(), (MTL::ResourceUsage)usageValue);
+    rdcarray<ResourceId> structures;
+    for(auto resource : resources)
+      if(((WrappedMTLObject *)resource)->m_Type == eResAccelerationStructure) structures.push_back(GetResID(resource));
+    if(!m_Device->DeclareReplayASDependencies(Unwrap(ComputeCommandEncoder), structures))
+      return false;
+    ComputeCommandEncoder->TrackInputSnapshotResources(resources, (MTL::ResourceUsage)usageValue);
   }
   return true;
 }
 
 void WrappedMTLComputeCommandEncoder::useResources(rdcarray<WrappedMTLResource *> resources, MTL::ResourceUsage usage)
 {
+  TrackInputSnapshotResources(resources, usage);
   const auto real = UnwrapMetalResources(resources);
   if(!real.empty())
   {
@@ -504,7 +642,12 @@ bool WrappedMTLComputeCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
       return false;
 
     Unwrap(ComputeCommandEncoder)->endEncoding();
+    SnapshotMetalDiagnosticResources(m_Device, ComputeCommandEncoder->m_CommandBuffer,
+        GetResID(ComputeCommandEncoder), ComputeCommandEncoder->m_DiagnosticPipelineLabel, false,
+        "RENDERDOC_METAL_END_RESOURCES", ComputeCommandEncoder->m_EndSnapshotResources);
     m_Device->SetReplayComputeCommandEncoder(NULL);
+    SnapshotMetalDiagnosticTexture(m_Device, ComputeCommandEncoder->m_CommandBuffer,
+        GetResID(ComputeCommandEncoder), "RENDERDOC_METAL_COMPUTE_END_SNAPSHOT");
     if(IsLoading(m_State))
     {
       AddEvent();
@@ -520,6 +663,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_endEncoding(SerialiserType &ser)
 void WrappedMTLComputeCommandEncoder::endEncoding()
 {
   SERIALISE_TIME_CALL(Unwrap(this)->endEncoding());
+  if(IsActiveCapturing(m_State))
+    SnapshotMetalDiagnosticResources(m_Device, m_CommandBuffer, m_ID,
+        m_DiagnosticPipelineLabel, true,
+        "RENDERDOC_METAL_END_RESOURCES", m_EndSnapshotResources);
   m_IndirectCapture.Clear();
   if(IsCaptureMode(m_State))
   {
@@ -548,6 +695,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setComputePipelineState(
       return false;
     Unwrap(ComputeCommandEncoder)->setComputePipelineState(Unwrap(pipeline));
     ComputeCommandEncoder->m_Pipeline = pipeline;
+    NS::String *label = Unwrap(pipeline)->label();
+    ComputeCommandEncoder->m_DiagnosticPipelineLabel = label ? label->utf8String() : "";
     m_Device->GetReplay()->SetComputePipeline(GetResID(pipeline));
   }
   return true;
@@ -821,6 +970,10 @@ void WrappedMTLComputeCommandEncoder::setComputePipelineState(
   SERIALISE_TIME_CALL(Unwrap(this)->setComputePipelineState(Unwrap(pipeline)));
   if(m_CaptureIndirectArguments) m_IndirectCapture.BindPipeline(Unwrap(pipeline));
   m_Pipeline = pipeline;
+  // A caller can release its PSO after encoding. Diagnostics must not follow
+  // the non-owning wrapper pointer at endEncoding, even when disabled.
+  NS::String *label = pipeline ? Unwrap(pipeline)->label() : NULL;
+  m_DiagnosticPipelineLabel = label ? label->utf8String() : "";
   if(IsCaptureMode(m_State))
   {
     CACHE_THREAD_SERIALISER();
@@ -952,7 +1105,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setSamplerState(SerialiserType &
        ComputeCommandEncoder != m_Device->GetReplayComputeCommandEncoder(ComputeCommandEncoder))
       return false;
 
-    if(index >= 16 || !sampler)
+    if(index >= 16 || (sampler &&
+       (sampler->m_Type != eResSamplerState || sampler->m_Device != m_Device || !sampler->m_Real)))
     {
       RDCERR("Invalid Metal compute sampler binding");
       return false;
@@ -1113,6 +1267,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_setAccelerationStructure(
       return false;
     }
     Unwrap(ComputeCommandEncoder)->setAccelerationStructure(Unwrap(structure), index);
+    if(structure && !m_Device->DeclareReplayASDependencies(Unwrap(ComputeCommandEncoder), {GetResID(structure)}))
+      return false;
     m_Device->GetReplay()->BindAccelerationStructure(ShaderStage::Compute, uint32_t(index), GetResID(structure));
   }
   return true;
@@ -1456,6 +1612,8 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(SerialiserT
       RDCERR("Invalid Metal compute buffer range");
       return false;
     }
+    if(!Process::GetEnvVariable("RENDERDOC_METAL_INPUT_SNAPSHOT_RANGES").empty())
+      ComputeCommandEncoder->SnapshotSelectedInputs(UINT32_MAX);
     realEncoder->dispatchThreadgroups(groups, threadsPerGroup);
     m_Device->NoteDescriptorDispatch(GetResID(ComputeCommandEncoder));
     if(IsLoading(m_State) &&
@@ -1574,6 +1732,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
       ComputeCommandEncoder->m_IndirectReplayOrdinal=0;
     }
     const uint32_t ordinal=ComputeCommandEncoder->m_IndirectReplayOrdinal++;
+    ComputeCommandEncoder->SnapshotSelectedInputs(ordinal);
     if(hasHeapQuery)
     {
       // VK FetchIndirectData and DX12 ExecuteIndirect preserve each use, not the
@@ -1622,8 +1781,14 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
       return false;
     }
 
-    MTL::Buffer *executionArguments=NULL;
-    if(!replay->RegisterComputeIndirectAction(IsLoading(m_State)?replay->GetNextEventID():0,
+    MTL::Buffer *executionArguments = m_Device->GetDiagnosticIndirectArguments(
+        ComputeCommandEncoder, GetResID(indirectBuffer), indirectBufferOffset);
+    const bool diagnosticArguments = executionArguments != NULL;
+    // This pointer exists only inside a single isolated original redispatch.
+    // Its bytes came from the current GPU window and were validated before
+    // encoding. Frozen AS invocation contracts never use this comparison path.
+    if(diagnosticArguments && hasHeapQuery) return false;
+    if(!diagnosticArguments && !replay->RegisterComputeIndirectAction(IsLoading(m_State)?replay->GetNextEventID():0,
         GetResID(indirectBuffer), indirectBufferOffset, Unwrap(ComputeCommandEncoder),
         GetResID(ComputeCommandEncoder),&executionArguments,
         uint32_t(threadsPerGroup.width*threadsPerGroup.height*threadsPerGroup.depth)))
@@ -1633,7 +1798,7 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreadgroups(
     }
     replay->SetIndirectBuffer(GetResID(indirectBuffer), indirectBufferOffset, argumentSize);
     Unwrap(ComputeCommandEncoder)
-        ->dispatchThreadgroups(executionArguments, 16, threadsPerGroup);
+        ->dispatchThreadgroups(executionArguments, diagnosticArguments ? 0 : 16, threadsPerGroup);
     m_Device->NoteDescriptorDispatch(GetResID(ComputeCommandEncoder));
 
     if(IsLoading(m_State))
@@ -1681,6 +1846,7 @@ void WrappedMTLComputeCommandEncoder::dispatchThreadgroups(
     evidence.command=GetResID(m_CommandBuffer); evidence.encoder=m_ID;
     evidence.buffer=GetResID(indirectBuffer); evidence.offset=indirectBufferOffset;
     evidence.epoch=m_Device->GetCaptureEpoch(); evidence.ordinal=m_CaptureIndirectOrdinal++;
+    SnapshotSelectedInputs(evidence.ordinal);
     if(m_IndirectCapture.Snapshot(Unwrap(m_Device),Unwrap(this),Unwrap(indirectBuffer),
                                  indirectBufferOffset,evidence.readback))
     {
@@ -1737,6 +1903,10 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreads(SerialiserType &
     const TextureDescription source = replay->GetTexture(replay->GetComputeTextureForAccess(false));
     const TextureDescription destination = replay->GetTexture(replay->GetComputeTextureForAccess(true));
     const MetalPipe::BufferBinding output = replay->GetComputeBufferForAccess(true);
+    // The same whole-frame restoration and Native binding proof applies to
+    // exact thread grids. Preserve dispatchThreads, including non-uniform edges.
+    const bool sourcedDispatch = m_Device->HasValidatedSourcedComputeDispatch(GetResID(ComputeCommandEncoder)) &&
+        replay->ValidateComputeBufferBindings();
     const bool bufferOutput = destination.resourceId == ResourceId() && output.resourceId != ResourceId();
     // Like a Vulkan storage texel buffer / D3D12 typed buffer UAV, a reflected
     // write-only TextureBuffer needs no source image or buffer output. Creation
@@ -1750,41 +1920,50 @@ bool WrappedMTLComputeCommandEncoder::Serialise_dispatchThreads(SerialiserType &
         grid.height == 1 && grid.width <= destination.width && replay->ValidateComputeBufferBindings();
     if(!ComputeCommandEncoder || !replay->ValidateComputeThreadgroup(threadsPerGroup, &grid) ||
        (bufferOutput && !replay->ValidateComputeBufferBindings()) ||
-       (!bufferOutput && !bufferTextureWrite && (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
+       (!sourcedDispatch && !bufferOutput && !bufferTextureWrite && (source.resourceId == ResourceId() || destination.resourceId == ResourceId() ||
        source.type != TextureType::Texture2D || destination.type != TextureType::Texture2D ||
        source.width != destination.width || source.height != destination.height ||
        source.format != destination.format || grid.width > destination.width || grid.height > destination.height)) ||
-       grid.width == 0 || grid.height == 0 || grid.depth != 1 ||
-       grid.width > UINT32_MAX || grid.height > UINT32_MAX ||
+       grid.width == 0 || grid.height == 0 || grid.depth == 0 ||
+       (!sourcedDispatch && grid.depth != 1) ||
+       grid.width > UINT32_MAX || grid.height > UINT32_MAX || grid.depth > UINT32_MAX ||
        threadsPerGroup.width == 0 || threadsPerGroup.height == 0 ||
-       threadsPerGroup.depth != 1 || threadsPerGroup.width > 1024 ||
+       threadsPerGroup.depth == 0 || (!sourcedDispatch && threadsPerGroup.depth != 1) || threadsPerGroup.width > 1024 ||
        threadsPerGroup.height > 1024 ||
-       threadsPerGroup.width * threadsPerGroup.height > 1024)
+       threadsPerGroup.width > 1024 / threadsPerGroup.height ||
+       threadsPerGroup.width * threadsPerGroup.height > 1024 / threadsPerGroup.depth)
     {
       RDCERR("Invalid Metal compute texture binding or thread grid");
       return false;
     }
     Unwrap(ComputeCommandEncoder)->dispatchThreads(grid, threadsPerGroup);
+    m_Device->NoteDescriptorDispatch(GetResID(ComputeCommandEncoder));
+    if(IsLoading(m_State) &&
+       !replay->TraceComputeArgumentProducers(replay->GetNextEventID(),
+                                             GetResID(ComputeCommandEncoder->m_CommandBuffer), Unwrap(ComputeCommandEncoder)))
+      return false;
     if(IsLoading(m_State))
     {
       AddEvent();
       ActionDescription action;
-      action.customName = StringFormat::Fmt("dispatchThreads(%llux%llux1, %llux%llux1)",
-                                             (uint64_t)grid.width, (uint64_t)grid.height,
+      action.customName = StringFormat::Fmt("dispatchThreads(%llux%llux%llu, %llux%llux%llu)",
+                                             (uint64_t)grid.width, (uint64_t)grid.height, (uint64_t)grid.depth,
                                              (uint64_t)threadsPerGroup.width,
-                                             (uint64_t)threadsPerGroup.height);
+                                             (uint64_t)threadsPerGroup.height, (uint64_t)threadsPerGroup.depth);
       action.flags = ActionFlags::Dispatch;
       action.dispatchDimension[0] = (uint32_t)grid.width;
       action.dispatchDimension[1] = (uint32_t)grid.height;
-      action.dispatchDimension[2] = 1;
+      action.dispatchDimension[2] = (uint32_t)grid.depth;
       action.dispatchThreadsDimension[0] = (uint32_t)threadsPerGroup.width;
       action.dispatchThreadsDimension[1] = (uint32_t)threadsPerGroup.height;
-      action.dispatchThreadsDimension[2] = 1;
+      action.dispatchThreadsDimension[2] = (uint32_t)threadsPerGroup.depth;
       AddAction(action);
-      replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
-      replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);
-      if(bufferOutput)
-        replay->AddUsage(output.resourceId, ResourceUsage::CS_RWResource);
+      if(!sourcedDispatch)
+      {
+        replay->AddUsage(source.resourceId, ResourceUsage::CS_Resource);
+        replay->AddUsage(destination.resourceId, ResourceUsage::CS_RWResource);
+        if(bufferOutput) replay->AddUsage(output.resourceId, ResourceUsage::CS_RWResource);
+      }
     }
   }
   return true;

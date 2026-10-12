@@ -3,10 +3,11 @@
 from pathlib import Path
 import argparse,fcntl,tempfile,os,subprocess,signal,json,hashlib,sys,time,copy,re
 import xml.etree.ElementTree as ET
-parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--work-dir',type=Path,required=True);parser.add_argument('--early-fragment',action='store_true');parser.add_argument('--independent',action='store_true');parser.add_argument('--baseline',action='store_true');parser.add_argument('--local-helper',action='store_true');parser.add_argument('--gpu-indices',action='store_true');parser.add_argument('--pointer-origins',action='store_true');args=parser.parse_args()
+parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--work-dir',type=Path,required=True);parser.add_argument('--early-fragment',action='store_true');parser.add_argument('--independent',action='store_true');parser.add_argument('--baseline',action='store_true');parser.add_argument('--local-helper',action='store_true');parser.add_argument('--gpu-indices',action='store_true');parser.add_argument('--pointer-origins',action='store_true');parser.add_argument('--pending-slot',action='store_true');parser.add_argument('--pending-consumed',action='store_true');args=parser.parse_args()
 if args.independent and not args.early_fragment:parser.error('Independent variant requires fragment workload')
 if args.local_helper and not args.early_fragment:parser.error('Local helper requires fragment workload')
 if args.baseline and not args.early_fragment:parser.error('Baseline reproduces fragment metadata rejection')
+if args.pending_consumed and not args.baseline:parser.error('Consuming the slot before its identity publication is a contract negative; use --baseline')
 r=Path(__file__).resolve().parents[3];b=r/'build-macos-debug';w=args.work_dir.resolve();assert not w.exists();w.mkdir();sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest();m={'status':'RUNNING','backend_sha256':sha(b/'lib/librenderdoc.dylib'),'scope':'Fresh sourced linked graphics and unused AS heap slot; ordinary draw, not RT or UE acceptance','checks':[]}
 def run(tag,command,capture=False,expected=0):
  started=time.monotonic()
@@ -15,6 +16,8 @@ def run(tag,command,capture=False,expected=0):
   if k.startswith('RENDERDOC_') or k=='DYLD_INSERT_LIBRARIES':e.pop(k)
  e.update(MTL_DEBUG_LAYER='1',RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT='1',RENDERDOC_METAL_TRACE_REPLAY_WAITS='1',RENDERDOC_DEBUG_LOG_FILE=str(w/(tag+'-renderdoc.log')))
  if args.pointer_origins:e['RENDERDOC_METAL_GRAPHICS_POINTER_ORIGINS']='1'
+ if args.pending_slot:e['RENDERDOC_METAL_GRAPHICS_PENDING_SLOT']='1'
+ if args.pending_consumed:e['RENDERDOC_METAL_GRAPHICS_PENDING_CONSUMED']='1'
  if args.gpu_indices:e['RENDERDOC_METAL_GRAPHICS_GPU_INDICES']='1'
  if args.early_fragment:e['RENDERDOC_METAL_GRAPHICS_EARLY_FRAGMENT']='1'
  if args.independent:e['RENDERDOC_METAL_GRAPHICS_FRAGMENT_INDEPENDENT']='1'
@@ -78,7 +81,7 @@ try:
     run(case+'-API',[w/'opener',w/(case+'.rdc')],expected=4 if case=='index-range-overrun' else 0)
     run(case+'-CLI',[b/'bin/renderdoccmd','replay','--loops','1',w/(case+'.rdc')],expected=1 if case=='index-range-overrun' else 0)
    m['index_contracts']='GPU values are ordinary Native inputs; read interval overrun rejects, removing producer with intact legal creation input remains replayable with changed index values.'
-  m.update(pointer_origins=args.pointer_origins,gpu_indices=args.gpu_indices,local_helper=args.local_helper,early_fragment=args.early_fragment,independent=args.independent,baseline_expected_rejection=args.baseline,sources_sha256={str(p.relative_to(r)):sha(p) for p in [r/'util/test/metal'/('metal_graphics_linked_'+n) for n in ['main.metal','consumer_capture.mm','consumer_replay.cpp','consumer_gate.py']]})
+  m.update(pending_slot=args.pending_slot or args.pending_consumed,pending_consumed=args.pending_consumed,pointer_origins=args.pointer_origins,gpu_indices=args.gpu_indices,local_helper=args.local_helper,early_fragment=args.early_fragment,independent=args.independent,baseline_expected_rejection=args.baseline,sources_sha256={str(p.relative_to(r)):sha(p) for p in [r/'util/test/metal'/('metal_graphics_linked_'+n) for n in ['main.metal','consumer_capture.mm','consumer_replay.cpp','consumer_gate.py']]})
   assert sha(b/'lib/librenderdoc.dylib')==m['backend_sha256'];m.update(status='PASS',capture_sha256=sha(cap),events=0 if args.baseline else 32,descriptors=0 if args.baseline else 16,depth_pixels_per_event=851 if args.independent else 256,bundle_sha256=sha(b/'bin/qrenderdoc.app/Contents/lib/librenderdoc.dylib'))
 except Exception as ex:m.update(status='FAIL',error=repr(ex));raise
 finally:(w/'manifest.json').write_text(json.dumps(m,indent=2)+'\n')

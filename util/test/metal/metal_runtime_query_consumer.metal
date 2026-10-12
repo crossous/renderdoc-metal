@@ -39,7 +39,14 @@ kernel void runtime_clear(constant Entry *heap [[buffer(0)]], constant Roots &ro
                           )
 {
   constant uint *settings=(constant uint *)roots.constants;
+#ifdef QUERY_DYNAMIC_AS
+  struct ASRow { device PublicASHeader *header; ulong texture, length; };
+  // Native register operation selects either independently published header.
+  const uint asRow=3u*(clz(settings[0])&1u);
+  device PublicASHeader *header=((constant ASRow *)heap)[asRow].header;
+#else
   device PublicASHeader *header=(device PublicASHeader *)heap[0].buffer;
+#endif
   constant uint * volatile metadata=header->contributions;
 #ifdef QUERY_POINTER_BRANCHES
   // Both stores carry restored pointer origins; the GPU chooses the live one.

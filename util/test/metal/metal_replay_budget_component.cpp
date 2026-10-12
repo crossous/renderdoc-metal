@@ -11,6 +11,14 @@ int main()
   const uint64_t invalidThreads[] = {8, 0, 1}, overflowGroups[] = {UINT64_MAX, 2, 1};
   assert(!MetalComputeDispatchExtentFits(largeGroups, invalidThreads));
   assert(!MetalComputeDispatchExtentFits(overflowGroups, ordinaryThreads));
+  const uint64_t partial1D[]={67,1,1}, partial3D[]={5,7,3}, local3D[]={4,3,2};
+  assert(MetalComputeThreadGridExtentFits(partial1D, ordinaryThreads));
+  assert(MetalComputeThreadGridExtentFits(partial3D, local3D));
+  assert(!MetalComputeThreadGridExtentFits(partial3D, invalidThreads));
+  const uint64_t outsideID[]={uint64_t(UINT32_MAX)+1,1,1};
+  const uint64_t overflowGrid[]={UINT32_MAX,UINT32_MAX,UINT32_MAX};
+  assert(!MetalComputeThreadGridExtentFits(outsideID, local3D));
+  assert(!MetalComputeThreadGridExtentFits(overflowGrid, local3D));
   const uint64_t mib=1024ULL*1024, recommendation=12713115648ULL;
   MetalReplayAllocationBudget actual;
   actual.Add(actual.nativeBytes,2393702400ULL);
@@ -48,6 +56,13 @@ int main()
   MetalReplayPreflightBudget exact;
   assert(exact.Consume(128*mib-4096));
   assert(!exact.Consume(0));
+  MetalReplayPreflightBudget scanned;
+  for(unsigned i=0;i<32768;i++)assert(scanned.ConsumeScanChunk(64));
+  assert(scanned.bytes==2*mib && scanned.Consume(mib));
+  const uint64_t scannedBeforeFailure=scanned.bytes;
+  assert(!scanned.ConsumeScanChunk(UINT64_MAX) && scanned.bytes==scannedBeforeFailure);
+  assert(scanned.ConsumeScanChunk(128*mib-scanned.bytes));
+  assert(!scanned.ConsumeScanChunk(1) && !scanned.Consume(0));
   MetalReplayPreflightBudget aggregate;
   unsigned copies=0;
   while(aggregate.Consume(mib))copies++;

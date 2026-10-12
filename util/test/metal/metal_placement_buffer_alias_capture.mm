@@ -9,10 +9,13 @@
 
 int main(int argc, char **argv)
 {
-  if(argc != 3 && (argc != 4 || strcmp(argv[3], "drop-owner"))) return 1;
+  const bool background=argc>=4 && !strcmp(argv[3],"background");
+  if(argc<3 || argc>5 || (argc==4 && !background && strcmp(argv[3],"drop-owner")) ||
+     (argc==5 && !background))return 1;
   const NSUInteger size = strtoull(argv[2], nullptr, 10);
-  const NSUInteger backing = 1024 * 1024, offset = 128 * 1024, prefix = 64 * 1024;
-  if(size != 229376 && size != backing) return 1;
+  const NSUInteger backing=1024*1024, prefix=64*1024;
+  const NSUInteger offset=argc==5?strtoull(argv[4],nullptr,10):128*1024;
+  if(!size || size>backing || offset<prefix || offset>2*backing || size>2*backing-offset)return 1;
   @autoreleasepool
   {
     __attribute__((objc_precise_lifetime)) id<MTLDevice> device = MTLCreateSystemDefaultDevice();
@@ -39,6 +42,8 @@ int main(int argc, char **argv)
     [initialBlit copyFromBuffer:upload sourceOffset:0 toBuffer:original destinationOffset:0 size:backing];
     [initialBlit endEncoding]; [initial commit]; [initial waitUntilCompleted];
     if(initial.status != MTLCommandBufferStatusCompleted || initial.error) return 3;
+    id<MTLBuffer> alias=background?[heap newBufferWithLength:size options:options offset:offset]:nil;
+    if(background && !alias)return 5;
     RENDERDOC_API_1_7_0 *api = nullptr;
     auto get = (pRENDERDOC_GetAPI)dlsym(RTLD_DEFAULT, "RENDERDOC_GetAPI");
     if(get && get(eRENDERDOC_API_Version_1_7_0, (void **)&api) != 1) return 4;
@@ -49,7 +54,7 @@ int main(int argc, char **argv)
           "metal.descriptorCoverage", eRENDERDOC_UInt32, 0, &coverage)) return 4;
       api->SetCaptureFilePathTemplate(argv[1]);
     }
-    if(argc == 4)
+    if(argc==4 && !background)
     {
       device = nil;
       if(!original.device || original.device != queue.device || original.device != heap.device) return 4;
@@ -59,7 +64,7 @@ int main(int argc, char **argv)
     // Both resources stay alive; tracked-heap submission order owns later writes.
     auto first = [queue commandBuffer]; auto firstBlit = [first blitCommandEncoder];
     [firstBlit copyFromBuffer:prefixUpload sourceOffset:0 toBuffer:original destinationOffset:0 size:prefix];
-    id<MTLBuffer> alias = [heap newBufferWithLength:size options:options offset:offset];
+    if(!background)alias=[heap newBufferWithLength:size options:options offset:offset];
     if(!alias) return 5;
     alias.label = @"Placement alias replacement";
     [firstBlit endEncoding]; [first commit];
@@ -81,8 +86,8 @@ int main(int argc, char **argv)
     }
     for(NSUInteger i = 0; i < size; i++)
       if(b[i] != 0x5a) { fprintf(stderr, "Native alias mismatch %lu\n", (unsigned long)i); return 8; }
-    printf("PASS native placement alias: original=%lu alias=%lu offset=%lu, full overlap/padding bytes, open encoder allocation, ordered GPU writes/readbacks, dropped device owner=%d\n",
-           (unsigned long)backing, (unsigned long)size, (unsigned long)offset, argc == 4);
+    printf("PASS native placement alias: original=%lu alias=%lu offset=%lu, full overlap/padding bytes, open encoder allocation, ordered GPU writes/readbacks, dropped device owner=%d background=%d\n",
+           (unsigned long)backing, (unsigned long)size, (unsigned long)offset, argc==4 && !background,background);
     return 0;
   }
 }

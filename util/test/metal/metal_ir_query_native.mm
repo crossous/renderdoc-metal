@@ -698,7 +698,31 @@ int main(int argc, char **argv)
     id<MTLBuffer> contributionRepublishInput=republishContribution?
         [device newBufferWithBytes:contributionUpload.contents length:contributions.length options:MTLResourceStorageModeShared]:nil;
     if(republishContribution && !contributionRepublishInput)return 28;
+    // Legal unused libraries/pipelines must not be pulled into another shader's
+    // AIR request. Two Native objects also exercise identical-content reuse.
+    __attribute__((objc_precise_lifetime)) NSMutableArray *unusedLibraries=[NSMutableArray array];
+    __attribute__((objc_precise_lifetime)) NSMutableArray *unusedPipelines=[NSMutableArray array];
+    for(const char *unused:{getenv("RENDERDOC_IR_QUERY_UNUSED_METALLIB"),
+                           getenv("RENDERDOC_IR_QUERY_SECOND_UNUSED_METALLIB")})
+      for(unsigned copy=0;unused && copy<2;copy++)
+      {
+        auto extra=[device newLibraryWithURL:[NSURL fileURLWithPath:
+            [NSString stringWithUTF8String:unused]] error:&error];
+        if(!extra || extra.functionNames.count!=1)return 45;
+        auto extraFunction=[extra newFunctionWithName:extra.functionNames[0]];
+        auto extraPipeline=[device newComputePipelineStateWithFunction:extraFunction error:&error];
+        if(!extraFunction || !extraPipeline)return 45;
+        [unusedLibraries addObject:extra];[unusedLibraries addObject:extraFunction];
+        [unusedLibraries addObject:extraPipeline];[unusedPipelines addObject:extraPipeline];
+      }
     if(argc==3) {if(!api)return 7;api->SetCaptureFilePathTemplate(argv[2]);api->StartFrameCapture(nullptr,nullptr);}
+    if(unusedPipelines.count)
+    {
+      auto unusedCommand=[queue commandBuffer];auto unusedEncoder=[unusedCommand computeCommandEncoder];
+      for(id<MTLComputePipelineState> pso in unusedPipelines)[unusedEncoder setComputePipelineState:pso];
+      [unusedEncoder endEncoding];[unusedCommand commit];[unusedCommand waitUntilCompleted];
+      if(unusedCommand.status!=MTLCommandBufferStatusCompleted || unusedCommand.error)return 45;
+    }
     if(frameCBV)
     {
       if(!cbvCount || !mixedRoots)return 38;

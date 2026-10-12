@@ -29,6 +29,11 @@ define void @test(%struct.root addrspace(2)* %0, %struct.heap addrspace(2)* %1, 
 !1 = !{i32 0, !"air.indirect_buffer", !"air.location_index", i32 2, i32 1}
 !2 = !{i32 1, !"air.indirect_buffer", !"air.location_index", i32 0, i32 1}
 )";
+  assert(Value().EmptyUnknown());
+  Value symbolicUnknown;symbolicUnknown.layoutStride=24;
+  assert(!symbolicUnknown.EmptyUnknown());
+  symbolicUnknown={};symbolicUnknown.literalOrigins.push_back(Value::Number(0));
+  assert(!symbolicUnknown.EmptyUnknown());
   Value root; root.kind = Value::Pointer; root.slot = 2;
   Value heap; heap.kind = Value::Pointer; heap.object = 24;
   unsigned index = 7;
@@ -45,6 +50,41 @@ define void @test(%struct.root addrspace(2)* %0, %struct.heap addrspace(2)* %1, 
     assert(reads.size() == 1 && reads[0].offset == n * 24 + 8);
     assert(!reads[0].write);
   }
+  // Syntax is reused; current loaders and bindings are never reused as verdicts.
+  const auto module=GetModuleSyntax(text), sameModule=GetModuleSyntax(std::string(text));
+  assert(module==sameModule);
+  const auto syntax=GetFunctionSyntax(module,"test");
+  const auto parses=GetSyntaxCache().functionParses;
+  for(unsigned i=0;i<32;i++)
+  {
+    index=i+17;
+    auto report=UniformResourceAccess(text,"test",{{0,heap},{2,root}},load);
+    assert(report.accesses.size()==1 && report.accesses[0].offset==index*24+8);
+    assert(GetFunctionSyntax(module,"test")==syntax);
+  }
+  assert(GetSyntaxCache().functionParses==parses);
+  auto noBinding=UniformResourceAccess(text,"test",{{0,heap}},load);
+  assert(noBinding.unresolvedTextures>0);
+  // Explicit cache eviction has no effect on the old active syntax or semantics.
+  GetSyntaxCache().modules.clear();GetSyntaxCache().bytes=0;
+  auto afterEviction=UniformResourceAccess(text,"test",{{0,heap},{2,root}},load);
+  assert(afterEviction.accesses.size()==1 && afterEviction.accesses[0].offset==index*24+8);
+  assert(syntax->valid && syntax->body==ParseFunctionSyntax(text,"test")->body);
+  // Budget pressure removes the least recently used module, preserving hot
+  // syntax and old active owners. Rebinding still consults the current loader.
+  auto &syntaxCache=GetSyntaxCache();syntaxCache.modules.clear();syntaxCache.bytes=0;
+  const auto cold=GetModuleSyntax(text+"\n; cold");
+  const auto coldFunction=GetFunctionSyntax(cold,"test");
+  const auto hot=GetModuleSyntax(text+"\n; hot");
+  const auto hotFunction=GetFunctionSyntax(hot,"test");
+  const size_t coldBytes=syntaxCache.modules.at(cold->contentHash).front().bytes;
+  assert(syntaxCache.MakeRoom(64*1024*1024-syntaxCache.bytes+coldBytes));
+  assert(!syntaxCache.modules.count(cold->contentHash));
+  assert(GetFunctionSyntax(hot,"test")==hotFunction && coldFunction->valid);
+  index=47;
+  auto current=UniformResourceAccess(hot->input,"test",{{0,heap},{2,root}},load);
+  assert(current.accesses.size()==1 && current.accesses[0].offset==index*24+8);
+  std::cout << "PASS immutable syntax reuse, dynamic binding/loader invalidation and eviction fallback\n";
   std::string writes = text;
   const auto call = writes.find("  %sample = call");
   writes.insert(call, "  call void @air.write_texture_2d.rtz.v4f32(%struct._texture_2d_t addrspace(1)* %tex)\n");
@@ -1258,6 +1298,89 @@ joined:
       "  store i32 addrspace(1)* %q, i32 addrspace(1)** %slot, align 8\n  br i1 %condition, label %loop, label %exit\nexit:\n  ret void");
   spillReport=checkSpill(loopSpill);
   assert(!spillReport.unresolvedBuffers && spillReport.buffers.size()==2);
+  const std::string dynamicASModule=R"(
+%struct.Header = type { %struct._instance_acceleration_structure_t addrspace(1)*, i32 addrspace(2)* }
+%struct.ASRow = type { %struct.Header addrspace(1)*, i64, i64 }
+define void @dynamic_as(%struct.ASRow addrspace(2)* %heap, i32 %index) {
+  %wide = zext i32 %index to i64
+  %row = getelementptr %struct.ASRow, %struct.ASRow addrspace(2)* %heap, i64 %wide, i32 0
+  %header = load %struct.Header addrspace(1)*, %struct.Header addrspace(1)* addrspace(2)* %row, align 8
+  %asfield = getelementptr %struct.Header, %struct.Header addrspace(1)* %header, i64 0, i32 0
+  %as = load %struct._instance_acceleration_structure_t addrspace(1)*, %struct._instance_acceleration_structure_t addrspace(1)* addrspace(1)* %asfield, align 8
+  %metafield = getelementptr %struct.Header, %struct.Header addrspace(1)* %header, i64 0, i32 1
+  %meta = load i32 addrspace(2)*, i32 addrspace(2)* addrspace(1)* %metafield, align 8
+  %element = getelementptr i32, i32 addrspace(2)* %meta, i64 %wide
+  %read = load i32, i32 addrspace(2)* %element, align 4
+  ret void
+}
+)";
+  InvocationValues asNamespaceValues;Value asTable;asTable.kind=Value::Pointer;
+  asTable.object=81;asTable.metadata=true;asNamespaceValues.arguments[0]=asTable;
+  auto asLoader=[](const Value &address,unsigned bytes,Value::Kind kind) {
+    Value result;
+    if(bytes!=8 || address.object!=81 || address.namespaceStride!=24)return result;
+    if(kind==Value::ASHeaderPointer && !address.namespaceField)
+    {result=address;result.kind=Value::DescriptorPointer;result.namespaceRole=1;}
+    else if(address.namespaceRole==1 && kind==Value::AccelerationStructure && !address.namespaceField)
+    {result=address;result.kind=kind;}
+    else if(address.namespaceRole==1 && kind==Value::Pointer && address.namespaceField==8)
+    {result=address;result.kind=Value::DescriptorPointer;result.metadata=false;result.namespaceRole=2;result.namespaceField=0;}
+    return result;
+  };
+  auto asNamespace=UniformResourceAccess(dynamicASModule,"dynamic_as",{},asLoader,{},true,asNamespaceValues);
+  assert(!asNamespace.unresolvedStructures && !asNamespace.unresolvedBuffers && asNamespace.buffers.size()==1);
+  assert(asNamespace.buffers[0].address.namespaceRole==2 && !asNamespace.buffers[0].address.offsetKnown);
+  assert(asNamespace.accesses.size()==1 && asNamespace.accesses[0].kind==Value::AccelerationStructure);
+  assert(UniformResourceAccess(dynamicASModule,"dynamic_as",{},[](const Value &,unsigned,Value::Kind){return Value();},{},true,asNamespaceValues).unresolvedBuffers>0);
+  const std::string anonymousASModule=R"(
+define void @dynamic_as(i8 addrspace(2)* %heap, i32 %index) {
+  %scaled = mul i32 %index, 24
+  %wide = zext i32 %scaled to i64
+  %row = getelementptr i8, i8 addrspace(2)* %heap, i64 %wide
+  %cast = bitcast i8 addrspace(2)* %row to { %struct._instance_acceleration_structure_t addrspace(1)*, i32 addrspace(2)* } addrspace(1)* addrspace(2)*
+  %header = load { %struct._instance_acceleration_structure_t addrspace(1)*, i32 addrspace(2)* } addrspace(1)*, { %struct._instance_acceleration_structure_t addrspace(1)*, i32 addrspace(2)* } addrspace(1)* addrspace(2)* %cast, align 8
+  %metaField = getelementptr { %struct._instance_acceleration_structure_t addrspace(1)*, i32 addrspace(2)* }, { %struct._instance_acceleration_structure_t addrspace(1)*, i32 addrspace(2)* } addrspace(1)* %header, i64 0, i32 1
+  %meta = load i32 addrspace(2)*, i32 addrspace(2)* addrspace(1)* %metaField, align 8
+  %element = getelementptr i32, i32 addrspace(2)* %meta, i64 %wide
+  %read = load i32, i32 addrspace(2)* %element, align 4
+  ret void
+}
+)";
+  asNamespace=UniformResourceAccess(anonymousASModule,"dynamic_as",{},asLoader,{},true,asNamespaceValues);
+  assert(!asNamespace.unresolvedBuffers && asNamespace.buffers.size()==1 && asNamespace.accesses.size()==1);
+  const std::string opaqueASModule=R"(
+%OpaqueCarrier = type opaque
+define void @dynamic_as(i8 addrspace(2)* %heap, i32 %index) {
+  %scaled = mul i32 %index, 24
+  %wide = zext i32 %scaled to i64
+  %row = getelementptr i8, i8 addrspace(2)* %heap, i64 %wide
+  %source = bitcast i8 addrspace(2)* %row to %OpaqueCarrier addrspace(1)* addrspace(2)*
+  %opaque = load %OpaqueCarrier addrspace(1)*, %OpaqueCarrier addrspace(1)* addrspace(2)* %source, align 8
+  %header = bitcast %OpaqueCarrier addrspace(1)* %opaque to { %struct._instance_acceleration_structure_t addrspace(1)*, i32 addrspace(2)* } addrspace(1)*
+  %asfield = bitcast %OpaqueCarrier addrspace(1)* %opaque to %struct._instance_acceleration_structure_t addrspace(1)* addrspace(1)*
+  %as = load %struct._instance_acceleration_structure_t addrspace(1)*, %struct._instance_acceleration_structure_t addrspace(1)* addrspace(1)* %asfield, align 8
+  %metaField = getelementptr { %struct._instance_acceleration_structure_t addrspace(1)*, i32 addrspace(2)* }, { %struct._instance_acceleration_structure_t addrspace(1)*, i32 addrspace(2)* } addrspace(1)* %header, i64 0, i32 1
+  %meta = load i32 addrspace(2)*, i32 addrspace(2)* addrspace(1)* %metaField, align 8
+  %element = getelementptr i32, i32 addrspace(2)* %meta, i64 %wide
+  %read = load i32, i32 addrspace(2)* %element, align 4
+  ret void
+}
+)";
+  auto opaqueLoader=[&](const Value &address,unsigned bytes,Value::Kind kind) {
+    auto result=asLoader(address,bytes,kind);
+    if(result.EmptyUnknown() && bytes==8 && kind==Value::Pointer &&
+       address.object==81 && address.namespaceStride==24 && !address.namespaceField)
+    {result=address;result.kind=Value::DescriptorPointer;result.metadata=false;}
+    return result;
+  };
+  auto opaqueReport=UniformResourceAccess(opaqueASModule,"dynamic_as",{},opaqueLoader,{},true,asNamespaceValues);
+  assert(!opaqueReport.unresolvedBuffers && opaqueReport.buffers.size()==1 && opaqueReport.accesses.size()==1);
+  assert(opaqueReport.buffers[0].address.namespaceRole==2 && opaqueReport.accesses[0].namespaceRole==1);
+  assert(UniformResourceAccess(opaqueASModule,"dynamic_as",{},[](const Value &,unsigned,Value::Kind){return Value();},{},true,asNamespaceValues).unresolvedBuffers>0);
+  // A matching type is insufficient without the real source namespace.
+  InvocationValues noHeaderSource=asNamespaceValues;noHeaderSource.arguments[0]=Value();
+  assert(UniformResourceAccess(opaqueASModule,"dynamic_as",{},opaqueLoader,{},true,noHeaderSource).unresolvedBuffers>0);
+  std::cout << "PASS public AS-header namespace ABI: typed header/ordinary contributions; missing provenance unresolved\n";
   std::cout << "PASS private pointer provenance: reaching branch/loop origins; uninitialised/future/unknown/escape remain rejected\n";
   std::cout << "PASS reads/writes/atomics, uniform index changes, unknown dynamic index, missing root/function, ambiguous module\n";
 }

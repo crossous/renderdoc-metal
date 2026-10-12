@@ -138,35 +138,14 @@ bool ValidateMetalBufferTexture(MTL::Device *device, const RDMTL::TextureDescrip
                                uint64_t bufferLength, MTL::StorageMode bufferStorage,
                                uint64_t offset, uint64_t bytesPerRow)
 {
-  uint64_t pixelBytes = 0;
-  switch(descriptor.pixelFormat)
-  {
-    case MTL::PixelFormatR8Unorm: pixelBytes = 1; break;
-    case MTL::PixelFormatR16Uint:
-    case MTL::PixelFormatR16Float: pixelBytes = 2; break;
-    case MTL::PixelFormatR32Uint:
-    case MTL::PixelFormatR32Sint:
-    case MTL::PixelFormatR32Float:
-    case MTL::PixelFormatRG16Uint:
-    case MTL::PixelFormatRG16Float:
-    case MTL::PixelFormatRGBA8Uint:
-    case MTL::PixelFormatRGBA8Snorm: pixelBytes = 4; break;
-    case MTL::PixelFormatRG32Uint:
-    case MTL::PixelFormatRG32Float:
-    case MTL::PixelFormatRGBA16Snorm:
-    case MTL::PixelFormatRGBA16Uint:
-    case MTL::PixelFormatRGBA16Float: pixelBytes = 8; break;
-    case MTL::PixelFormatRGBA32Uint:
-    case MTL::PixelFormatRGBA32Float: pixelBytes = 16; break;
-    // The earlier Shared 2D fixture remains supported.
-    case MTL::PixelFormatRGBA8Unorm:
-    case MTL::PixelFormatBGRA8Unorm: pixelBytes = 4; break;
-    default: break;
-  }
+  uint32_t blockWidth=0,blockHeight=0,blockBytes=0;
+  if(!GetTextureDataBlockShape(descriptor.pixelFormat,blockWidth,blockHeight,blockBytes) ||
+     blockWidth!=1 || blockHeight!=1 || !blockBytes) return false;
+  const uint64_t pixelBytes=blockBytes;
   const bool textureBuffer = descriptor.textureType == MTL::TextureTypeTextureBuffer;
-  const bool shared2D = descriptor.textureType == MTL::TextureType2D &&
-                        (descriptor.pixelFormat == MTL::PixelFormatRGBA8Unorm ||
-                         descriptor.pixelFormat == MTL::PixelFormatBGRA8Unorm);
+  // Linear 2D views use their format's byte layout; an earlier two-format
+  // fixture is not an API contract. Native creation still checks device support.
+  const bool shared2D = descriptor.textureType == MTL::TextureType2D;
   if((!shared2D && !textureBuffer) || !pixelBytes ||
      (shared2D && (bufferStorage != MTL::StorageModeShared ||
                    descriptor.storageMode != MTL::StorageModeShared)) ||
@@ -384,6 +363,8 @@ void *WrappedMTLBuffer::contents()
     // Snapshot potentially CPU modified buffer if the returned pointer is not NULL
     if(data)
     {
+      Atomic::CmpExch32(&GetRecord(this)->bufInfo->cpuMapExposed, 0, 1);
+      GetResourceManager()->MarkHeapCPUStorageExposed(Unwrap(this)->heap());
       GetResourceManager()->MarkDirtyResource(m_ID);
     }
   }

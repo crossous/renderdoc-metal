@@ -22,11 +22,32 @@ inline bool MetalComputeDispatchExtentFits(const uint64_t groups[3], const uint6
   return true;
 }
 
+// dispatchThreads counts invocations directly. Do not round its edge groups
+// into extra shader work, and check the complete 3D grid before multiplying.
+inline bool MetalComputeThreadGridExtentFits(const uint64_t grid[3], const uint64_t threads[3])
+{
+  const uint64_t one[3] = {1, 1, 1};
+  for(unsigned i = 0; i < 3; ++i)
+    if(!threads[i] || grid[i] > UINT32_MAX) return false;
+  return MetalComputeDispatchExtentFits(grid, one);
+}
+
 // Bound retained preflight bookkeeping for the whole frame, independently of
 // dispatch/command kind and capture protocol. Shader work has a separate budget.
 struct MetalReplayPreflightBudget
 {
   uint64_t bytes = 0;
+  bool ConsumeScanChunk(uint64_t encodedBytes)
+  {
+    const uint64_t limit = 128ULL * 1024 * 1024;
+    // EndChunk releases the decoder's transient record. Charge every actual
+    // byte, without inventing a retained 4 KiB allocation for every setter.
+    // Explicit retained masks/ranges/payloads still use Consume below, with
+    // its conservative record reserve and the same aggregate limit.
+    if(bytes > limit || encodedBytes > limit - bytes)return false;
+    bytes += encodedBytes;
+    return true;
+  }
   bool Consume(uint64_t encodedBytes)
   {
     const uint64_t limit = 128ULL * 1024 * 1024;

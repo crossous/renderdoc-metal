@@ -102,6 +102,9 @@ struct WrappedMTLObject
   // record for future captures, without adding a chunk on every descriptor update.
   int32_t m_CapturedAliasable = 0;
   int32_t m_CapturedGPUIdentity = 0;
+  // Heap backing exposed by any public buffer contents() call stays exposed
+  // for the heap lifetime, including aliases whose wrappers have retired.
+  int32_t m_CapturedHeapCPUStorageExposed = 0;
   MetalResourceRecord *m_Record = NULL;
   WrappedMTLDevice *m_Device;
   CaptureState &m_State;
@@ -306,6 +309,10 @@ struct MetalBufferInfo
   MetalBufferInfo() = delete;
   MetalBufferInfo(MTL::StorageMode mode) : storageMode(mode), data(NULL), length(0) {}
   MTL::StorageMode storageMode;
+  // Internal contents() reads do not expose CPU storage to the application.
+  // No-copy factories and public contents() calls do; retain this fact for
+  // persistent pointers obtained before the capture starts.
+  int32_t cpuMapExposed = 0;
   bytebuf baseSnapshot;
   byte *data;
   size_t length;

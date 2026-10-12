@@ -21,6 +21,15 @@ bool WrappedMTLDevice::Serialise_newHeap(SerialiserType &ser, WrappedMTLHeap *he
   SERIALISE_ELEMENT(hazardMode);
   uint32_t heapType = (uint32_t)type;
   SERIALISE_ELEMENT(heapType).Named("type"_lit).Important();
+  // Metal rounds the requested backing size to device-specific granularity.
+  // Child placement bounds use heap.size, including that legal tail space.
+  // Retain the original creation argument separately from this Native fact.
+  uint64_t capturedHeapSize = size;
+  if(ser.VersionAtLeast(0x12))
+  {
+    if(ser.IsWriting()) capturedHeapSize = heap && heap->m_Real ? Unwrap(heap)->size() : 0;
+    SERIALISE_ELEMENT(capturedHeapSize).Important();
+  }
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
@@ -29,6 +38,7 @@ bool WrappedMTLDevice::Serialise_newHeap(SerialiserType &ser, WrappedMTLHeap *he
     // Sparse mappings and implicit texture aliases still require separate lifetime models.
     if(Heap == ResourceId() || GetResourceManager()->HasResource(Heap) ||
        !size || size > 576ULL * 1024 * 1024 ||
+       capturedHeapSize < size || capturedHeapSize > 576ULL * 1024 * 1024 ||
        (storageMode != MTL::StorageModePrivate &&
         !(storageMode == MTL::StorageModeShared && type == MTL::HeapTypePlacement)) ||
        cacheMode != MTL::CPUCacheModeDefaultCache ||
@@ -49,9 +59,10 @@ bool WrappedMTLDevice::Serialise_newHeap(SerialiserType &ser, WrappedMTLHeap *he
     descriptor->setType(type);
     MTL::Heap *real = Unwrap(this)->newHeap(descriptor);
     descriptor->release();
-    if(!real)
+    if(!real || real->size() < capturedHeapSize)
     {
-      RDCERR("Metal failed to recreate captured heap");
+      if(real) real->release();
+      RDCERR("Metal failed to recreate captured heap physical extent");
       return false;
     }
     WrappedMTLHeap *wrapped = NULL;
@@ -257,8 +268,9 @@ bool WrappedMTLHeap::CanImplicitlyAliasBuffers(uint64_t begin, uint64_t end, Res
       const bool texture = old->m_Type == eResTexture &&
           Unwrap((WrappedMTLTexture *)old)->storageMode() == MTL::StorageModePrivate &&
           Unwrap((WrappedMTLTexture *)old)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
-          range.end - range.begin <= m_Device->DescriptorPlacementAliasLimit() &&
-          m_Device->CanReplayRetiredTextureAlias(range.resource, after);
+          (m_Device->CanReplayCoexistingTextureAlias(range.resource, after) ||
+           (range.end - range.begin <= m_Device->DescriptorPlacementAliasLimit() &&
+            m_Device->CanReplayRetiredTextureAlias(range.resource, after)));
       if(!buffer && !texture) return false;
     }
   return true;
@@ -396,9 +408,26 @@ bool WrappedMTLHeap::Serialise_newBufferWithOffset(SerialiserType &ser,
     for(const PlacementRange &range : Heap->m_PlacementRanges)
       if(uint64_t(offset) < range.end && range.begin < end)
       {
-        // Older captures moved frame-created resources into the initial resource list.
-        // They cannot prove which contents occupied an aliased range at frame start.
-        if(!ser.VersionAtLeast(0xF) || m_Device->GetReplayEpoch() == 0)
+        // Background buffer factories describe coexisting objects, not an ordered
+        // frame alias transition. Validate their shared physical initial state and
+        // address mapping after all initial chunks, before any GPU submission.
+        if(m_Device->GetReplayEpoch()==0)
+        {
+          WrappedMTLObject *old=GetResourceManager()->GetResource(range.resource,true);
+          if(!ser.VersionAtLeast(0xF) || !old || old->m_Type!=eResBuffer || !old->m_Real ||
+             (Unwrap(Heap)->storageMode()!=MTL::StorageModePrivate &&
+              Unwrap(Heap)->storageMode()!=MTL::StorageModeShared) ||
+             Unwrap(Heap)->hazardTrackingMode()!=MTL::HazardTrackingModeTracked ||
+             Unwrap((WrappedMTLBuffer *)old)->hazardTrackingMode()!=MTL::HazardTrackingModeTracked ||
+             !(options & MTL::ResourceHazardTrackingModeTracked))
+          {
+            RDCERR("Background placement overlap lacks tracked buffer physical restoration");
+            return false;
+          }
+          m_Device->RegisterReplayBackgroundBufferAlias(range.resource,Buffer);
+          continue;
+        }
+        if(!ser.VersionAtLeast(0xF))
         {
           RDCERR("Overlapping placement resource in a capture without frame creation order");
           return false;
@@ -430,8 +459,9 @@ bool WrappedMTLHeap::Serialise_newBufferWithOffset(SerialiserType &ser,
             Unwrap(Heap)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
             Unwrap((WrappedMTLTexture *)previous)->hazardTrackingMode() == MTL::HazardTrackingModeTracked &&
             length <= m_Device->DescriptorPlacementBufferAliasLimit() &&
-            range.end - range.begin <= m_Device->DescriptorPlacementAliasLimit() &&
-            m_Device->CanReplayRetiredTextureAlias(range.resource, Buffer);
+            (m_Device->CanReplayCoexistingTextureAlias(range.resource, Buffer) ||
+             (range.end - range.begin <= m_Device->DescriptorPlacementAliasLimit() &&
+              m_Device->CanReplayRetiredTextureAlias(range.resource, Buffer)));
         if(!aliasable && !implicit && !retiredTexture && !frozenASInput)
         {
           RDCERR("Overlapping Metal placement heap resource lacks supported aliasing/completion");
@@ -465,6 +495,53 @@ bool WrappedMTLHeap::Serialise_newBufferWithOffset(SerialiserType &ser,
       m_Device->DerivedResource(Heap, Buffer);
     }
   }
+  return true;
+}
+
+bool WrappedMTLHeap::GetCoexistingBirthRanges(ResourceId after, uint64_t begin, uint64_t length,
+                                            rdcarray<rdcpair<uint64_t, uint64_t>> &ranges)
+{
+  ranges.clear();
+  auto heap = Unwrap(this);
+  if(!heap || !length || begin > heap->size() || length > heap->size() - begin)
+    return false;
+  const uint64_t end = begin + length;
+  for(const PlacementRange &range : m_PlacementRanges)
+  {
+    if(range.resource == after || begin >= range.end || range.begin >= end) continue;
+    const bool textureProof = m_Device->CanReplayCoexistingTextureAlias(range.resource, after);
+    auto object = GetResourceManager()->GetResource(range.resource, true);
+    if(!object || !object->m_Real)
+    {
+      if(textureProof) return false;
+      continue;
+    }
+    // Match the factory's existing bounded coexistence contract. A large
+    // retired/aliasable carrier or independently staged AS input is not an
+    // implicit live-buffer relation merely because it shares this heap.
+    const bool bufferProof = object->m_Type == eResBuffer &&
+        length <= m_Device->DescriptorPlacementBufferAliasLimit() &&
+        Unwrap((WrappedMTLBuffer *)object)->length() <= m_Device->DescriptorPlacementBufferAliasLimit() &&
+        m_Device->CanReplayImplicitBufferAlias(range.resource, after);
+    if(!textureProof && !bufferProof) continue;
+    if((textureProof && object->m_Type != eResTexture) ||
+       heap->storageMode() != MTL::StorageModePrivate ||
+       heap->hazardTrackingMode() != MTL::HazardTrackingModeTracked) return false;
+    auto native = Unwrap((WrappedMTLResource *)object);
+    if(native->heap() != heap || native->heapOffset() != range.begin ||
+       native->storageMode() != MTL::StorageModePrivate ||
+       native->hazardTrackingMode() != MTL::HazardTrackingModeTracked) return false;
+    ranges.push_back(make_rdcpair(RDCMAX(begin, range.begin) - begin,
+                                  RDCMIN(end, range.end) - begin));
+  }
+  std::sort(ranges.begin(), ranges.end());
+  rdcarray<rdcpair<uint64_t, uint64_t>> merged;
+  for(const auto &range : ranges)
+  {
+    if(merged.empty() || range.first > merged.back().second) merged.push_back(range);
+    else merged.back().second = RDCMAX(merged.back().second, range.second);
+  }
+  ranges.swap(merged);
   return true;
 }
 
@@ -707,6 +784,22 @@ bool WrappedMTLHeap::Serialise_newTextureWithOffset(SerialiserType &ser,
   SERIALISE_ELEMENT_LOCAL(Texture, GetResID(texture)).TypedAs("MTLTexture"_lit).Important();
   SERIALISE_ELEMENT(descriptor).Important();
   SERIALISE_ELEMENT(offset).Important();
+  // The capture device owns the opaque allocation layout. Preserve it separately
+  // from logical texel contents and replay-device requirements for alias proofs.
+  uint64_t capturedAllocationSize = 0, capturedAllocationAlignment = 0;
+  if(ser.VersionAtLeast(0x11))
+  {
+    if(ser.IsWriting())
+    {
+      MTL::TextureDescriptor *capturedDescriptor(descriptor);
+      const MTL::SizeAndAlign captured = Unwrap(m_Device)->heapTextureSizeAndAlign(capturedDescriptor);
+      capturedDescriptor->release();
+      capturedAllocationSize = captured.size;
+      capturedAllocationAlignment = captured.align;
+    }
+    SERIALISE_ELEMENT(capturedAllocationSize).Important();
+    SERIALISE_ELEMENT(capturedAllocationAlignment).Important();
+  }
   SERIALISE_CHECK_READ_ERRORS();
   if(IsReplayingAndReading())
   {
@@ -774,11 +867,26 @@ bool WrappedMTLHeap::Serialise_newTextureWithOffset(SerialiserType &ser,
               (uint64_t)offset, (uint64_t)layout.align, (uint64_t)layout.size, heapSize);
       return false;
     }
+    if(ser.VersionAtLeast(0x11) &&
+       (!capturedAllocationSize || !capturedAllocationAlignment ||
+        offset % capturedAllocationAlignment || offset > heapSize ||
+        capturedAllocationSize > heapSize - offset ||
+        capturedAllocationSize != layout.size || capturedAllocationAlignment != layout.align))
+    {
+      native->release();
+      RDCERR("Invalid or incompatible Metal captured placement texture allocation");
+      return false;
+    }
     const uint64_t end = uint64_t(offset) + layout.size;
     for(const PlacementRange &range : Heap->m_PlacementRanges)
       if(uint64_t(offset) < range.end && range.begin < end)
       {
-        if(ser.VersionAtLeast(0xF) && m_Device->GetReplayEpoch() != 0 &&
+        // Placement creation does not read or retire an overlapping buffer.
+        // The same physical backing contract applies to objects restored before
+        // CaptureScope; their initial contents and original commands still own
+        // the data/synchronisation obligations. Keep current descriptor carrier
+        // conflicts and texture retirement checks in the shared alias validator.
+        if(ser.VersionAtLeast(0xF) &&
            m_Device->SupportsTrackedAliasCreationWhileEncoding() &&
            Heap->CanImplicitlyAliasBuffers(offset, end, Texture)) continue;
         native->release();

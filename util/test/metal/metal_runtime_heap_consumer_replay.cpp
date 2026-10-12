@@ -17,13 +17,15 @@ int main(int argc,char **argv)
   if(!result.OK()){file->Shutdown();RENDERDOC_ShutdownReplay();return 2;}
   IReplayController *controller=NULL;rdctie(result,controller)=file->OpenCapture(ReplayOptions(),NULL);file->Shutdown();
   if(!result.OK() || !controller){RENDERDOC_ShutdownReplay();return 3;}
-  ResourceId contributions;
+  ResourceId contributions,ordinaryRead,recycledScalarRoot;
   ResourceId a,b,cbv,heap,indices,source,counter,dimensionTexture,readback,dimensionBacking,queryStructure,partialInput,birthPrefix;
   const unsigned queryCreationInput=getenv("RENDERDOC_METAL_RUNTIME_QUERY_CREATION_INPUT")?atoi(getenv("RENDERDOC_METAL_RUNTIME_QUERY_CREATION_INPUT")):0;
   const bool queryPartialAlias=getenv("RENDERDOC_METAL_RUNTIME_QUERY_PARTIAL_ALIAS")!=nullptr;
   const bool queryPartialHeap=getenv("RENDERDOC_METAL_RUNTIME_QUERY_PARTIAL_HEAP")!=nullptr;
   for(const auto &r:controller->GetResources())
   {
+    if(r.name=="Runtime recycled scalar root")recycledScalarRoot=r.resourceId;
+    if(r.name=="Runtime ordinary copy readback")ordinaryRead=r.resourceId;
     if(r.name=="Runtime disjoint birth prefix")birthPrefix=r.resourceId;
     if(r.name=="Runtime frame texture dimensions")dimensionTexture=r.resourceId;
     if(r.name=="Runtime texture readback")readback=r.resourceId;
@@ -70,6 +72,7 @@ int main(int argc,char **argv)
   const bool loop=indices!=ResourceId();
   const bool queryGroupIndices=getenv("RENDERDOC_METAL_RUNTIME_QUERY_GROUP_INDICES")!=nullptr;
   const bool queryDynamicHeap=getenv("RENDERDOC_METAL_RUNTIME_QUERY_DYNAMIC_HEAP")!=nullptr;
+  const bool unknownTarget=getenv("RENDERDOC_METAL_RUNTIME_UNKNOWN_TARGET")!=nullptr;
   const bool nativeRayQuery=getenv("RENDERDOC_METAL_RUNTIME_NATIVE_QUERY")!=nullptr;
   const bool readModifyWrite=getenv("RENDERDOC_METAL_RUNTIME_READ_MODIFY_WRITE")!=nullptr;
   const unsigned rmwOffset=(readModifyWrite || nativeRayQuery) && getenv("RENDERDOC_METAL_RUNTIME_RMW_OFFSET")?atoi(getenv("RENDERDOC_METAL_RUNTIME_RMW_OFFSET")):0;
@@ -104,6 +107,28 @@ int main(int argc,char **argv)
     for(uint32_t eid:selections)
     {
       controller->SetFrameEvent(eid,true);
+      if(!eid && getenv("RENDERDOC_METAL_RUNTIME_RETIRED_SCALAR_ROOT"))
+      {
+        const char *offsetText=getenv("RENDERDOC_METAL_RUNTIME_SCALAR_ROOT_OFFSET");
+        const uint64_t offset=offsetText?strtoull(offsetText,nullptr,10):0;
+        const uint32_t ordinary[6]={19,23,29,31,37,41};
+        const auto bytes=controller->GetBufferData(recycledScalarRoot,offset,sizeof(ordinary));
+        const bool restored=recycledScalarRoot!=ResourceId() && bytes.size()==sizeof(ordinary) &&
+            memcmp(bytes.data(),ordinary,sizeof(ordinary))==0;
+        if(!restored)printf("recycled ordinary initial data mismatch at EID0\n");
+        ok &= restored;
+      }
+      if(ordinaryRead!=ResourceId())
+      {
+        const unsigned count=getenv("RENDERDOC_METAL_TEST_ORDINARY_COPY_COUNT")?
+            atoi(getenv("RENDERDOC_METAL_TEST_ORDINARY_COPY_COUNT")):0;
+        const auto bytes=controller->GetBufferData(ordinaryRead,0,count*4);
+        ok &= count && bytes.size()==count*4;
+        // Ordinary copies precede every shader dispatch. EID0 restores the
+        // captured initial readback; all selected nonzero events follow copies.
+        for(byte value:bytes)ok &= value==(eid?0x3b:0xcc);
+      }
+
       if(getenv("RENDERDOC_METAL_RUNTIME_QUERY_RETIRED_ROW"))
       {
         const unsigned row=4+(getenv("RENDERDOC_METAL_RUNTIME_QUERY_COLD_ROWS")?atoi(getenv("RENDERDOC_METAL_RUNTIME_QUERY_COLD_ROWS")):0);
@@ -118,6 +143,38 @@ int main(int argc,char **argv)
         const unsigned instances=atoi(getenv("RENDERDOC_METAL_RUNTIME_QUERY_INSTANCES"));
         const auto all=controller->GetBufferData(contributions,0,offset+instances*4);ok &= all.size()==offset+instances*4;
         for(unsigned i=0;i<all.size();i++)ok &= all[i]==(i<offset?0x6a:eid>=contributionWriter?0:0xff);
+      }
+      if(getenv("RENDERDOC_METAL_RUNTIME_QUERY_DYNAMIC_AS"))
+      {
+        unsigned headers=0;
+        uint64_t previousAS=0,previousContribution=0;
+        for(const auto *chunk:controller->GetStructuredFile().chunks)
+          if(chunk->name=="MTLBuffer::DeclareRayASHeader")
+          {
+            const auto header=chunk->FindChild("buffer")->AsResourceId();
+            const auto offset=chunk->FindChild("offset")->AsUInt64();
+            const auto contribution=chunk->FindChild("contributions")->AsResourceId();
+            const auto contributionOffset=chunk->FindChild("contributionOffset")->AsUInt64();
+            const auto packet=controller->GetBufferData(header,offset,64);
+            uint64_t words[8]={};if(packet.size()==64)memcpy(words,packet.data(),64);
+            ok &= packet.size()==64 && words[0] && words[1];
+            if(headers)ok &= words[0]!=previousAS && words[1]!=previousContribution;
+            previousAS=words[0];previousContribution=words[1];
+            for(unsigned i=2;i<8;i++)ok &= !words[i];
+            const unsigned count=atoi(getenv("RENDERDOC_METAL_RUNTIME_QUERY_INSTANCES"));
+            const auto data=controller->GetBufferData(contribution,0,contributionOffset+count*4);
+            ok &= data.size()==contributionOffset+count*4;
+            for(unsigned i=0;i<data.size();i++)
+              ok &= data[i]==(offset==uint64_t(atoi(getenv("RENDERDOC_METAL_RUNTIME_QUERY_HEADER_OFFSET"))) ||
+                              i>=contributionOffset?0:0x6a);
+            headers++;
+          }
+        ok &= headers==2;
+        const auto table=controller->GetBufferData(heap,0,96);
+        uint64_t firstHeader=0,secondHeader=0;
+        if(table.size()==96)
+        {memcpy(&firstHeader,table.data(),8);memcpy(&secondHeader,table.data()+72,8);}
+        ok &= table.size()==96 && firstHeader && secondHeader && firstHeader!=secondHeader;
       }
       const bool first=eid>=events[0],second=eid>=events[1];
       if(birthPrefixCopy && eid>=birthPrefixCopy)
@@ -239,7 +296,8 @@ int main(int argc,char **argv)
         {
           if(access.type==DescriptorType::AccelerationStructure)
           {
-            ok &= nativeRayQuery && access.descriptorStore==heap && access.byteOffset==0;
+            ok &= nativeRayQuery && access.descriptorStore==heap &&
+                (access.byteOffset==0 || (getenv("RENDERDOC_METAL_RUNTIME_QUERY_DYNAMIC_AS") && access.byteOffset==72));
             DescriptorRange range;range.offset=0;range.count=1;range.descriptorSize=24;range.type=access.type;
             const auto values=controller->GetDescriptors(heap,{range});
             const auto locations=controller->GetDescriptorLocations(heap,{range});
@@ -294,8 +352,40 @@ int main(int argc,char **argv)
             if(index)indexRead=true;else sourceRead=true;
           }
         }
-        ok &= (!nativeRayQuery || queryAccess);
-        ok &= target && (!loop || (indexRead && sourceRead)) &&
+        ok &= (!nativeRayQuery || queryAccess || getenv("RENDERDOC_METAL_RUNTIME_QUERY_DYNAMIC_AS"));
+        if(nativeRayQuery && getenv("RENDERDOC_METAL_RUNTIME_QUERY_DYNAMIC_AS"))
+        {
+          // GPU-selected AS feedback can remain unknown. Check both real
+          // current descriptor identities without labelling them actual access.
+          for(uint64_t offset:{0ULL,72ULL})
+          {
+            DescriptorRange range;range.offset=offset;range.count=1;range.descriptorSize=24;
+            range.type=DescriptorType::AccelerationStructure;
+            const auto values=controller->GetDescriptors(heap,{range});
+            const bool identity=values.size()==1 &&
+                ((values[0].type==DescriptorType::AccelerationStructure && values[0].resource!=ResourceId()) ||
+                 (values[0].type==DescriptorType::Unknown && values[0].resource==ResourceId()));
+            if(!identity)printf("dynamic AS descriptor mismatch: EID=%u row=%llu count=%zu type=%u resource=%llu\n",eid,
+                (unsigned long long)offset,values.size(),values.empty()?0U:unsigned(values[0].type),
+                values.empty()?0ULL:(unsigned long long)ResourceIdNum(values[0].resource));
+            ok &= identity;
+          }
+        }
+        // Optional access feedback cannot be the oracle for a GPU-selected
+        // target. The full output/event checks above remain mandatory. Query
+        // the independently restored descriptor identity without claiming it
+        // is an observed shader access.
+        if(unknownTarget && !target)
+        {
+          DescriptorRange range;range.offset=eid==events[0]?24:48;range.count=1;
+          range.descriptorSize=24;range.type=DescriptorType::ReadWriteBuffer;
+          const auto values=controller->GetDescriptors(heap,{range});
+          ok &= values.size()==1 && values[0].resource==(eid==events[0]?a:b) &&
+              values[0].byteOffset==0 && values[0].byteSize==256;
+          if(cycle==0)printf("EID=%u dynamic access display unknown; restored descriptor identity checked\n",eid);
+        }
+        if(!target && !unknownTarget && cycle==0)printf("optional target unknown EID=%u\n",eid);
+        ok &= (target || unknownTarget) && (!loop || (indexRead && sourceRead)) &&
             (dimensionTexture==ResourceId() || dimensionQuery);descriptors++;
       }
       checks++;

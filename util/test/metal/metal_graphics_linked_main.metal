@@ -24,7 +24,11 @@ vertex float4 linked_vertex(uint vertexIndex [[vertex_id]], uint instance [[inst
   device const float *pointer=enabled?selected.buffer:nullptr;
   value.position.z=guarded_depth(pointer,value.index,enabled);
 #else
+#if DYNAMIC_DESCRIPTOR_INDEX
+  value.position.z=heap[clz(root.settings[0])].buffer[value.index];
+#else
   value.position.z=heap[root.settings[0]].buffer[value.index];
+#endif
 #endif
   return value.position;
 }
@@ -40,9 +44,17 @@ __attribute__((noinline)) static void fragment_control(bool discard)
   if(discard)discard_fragment();
 }
 #endif
+#if DYNAMIC_FRAGMENT_TEXTURE
+struct TextureEntry { ulong zero; texture2d<float, access::read> image; ulong metadata; };
+#endif
 [[early_fragment_tests]]
 fragment float4 linked_fragment(float4 position [[position]],
+#if DYNAMIC_FRAGMENT_TEXTURE
+    device const TextureEntry *heap [[buffer(FRAGMENT_SLOT)]],
+    device const uint *selector [[buffer(2)]])
+#else
     device const Entry *heap [[buffer(FRAGMENT_SLOT)]])
+#endif
 {
   // Original Native interpolation/conversion/indexing selects ordinary data.
   // Its value need not be available to CPU access display.
@@ -50,7 +62,11 @@ fragment float4 linked_fragment(float4 position [[position]],
   fragment_control(position.x < -1.0f);
 #endif
   uint index=1+(uint(position.x)%2);
+#if DYNAMIC_FRAGMENT_TEXTURE
+  return float4(heap[clz(selector[0])].image.read(uint2(index-1,0)).r,.5,.75,1);
+#else
   return float4(heap[1].buffer[index],.5,.75,1);
+#endif
 }
 #endif
 

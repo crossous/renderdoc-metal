@@ -27,6 +27,11 @@ public:
   void Clear();
   bool Snapshot(MTL::Device *device, MTL::ComputeCommandEncoder *encoder,
                 MTL::Buffer *source, uint64_t offset, MetalIndirectReadback &result);
+  // Optional diagnostic copy of a public logical buffer at its actual GPU use.
+  // No interpretation of bytes or replacement of application inputs.
+  bool SnapshotBytes(MTL::Device *device, MTL::ComputeCommandEncoder *encoder,
+                     MTL::Buffer *source, MetalIndirectReadback &result,
+                     uint64_t offset = 0, uint64_t length = 0);
 private:
   struct Binding
   {
@@ -37,5 +42,18 @@ private:
   };
   NS::SharedPtr<MTL::ComputePipelineState> m_Pipeline;
   NS::SharedPtr<MTL::ComputePipelineState> m_CopyPipeline;
+  NS::SharedPtr<MTL::ComputePipelineState> m_ByteCopyPipeline;
   Binding m_Bindings[2];
 };
+
+class WrappedMTLDevice;
+class WrappedMTLCommandBuffer;
+// Opt-in stream-boundary observation. Never changes replay eligibility/inputs.
+void SnapshotMetalDiagnosticTexture(WrappedMTLDevice *device,
+    WrappedMTLCommandBuffer *owner, ResourceId encoder, const char *environmentPrefix);
+
+// Paired capture/replay observation at an original encoder boundary. Requests
+// identify public logical resources/ranges; they never establish replay support.
+void SnapshotMetalDiagnosticResources(WrappedMTLDevice *device,
+    WrappedMTLCommandBuffer *owner, ResourceId encoder, const rdcstr &pipelineLabel,
+    bool capture, const char *environmentPrefix, const rdcarray<ResourceId> &residentResources);

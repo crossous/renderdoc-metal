@@ -825,6 +825,8 @@ bool WrappedMTLCommandBuffer::Serialise_renderCommandEncoderWithDescriptor(
     }
     m_Device->ApplyReplayPassClear(RenderCommandEncoder, mtlDescriptor);
     m_Device->ApplyReplayLoadDiscards(Unwrap(CommandBuffer), mtlDescriptor);
+    SnapshotMetalDiagnosticTexture(m_Device, CommandBuffer, RenderCommandEncoder,
+        "RENDERDOC_METAL_RENDER_BEGIN_SNAPSHOT");
     MTL::RenderCommandEncoder *realEncoder =
         Unwrap(CommandBuffer)->renderCommandEncoder(mtlDescriptor);
     mtlDescriptor->release();
@@ -1254,10 +1256,16 @@ bool WrappedMTLCommandBuffer::Serialise_commit(SerialiserType &ser)
     m_Device->AssignPendingReplayCPUBufferUpdates(CommandBuffer);
     if(!m_Device->ApplyReplayCPUBufferUpdates(CommandBuffer))
       return false;
+    m_Device->TraceReplaySubmissionPublications(CommandBuffer);
     if(IsLoading(m_State))
       m_Device->GetReplay()->ResolveSubmissionBindlessUsage(GetResID(CommandBuffer));
     CommandBuffer->commit();
     m_Device->MarkReplayCommandBufferCommitted();
+    m_Device->TraceReplayGPUDescriptorPublications(CommandBuffer);
+    m_Device->TraceReplayASBuildInputs(CommandBuffer);
+    if(IsActiveReplaying(m_State) && m_Device->m_DiagnosticCommitObserver &&
+       !m_Device->m_DiagnosticCommitObserver(CommandBuffer))
+      return false;
   }
   return true;
 }

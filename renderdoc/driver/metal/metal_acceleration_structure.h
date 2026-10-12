@@ -42,5 +42,9 @@ public:
   NS::UInteger m_LastBoxTableOffset = 0;
   bool m_LastBoxOpaque = false;
   ResourceId m_LastInstanceChild;
+  // Complete referent identities for the current Native build, independently
+  // of shader analysis or the portable initial-state recipe. Reset on EID0,
+  // replace on an instance rebuild, and copy with the AS build metadata.
+  rdcarray<ResourceId> m_LastInstanceChildren;
   ResourceId m_LastInstanceBuffer;
 };

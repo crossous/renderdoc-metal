@@ -64,7 +64,8 @@ int main(int argc, char **argv)
       memcpy(tableWords,tableData.data(),48);
       if(words[0] != (0xdeadbeefULL << 32 | value) || words[1]!=words[3] ||
          words[1]!=tableWords[0] || !words[1] || words[1]==oldA || words[1]==oldB ||
-         !words[2] || words[2]==oldTable || tableWords[1] || tableWords[2]!=0x123456789abcdef0ULL || tableWords[3])
+         !words[2] || words[2]==oldTable || tableWords[1] || tableWords[2]!=0x123456789abcdef0ULL ||
+         tableWords[3] || tableWords[4] || tableWords[5])
         return false;
       printf("GPU PASS value=%u sourceVA=%llu tableVA=%llu\n", value,(unsigned long long)words[1],(unsigned long long)words[2]);
       return true;

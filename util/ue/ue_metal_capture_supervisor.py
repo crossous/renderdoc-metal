@@ -118,7 +118,9 @@ def run_owned(command, env, session, startup_seconds, stall_seconds=0,
     record = {"status": "STARTING", "command": command, "rt_dispatch": "NOT PROVEN",
               "supervisor_pid": os.getpid(), "started_utc": datetime.datetime.now(
                   datetime.timezone.utc).isoformat(), "startup_seconds": startup_seconds,
-              "stall_seconds": stall_seconds, "post_init_seconds": post_init_seconds}
+              "stall_seconds": stall_seconds, "post_init_seconds": post_init_seconds,
+              "editor_RSS_limit_bytes": 4 * 1024**3, "editor_RSS_sample_max": 0,
+              "RSS_scope": "owned editor root; excludes children and system Metal/compiler services"}
     status_path = session / "supervisor.json"
     write_json(status_path, record)
     interrupted = []
@@ -144,6 +146,23 @@ def run_owned(command, env, session, startup_seconds, stall_seconds=0,
             write_json(status_path, record)
             print(f"Editor PID: {process.pid}", flush=True)
             while True:
+                memory_reason = None
+                if process.poll() is None:
+                    try:
+                        rss = subprocess.run(["ps", "-o", "rss=", "-p", str(process.pid)],
+                                             capture_output=True, text=True, timeout=1)
+                        value = rss.stdout.strip()
+                        if rss.returncode == 0 and value.isdecimal():
+                            record["editor_RSS_sample_max"] = max(
+                                record["editor_RSS_sample_max"], int(value) * 1024)
+                            if int(value) * 1024 > record["editor_RSS_limit_bytes"]:
+                                memory_reason = "editor RSS limit exceeded"
+                        elif process.poll() is None:
+                            memory_reason = "editor RSS observation unavailable"
+                    except (OSError, subprocess.TimeoutExpired) as error:
+                        record["RSS_observation_error"] = str(error)
+                        if process.poll() is None:
+                            memory_reason = "editor RSS observation unavailable"
                 editor_log = session / "ue-editor.log"
                 if editor_log.exists():
                     with editor_log.open("rb") as editor_output:
@@ -154,7 +173,8 @@ def run_owned(command, env, session, startup_seconds, stall_seconds=0,
                         output = editor_output.read(1024 * 1024)
                         checked_bytes += len(output)
                     progress.feed(output, time.monotonic())
-                reason = ("supervisor interrupted" if interrupted else progress.reason(time.monotonic()))
+                reason = ("supervisor interrupted" if interrupted else
+                          memory_reason or progress.reason(time.monotonic()))
                 record.update(initialized=progress.initialized, last_frame=progress.frame,
                               updated_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                               frame_stale_seconds=round(time.monotonic() - progress.last_frame_time, 2))

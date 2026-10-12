@@ -9,10 +9,63 @@
 #include "metal_air_access.h"
 #include "metal_descriptor_types.h"
 #include "metal_shader_features.h"
+#include <list>
+#include <string_view>
 #include <unistd.h>
+
+namespace
+{
+// Optional immutable tool output, shared by identical captured libraries and
+// comparable reopens on the replay thread. No resource IDs or replay decisions.
+struct AIRLibraryTextCache
+{
+  struct Entry
+  {
+    size_t hash;
+    bytebuf binary;
+    rdcstr tool, text;
+    size_t bytes;
+  };
+  std::list<Entry> entries;
+  size_t bytes = 0;
+  static constexpr size_t Budget = 64 * 1024 * 1024;
+  rdcstr Find(size_t hash, const bytebuf &binary, const rdcstr &tool)
+  {
+    for(auto i = entries.begin(); i != entries.end(); ++i)
+      if(i->hash == hash && i->tool == tool && i->binary == binary)
+      {
+        entries.splice(entries.begin(), entries, i);
+        return entries.front().text;
+      }
+    return {};
+  }
+  void Store(size_t hash, const bytebuf &binary, const rdcstr &tool, const rdcstr &text)
+  {
+    const size_t reservation = sizeof(Entry) + 128 + binary.size() + tool.size() + text.size();
+    if(reservation > Budget) return;
+    while(reservation > Budget - bytes)
+    {
+      bytes -= entries.back().bytes;
+      entries.pop_back();
+    }
+    entries.push_front({hash, binary, tool, text, reservation});
+    bytes += reservation;
+  }
+};
+AIRLibraryTextCache &LibraryTextCache()
+{
+  static thread_local AIRLibraryTextCache cache;
+  return cache;
+}
+size_t LibraryContentHash(const bytebuf &binary)
+{
+  return std::hash<std::string_view>()(std::string_view((const char *)binary.data(), binary.size()));
+}
+}
 
 void MetalReplay::AddShaderBinary(ResourceId library, const bytebuf &data)
 {
+  m_LibraryDisassembly.erase(library);
   m_LibraryBinaries[library] = data;
   m_LibraryDebugSources[library] = ExtractMetalDebugSources(data);
 }
@@ -29,7 +82,10 @@ rdcstr MetalReplay::GetComputeAIR(ResourceId pipeline, rdcstr &entry)
   // through the original API; unavailable optional AIR is a display state.
   const auto library=m_ShaderLibraries.find(reflection->second.resourceId);
   if(library==m_ShaderLibraries.end() || !m_LibraryBinaries.count(library->second))return {};
-  return DisassembleShader(pipeline,&reflection->second,"Metal AIR (Apple toolchain)");
+  const rdcstr module = DisassembleShader(pipeline,&reflection->second,"Metal AIR (Apple toolchain)");
+  // Tool failure explanations are display text, not shader input. The same
+  // resource/address restoration path handles an unavailable binary module.
+  return module.find("define ") >= 0 ? module : rdcstr();
 }
 
 bool MetalReplay::GetGraphicsAIR(ResourceId pipeline, uint32_t stage, rdcstr &entry,
@@ -69,6 +125,134 @@ bool MetalReplay::GetGraphicsAIR(ResourceId pipeline, uint32_t stage, rdcstr &en
 rdcarray<rdcstr> MetalReplay::GetDisassemblyTargets(bool withPipeline)
 {
   return {"Metal AIR (Apple toolchain)", "Captured MSL", "Metal AIR (editable)"};
+}
+
+void MetalReplay::PrepareReplayAIR(const std::set<ResourceId> &computePipelines,
+                                   const std::set<ResourceId> &renderPipelines)
+{
+  // Explicit preflight demand is separate from a public disassembly request.
+  // The caller supplies frame draw/dispatch pipelines, not every captured library.
+  std::set<ResourceId> libraries;
+  auto addFunction=[&](ResourceId function) {
+    const auto found=m_ShaderLibraries.find(function);
+    if(found!=m_ShaderLibraries.end())libraries.insert(found->second);
+  };
+  for(ResourceId id:computePipelines)
+  {
+    const auto pipeline=m_ComputePipelines.find(id);
+    if(pipeline!=m_ComputePipelines.end())addFunction(pipeline->second);
+  }
+  for(ResourceId id:renderPipelines)
+  {
+    const auto pipeline=m_RenderPipelines.find(id);
+    if(pipeline==m_RenderPipelines.end())continue;
+    addFunction(pipeline->second.vertexFunction);addFunction(pipeline->second.fragmentFunction);
+    for(const auto *linked:{&pipeline->second.descriptor.vertexLinkedFunctions,
+                           &pipeline->second.descriptor.fragmentLinkedFunctions})
+    {
+      for(auto f:linked->functions)addFunction(GetResID(f));
+      for(auto f:linked->binaryFunctions)addFunction(GetResID(f));
+      for(auto f:linked->privateFunctions)addFunction(GetResID(f));
+      for(const auto &group:linked->groups)for(auto f:group.functions)addFunction(GetResID(f));
+    }
+  }
+  if(libraries.empty())return;
+  ResolveAIRTool();
+  if(m_AIRToolPath.empty())return;
+  MetalLoadProfile::Scope profile("AIR_library_prepare");
+  struct Input { rdcarray<ResourceId> ids; const bytebuf *binary; size_t hash; rdcstr path; };
+  rdcarray<Input> batch;
+  size_t batchBytes = 0;
+  auto &cache=LibraryTextCache();
+  auto flush=[&]() {
+    if(batch.empty())return;
+    MetalLoadProfile::Scope toolProfile("AIR_tool_batch");
+    rdcstr args="--metallib --disassemble";
+    for(const auto &input:batch)args+=" "+input.path;
+    Process::ProcessResult result={};
+    MetalLoadProfile::Count("AIR_tool_input_files",batch.size());
+    const uint32_t pid=Process::LaunchProcess(m_AIRToolPath,"",args,true,&result);
+    if(pid)MetalLoadProfile::Count("AIR_tool_process_starts");
+    if(MetalLoadProfile::Enabled())
+      fprintf(stderr,"Metal AIR tool batch result pid=%u inputs=%zu bytes=%zu exit=%d\n",
+              pid,batch.size(),batchBytes,result.retCode);
+    // The official tool accepts multiple input files and emits an exact file
+    // header for each. Never split on shader/module labels from capture data.
+    // Any unexpected tool result falls back to the existing per-library path.
+    if(result.retCode==0 && result.strStdout.size()<=64*1024*1024)
+    {
+      for(size_t i=0;i<batch.size();i++)
+      {
+        const rdcstr marker=batch[i].path+":\n";
+        int32_t begin=result.strStdout.find(marker);
+        if(begin<0 || (begin && result.strStdout[size_t(begin)-1]!='\n'))continue;
+        int32_t end=i+1<batch.size()?result.strStdout.find(batch[i+1].path+":\n",begin+1):-1;
+        if(i+1<batch.size() && end<0)continue;
+        rdcstr body=result.strStdout.substr(size_t(begin),end<0?result.strStdout.size()-size_t(begin):size_t(end-begin));
+        if(body.find("define ")<0)continue;
+        rdcstr text="; Captured Metal AIR intermediate code, not Apple GPU machine ISA or original HLSL.\n"+body;
+        for(ResourceId id:batch[i].ids)m_LibraryDisassembly[id]=text;
+        cache.Store(batch[i].hash,*batch[i].binary,m_AIRToolIdentity,text);
+      }
+    }
+    for(const auto &input:batch)unlink(input.path.c_str());
+    batch.clear();batchBytes=0;
+  };
+  std::map<size_t,rdcarray<const bytebuf *>> uniqueContents;
+  for(ResourceId libraryId:libraries)
+  {
+    const auto found=m_LibraryBinaries.find(libraryId);
+    if(found==m_LibraryBinaries.end())continue;
+    const auto &library=*found;
+    if(m_LibraryDisassembly.count(library.first) || library.second.empty())continue;
+    const auto source=m_LibrarySources.find(library.first);
+    if(source!=m_LibrarySources.end() && !source->second.empty())continue;
+    const size_t hash=LibraryContentHash(library.second);
+    MetalLoadProfile::Count("AIR_prefetch_library_objects");
+    auto &contents=uniqueContents[hash];bool unique=true;
+    for(const bytebuf *prior:contents)unique &= *prior!=library.second;
+    if(unique){contents.push_back(&library.second);MetalLoadProfile::Count("AIR_unique_metallib_contents");}
+    rdcstr shared=cache.Find(hash,library.second,m_AIRToolIdentity);
+    if(!shared.empty())
+    {
+      MetalLoadProfile::Scope hit("AIR_tool_content_hit");
+      m_LibraryDisassembly[library.first]=shared;continue;
+    }
+    bool pending=false;
+    for(auto &input:batch)
+      if(input.hash==hash && *input.binary==library.second)
+      {input.ids.push_back(library.first);pending=true;break;}
+    if(pending)continue;
+    // Fixed tool working-set budget, independent of resource/shader identity.
+    // Larger libraries retain the original path; budget exhaustion is not a
+    // replay rejection. No extra Native GPU execution or wait is introduced.
+    constexpr size_t inputBudget=1024*1024;
+    if(library.second.size()>inputBudget)continue;
+    if(batch.size()>=8 || library.second.size()>inputBudget-batchBytes)flush();
+    char path[]="/tmp/renderdoc-metal-air-batch-XXXXXX";
+    int fd=mkstemp(path);if(fd<0)continue;close(fd);
+    if(!FileIO::WriteAll(path,library.second)){unlink(path);continue;}
+    batch.push_back({{library.first},&library.second,hash,path});batchBytes+=library.second.size();
+  }
+  flush();
+}
+
+void MetalReplay::ResolveAIRTool()
+{
+  if(!m_AIRToolResolved)
+  {
+    MetalLoadProfile::Scope profile("AIR_tool_resolution");
+    Process::ProcessResult tool = {};
+    Process::LaunchProcess("/usr/bin/xcrun", "", "--find metal-objdump", true, &tool);
+    m_AIRToolPath = tool.strStdout.trimmed();
+    if(tool.retCode != 0 || m_AIRToolPath.empty() || m_AIRToolPath[0] != '/')
+      m_AIRToolPath.clear();
+    if(!m_AIRToolPath.empty())
+      m_AIRToolIdentity = m_AIRToolPath + ":" +
+          ToStr(FileIO::GetModifiedTimestamp(m_AIRToolPath)) + ":" +
+          ToStr(FileIO::GetFileSize(m_AIRToolPath));
+    m_AIRToolResolved = true;
+  }
 }
 
 rdcstr MetalReplay::DisassembleShader(ResourceId pipeline, const ShaderReflection *refl,
@@ -111,16 +295,51 @@ rdcstr MetalReplay::DisassembleShader(ResourceId pipeline, const ShaderReflectio
   auto binary = m_LibraryBinaries.find(library->second);
   if(binary == m_LibraryBinaries.end()) return "; No captured metallib bytes available.";
 
+  ResolveAIRTool();
+  // Resolve the actual tool for every new replay device. Tool path/mtime/size
+  // changes invalidate cross-device reuse; unavailable tools are never cached.
+  // Demand is this shader's library only. An inspection or a recovery caller
+  // must not turn its first request into disassembly of unrelated captured
+  // libraries. Immutable content/tool reuse remains independent of bindings.
+  auto &immutable=LibraryTextCache();
+  const size_t contentHash = LibraryContentHash(binary->second);
+  if(!m_AIRToolIdentity.empty())
+  {
+    rdcstr shared = immutable.Find(contentHash, binary->second, m_AIRToolIdentity);
+    if(!shared.empty())
+    {
+      MetalLoadProfile::Scope profile("AIR_tool_content_hit");
+      m_LibraryDisassembly[library->second] = shared;
+      return shared;
+    }
+  }
+  MetalLoadProfile::Scope profile("AIR_tool_disassembly");
+
   // Same external-tool model as AMD ISA support; invoke Apple's installed tool directly,
   // never a shell or a path supplied by the capture. Unique files are removed after use.
   char path[] = "/tmp/renderdoc-metal-air-XXXXXX";
   int fd = mkstemp(path);
   if(fd < 0) return "; Could not create AIR inspection input.";
   close(fd);
-  FileIO::WriteAll(path, binary->second);
+  if(!FileIO::WriteAll(path, binary->second))
+  {
+    unlink(path);
+    return "; Could not write AIR inspection input.";
+  }
   Process::ProcessResult result = {};
-  Process::LaunchProcess("/usr/bin/xcrun", "",
-      rdcstr("metal-objdump --metallib --disassemble ") + path, true, &result);
+  MetalLoadProfile::Count("AIR_tool_input_files");
+  uint32_t toolPID = 0;
+  if(m_AIRToolPath.empty())
+    toolPID = Process::LaunchProcess("/usr/bin/xcrun", "",
+        rdcstr("metal-objdump --metallib --disassemble ") + path, true, &result);
+  else
+    toolPID = Process::LaunchProcess(m_AIRToolPath, "",
+        rdcstr("--metallib --disassemble ") + path, true, &result);
+  if(toolPID) MetalLoadProfile::Count("AIR_tool_process_starts");
+  if(MetalLoadProfile::Enabled())
+    fprintf(stderr,"Metal AIR tool result pid=%u library=%s content_hash=%llu bytes=%llu exit=%d\n",
+           toolPID, ToStr(library->second).c_str(),
+           (unsigned long long)contentHash, (unsigned long long)binary->second.size(), result.retCode);
   unlink(path);
   rdcstr text;
   if(result.retCode != 0 || result.strStdout.find("define ") < 0)
@@ -130,6 +349,8 @@ rdcstr MetalReplay::DisassembleShader(ResourceId pipeline, const ShaderReflectio
     text = "; Captured Metal AIR intermediate code, not Apple GPU machine ISA or original HLSL.\n" +
            result.strStdout;
   m_LibraryDisassembly[library->second] = text;
+  if(result.retCode == 0 && result.strStdout.find("define ") >= 0 && !m_AIRToolIdentity.empty())
+    immutable.Store(contentHash, binary->second, m_AIRToolIdentity, text);
   return text;
 }
 
@@ -339,7 +560,6 @@ void MetalReplay::ResolveUniformBindlessAccess(bool cpuOnly)
       }
       return result;
     };
-    const rdcstr air = DisassembleShader(ResourceId(), &reflection->second, "Metal AIR (Apple toolchain)");
     const ResourceId selectedPipeline=stage==0?m_MetalPipelineState->computePipelineResourceId:
         m_MetalPipelineState->pipelineResourceId;
     const auto proved=m_pDriver->m_IRRuntimeDescriptorAccesses.find({m_UniformInspectionOffset,stage});
@@ -354,7 +574,8 @@ void MetalReplay::ResolveUniformBindlessAccess(bool cpuOnly)
       RDCLOG("MetalUniformInspection chunk=%llu stage=%u accessDisplay=partial; Native binding restoration independent",
           (unsigned long long)m_UniformInspectionOffset,stage);
     const auto report=useProved?MetalAIR::UniformAccessReport():
-        MetalAIR::UniformResourceAccess(air.c_str(), reflection->second.entryPoint.c_str(), bindings, load,{},true);
+        MetalAIR::UniformResourceAccess(DisassembleShader(ResourceId(), &reflection->second,
+          "Metal AIR (Apple toolchain)").c_str(), reflection->second.entryPoint.c_str(), bindings, load,{},true);
     if(cpuOnly && Process::GetEnvVariable("RENDERDOC_METAL_TRACE_UNIFORM_PROOFS")=="1")
       RDCLOG("MetalUniformInspection chunk=%llu stage=%u valid=%u AS=%u unknownAS=%u texture=%u unknownTexture=%u sampler=%u unknownSampler=%u bufferRead=%u bufferWrite=%u unknownBuffer=%u",
           (unsigned long long)m_UniformInspectionOffset,stage,uint32_t(report.validModule),
@@ -505,6 +726,20 @@ rdcarray<DescriptorLogicalLocation> MetalReplay::GetDescriptorLocations(
           location.fixedBindNumber = offset / 24;
           location.logicalBindName = StringFormat::Fmt("Heap[%u] (uniform AIR)", offset / 24);
         }
+      if(descriptorStore!=GetResID(m_pDriver) && location.logicalBindName.empty() &&
+         (range.type==DescriptorType::Buffer || range.type==DescriptorType::ConstantBuffer ||
+          range.type==DescriptorType::ReadWriteBuffer))
+      {
+        DescriptorRange row=range;row.offset=offset;row.count=1;
+        const auto values=GetDescriptors(descriptorStore,{row});
+        if(values.size()==1 && values[0].resource!=ResourceId())
+        {
+          location.category=range.type==DescriptorType::ReadWriteBuffer?
+              DescriptorCategory::ReadWriteResource:DescriptorCategory::ReadOnlyResource;
+          location.fixedBindNumber=offset/24;
+          location.logicalBindName=StringFormat::Fmt("Heap[%u] (typed publication)",offset/24);
+        }
+      }
       locations.push_back(location);
     }
   return locations;

@@ -124,7 +124,12 @@ public:
   bool ValidateComputeRayBindings() const;
   bool ValidateComputeBufferSnapshot(ResourceId pipeline,
       const std::map<uint32_t, MetalPipe::BufferBinding> &buffers,
-      const std::map<uint32_t, uint64_t> &bytes) const;
+      const std::map<uint32_t, uint64_t> &bytes,
+      const std::map<uint32_t, ResourceId> &textures = {},
+      const std::map<uint32_t, ResourceId> &samplers = {}) const;
+  bool IsComputeTextureReadOnly(ResourceId pipeline, uint32_t index) const;
+  bool IsComputeTextureWriteOnly(ResourceId pipeline, uint32_t index) const;
+  bool IsComputeTextureActive(ResourceId pipeline, uint32_t index) const;
   bool ValidateGraphicsTargets(ResourceId pipeline, const std::map<uint32_t, MTL::PixelFormat> &targets, uint32_t maxTargets = 2,
       MTL::PixelFormat depth = MTL::PixelFormatInvalid,
       MTL::PixelFormat stencil = MTL::PixelFormatInvalid, bool allowAttachmentless = false) const;
@@ -146,6 +151,8 @@ public:
   void BindComputeBuffer(uint32_t index, ResourceId id, uint64_t offset);
   bool HasComputeShaderReflection() const { return m_CurrentPipelineState.computeShader.reflection != NULL; }
   ResourceId GetComputePipeline() const { return m_CurrentPipelineState.computePipelineResourceId; }
+  void PrepareReplayAIR(const std::set<ResourceId> &computePipelines,
+                        const std::set<ResourceId> &renderPipelines);
   rdcstr GetComputeAIR(ResourceId pipeline, rdcstr &entry);
   bool GetGraphicsAIR(ResourceId pipeline, uint32_t stage, rdcstr &entry, rdcstr &air,
       std::map<rdcstr, rdcpair<rdcstr, rdcstr>> &linked);
@@ -198,6 +205,8 @@ public:
   bool ValidateComputeArgumentRayBindings() const;
   bool IsComputeBufferReadOnly(ResourceId pipeline, uint32_t slot) const;
   bool IsComputeBufferActive(ResourceId pipeline, uint32_t slot) const;
+  bool IsComputeBufferStaticallyUnused(ResourceId pipeline, uint32_t slot) const;
+  bool IsGraphicsBufferStaticallyUnused(ResourceId pipeline, uint32_t stage, uint32_t slot) const;
   void BindIndexBuffer(ResourceId id, uint64_t offset, MTL::IndexType indexType,
                        uint64_t indexCount = 0);
   void SetIndirectBuffer(ResourceId id, uint64_t offset, uint64_t size);
@@ -276,11 +285,19 @@ public:
   bool ResolvePendingComputeIndirectActions();
   bool RegisterRenderIndirectAction(uint32_t eventId, WrappedMTLRenderCommandEncoder *encoder,
                                     ResourceId buffer, uint64_t offset, uint32_t wordCount,
-                                    uint32_t *arguments = NULL);
+                                    uint32_t *arguments = NULL,
+                                    WrappedMTLBuffer *indexBuffer = NULL,
+                                    uint64_t indexOffset = 0, uint64_t indexStride = 0);
   void NoteRenderIndirectWrite(ResourceId pass, WrappedMTLResource *resource);
   bool FlushRenderIndirectActions(ResourceId pass, MTL::CommandBuffer *command);
   bool HasPendingRenderIndirectActions() const { return !m_PendingRenderIndirectActions.empty(); }
   bool ResolvePendingRenderIndirectActions();
+  // The sourced frame preflight reserves direct and indirect work together.
+  // Observed Native scalar arguments may change that reservation, not its limit.
+  void SetSourcedRenderWorkBudget(uint64_t work) { m_LoadRenderIndirectWork = work; }
+  bool HasSourcedRenderWorkBudget() const { return m_LoadRenderIndirectWork != UINT64_MAX; }
+  void RecordRenderIndexRestoration(ResourceId encoder, uint32_t ordinal, ResourceId buffer,
+      uint64_t apiOffset, uint64_t stride, const std::vector<rdcpair<uint64_t,uint64_t>> &ranges);
   void BeginMultiAction(uint32_t childCount);
   uint32_t GetMultiActionEndEvent(uint32_t eventId) const;
   void AddUsage(ResourceId id, ResourceUsage usage);
@@ -476,11 +493,22 @@ private:
     uint32_t eventId=0,wordCount=0;
     ResourceId pass;
     uint64_t offset=0;
+    uint64_t indexElements=UINT64_MAX;
+    uint64_t indexOffset=0,indexStride=0;
+    std::vector<rdcpair<uint64_t,uint64_t>> indexRestoredRanges;
     rdcarray<uint32_t> expected;
     MetalIndirectReadback readback;
   };
   rdcarray<PendingRenderIndirectAction> m_PendingRenderIndirectActions;
   std::map<ResourceId,uint32_t> m_LoadRenderIndirectOrdinals;
+  uint64_t m_LoadRenderIndirectWork = UINT64_MAX;
+  struct RenderIndexRestoration
+  {
+    ResourceId buffer;
+    uint64_t offset=0,stride=0;
+    std::vector<rdcpair<uint64_t,uint64_t>> ranges;
+  };
+  std::map<rdcpair<ResourceId,uint32_t>,RenderIndexRestoration> m_RenderIndexRestoration;
   std::map<ResourceId,rdcarray<MetalIndirectWriteFootprint>> m_RenderIndirectWrites;
   void AppendAction(ActionDescription &action);
   bool BakeSubmissionEvents();
@@ -517,6 +545,9 @@ private:
   std::map<ResourceId, bytebuf> m_LibraryBinaries;
   std::map<ResourceId, ResourceId> m_ShaderLibraries;
   std::map<ResourceId, rdcstr> m_LibraryDisassembly;
+  rdcstr m_AIRToolPath, m_AIRToolIdentity;
+  bool m_AIRToolResolved = false;
+  void ResolveAIRTool();
   using GraphicsInlineData = std::map<rdcpair<uint32_t, uint32_t>, EncoderReplayState::InlineData>;
   GraphicsInlineData m_CurrentGraphicsInlineData, m_SelectedGraphicsInlineData;
   std::map<uint32_t, GraphicsInlineData> m_EventGraphicsInlineData;
@@ -575,7 +606,7 @@ private:
   std::map<ResourceId, ResourceId> m_MeshPipelines;
   std::map<ResourceId, ResourceId> m_ObjectPipelines;
   std::map<ResourceId, ResourceId> m_ComputePipelines;
-  std::map<ResourceId, std::set<uint32_t>> m_ComputeReadOnlyBuffers;
+  std::map<ResourceId, std::set<uint32_t>> m_ComputeReadOnlyBuffers, m_ComputeReadOnlyTextures, m_ComputeWriteOnlyTextures;
   std::map<ResourceId, std::map<uint32_t, rdcpair<uint64_t, uint64_t>>> m_ComputeBufferMinimums;
   std::map<ResourceId, rdcarray<uint32_t>> m_ComputeRequiredTextures, m_ComputeRequiredSamplers;
   std::map<ResourceId, std::map<uint32_t, MTL::ArgumentType>> m_ComputeRequiredAS;
@@ -611,6 +642,14 @@ private:
   MetalPipe::State *m_MetalPipelineState = NULL;
 
   MTL::CommandQueue *m_OutputQueue = NULL;
+  // Isolated opt-in diagnostic; never substitutes an input or replay result.
+  bool ProbeOriginalDraw(ResourceId target, uint32_t eventId, const rdcstr &directory);
+  bool ProbeOriginalDispatch(ResourceId target, uint32_t eventId, uint64_t offset,
+                             uint64_t length, const rdcstr &directory);
+  bool ProbeOriginalComputeSequence(ResourceId target, const rdcstr &events,
+                                     const rdcstr &directory);
+  bool ProbeCommittedTextureBoundary(ResourceId output, const rdcstr &directory);
+  bool ProbeCommittedResourceGroup(ResourceId output, const rdcstr &directory);
   ResourceId m_OverlayTexture;
   MTL::Texture *GetOverlayTexture(const TextureDescription &target);
   ResourceId RenderGeometryOverlay(ResourceId texid, DebugOverlay overlay, uint32_t eventId,

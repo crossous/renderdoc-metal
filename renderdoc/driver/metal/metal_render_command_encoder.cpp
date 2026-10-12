@@ -6389,7 +6389,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPrimitives(
     const bool capturedArguments=IsLoading(m_State) && m_Device->m_HasCapturedRenderIndirectArguments;
     if(IsLoading(m_State) && !m_Device->GetReplay()->RegisterRenderIndirectAction(
         m_Device->GetReplay()->GetNextEventID(),RenderCommandEncoder,GetResID(indirectBuffer),
-        indirectBufferOffset,5,(uint32_t *)&args))return false;
+        indirectBufferOffset,5,(uint32_t *)&args,indexBuffer,indexBufferOffset,indexStride))return false;
     if(!privateArguments && !capturedArguments)
     {
       memcpy(&args, (const byte *)realIndirect->contents() + indirectBufferOffset, sizeof(args));
@@ -6411,7 +6411,12 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPrimitives(
     if(!m_Device->GetReplay()->ValidateArgumentBufferBindings())
       return false;
     replay->SetPrimitiveTopology(primitiveType);
-    replay->BindIndexBuffer(GetResID(indexBuffer), selectedOffset, indexType, args.indexCount);
+    const bool sourcedScalars=replay->HasSourcedRenderWorkBudget();
+    // The Native indexed indirect API binds the base range. Its GPU argument
+    // selects firstIndex/count; expose that selection in the action instead of
+    // narrowing the pipeline binding to a captured numerical value.
+    replay->BindIndexBuffer(GetResID(indexBuffer), sourcedScalars?indexBufferOffset:selectedOffset,
+                           indexType, sourcedScalars?0:args.indexCount);
     replay->SetIndirectBuffer(GetResID(indirectBuffer), indirectBufferOffset, argumentSize);
     Unwrap(RenderCommandEncoder)
         ->drawIndexedPrimitives(primitiveType, indexType, realIndex, indexBufferOffset,
@@ -6432,9 +6437,7 @@ bool WrappedMTLRenderCommandEncoder::Serialise_drawIndexedPrimitives(
         action.flags |= ActionFlags::Instanced;
       action.numIndices = args.indexCount;
       action.numInstances = args.instanceCount;
-      // The Metal pipeline snapshot binds the selected index byte range above.
-      // Action indices are relative to that binding, as for existing indexed draws.
-      action.indexOffset = 0;
+      action.indexOffset = sourcedScalars?args.indexStart:0;
       action.baseVertex = args.baseVertex;
       action.instanceOffset = args.baseInstance;
       replay->SetActionOutputs(action);

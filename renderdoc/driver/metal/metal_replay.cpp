@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 #include "metal_replay.h"
+#include "metal_compute_command_encoder.h"
 #include "maths/camera.h"
 #include "maths/formatpacking.h"
 #include "maths/matrix.h"
@@ -33,6 +34,7 @@
 #include "metal_acceleration_structure.h"
 #include "metal_visible_function_table.h"
 #include "metal_device.h"
+#include "metal_descriptor_types.h"
 #include "metal_function.h"
 #include "metal_compute_pipeline_state.h"
 #include "metal_texture.h"
@@ -800,6 +802,8 @@ void MetalReplay::AddComputePipeline(ResourceId id, ResourceId function,
   // Pipelines created inside a captured frame can be recreated on event replay.
   m_ComputeBufferMinimums.erase(id);
   m_ComputeRequiredTextures.erase(id);
+  m_ComputeReadOnlyTextures.erase(id);
+  m_ComputeWriteOnlyTextures.erase(id);
   m_ComputeRequiredSamplers.erase(id);
   m_ComputeRequiredAS.erase(id);
   m_ComputeThreadgroupMinimums.erase(id);
@@ -824,7 +828,13 @@ void MetalReplay::AddComputePipeline(ResourceId id, ResourceId function,
             {RDCMAX(1ULL, (uint64_t)argument->bufferDataSize()),
              RDCMAX(1ULL, (uint64_t)argument->bufferAlignment())};
       else if(argument->type() == MTL::ArgumentTypeTexture)
+      {
         m_ComputeRequiredTextures[id].push_back((uint32_t)argument->index());
+        if(argument->access() == MTL::ArgumentAccessReadOnly)
+          m_ComputeReadOnlyTextures[id].insert((uint32_t)argument->index());
+        if(argument->access() == MTL::ArgumentAccessWriteOnly)
+          m_ComputeWriteOnlyTextures[id].insert((uint32_t)argument->index());
+      }
       else if(argument->type() == MTL::ArgumentTypeSampler)
         m_ComputeRequiredSamplers[id].push_back((uint32_t)argument->index());
       else if(argument->type() == MTL::ArgumentTypePrimitiveAccelerationStructure ||
@@ -901,14 +911,14 @@ bool MetalReplay::ValidateComputeBufferBindings(bool allowMissingBufferReflectio
 
 bool MetalReplay::ValidateComputeBufferSnapshot(ResourceId pipeline,
     const std::map<uint32_t, MetalPipe::BufferBinding> &buffers,
-    const std::map<uint32_t, uint64_t> &bytes) const
+    const std::map<uint32_t, uint64_t> &bytes,
+    const std::map<uint32_t, ResourceId> &boundTextures,
+    const std::map<uint32_t, ResourceId> &boundSamplers) const
 {
   auto requiredBuffers = m_ComputeBufferMinimums.find(pipeline);
   auto textures = m_ComputeRequiredTextures.find(pipeline);
   auto samplers = m_ComputeRequiredSamplers.find(pipeline);
-  if(requiredBuffers == m_ComputeBufferMinimums.end() ||
-     (textures != m_ComputeRequiredTextures.end() && !textures->second.empty()) ||
-     (samplers != m_ComputeRequiredSamplers.end() && !samplers->second.empty()))
+  if(requiredBuffers == m_ComputeBufferMinimums.end())
   {
     if(getenv("RENDERDOC_METAL_TRACE_DESCRIPTOR_PREFLIGHT"))
       fprintf(stderr,"Metal compute snapshot reflection: pipeline=%s known=%d textures=%zu samplers=%zu\n",
@@ -917,6 +927,24 @@ bool MetalReplay::ValidateComputeBufferSnapshot(ResourceId pipeline,
           samplers==m_ComputeRequiredSamplers.end()?0:samplers->second.size());
     return false;
   }
+  // Native reflection identifies required API bindings, not shader value
+  // expressions. Preflight restores/validates texture identity and lifetime;
+  // a required direct texture is not an unsupported buffer snapshot.
+  if(textures != m_ComputeRequiredTextures.end())
+    for(uint32_t index : textures->second)
+    {
+      const auto bound = boundTextures.find(index);
+      if(bound == boundTextures.end() || bound->second == ResourceId()) return false;
+    }
+  // Required direct samplers are ordinary Native bindings. Their immutable
+  // objects and captured setter/LOD state are restored separately; optional
+  // shader access analysis does not make a valid sampler unsupported.
+  if(samplers != m_ComputeRequiredSamplers.end())
+    for(uint32_t index : samplers->second)
+    {
+      const auto bound = boundSamplers.find(index);
+      if(bound == boundSamplers.end() || bound->second == ResourceId()) return false;
+    }
   for(const auto &required : requiredBuffers->second)
   {
     auto buffer = buffers.find(required.first);
@@ -942,6 +970,24 @@ bool MetalReplay::ValidateComputeBufferSnapshot(ResourceId pipeline,
     }
   }
   return true;
+}
+
+bool MetalReplay::IsComputeTextureReadOnly(ResourceId pipeline, uint32_t index) const
+{
+  const auto found = m_ComputeReadOnlyTextures.find(pipeline);
+  return found != m_ComputeReadOnlyTextures.end() && found->second.count(index) != 0;
+}
+
+bool MetalReplay::IsComputeTextureWriteOnly(ResourceId pipeline, uint32_t index) const
+{
+  const auto found = m_ComputeWriteOnlyTextures.find(pipeline);
+  return found != m_ComputeWriteOnlyTextures.end() && found->second.count(index) != 0;
+}
+
+bool MetalReplay::IsComputeTextureActive(ResourceId pipeline, uint32_t index) const
+{
+  const auto found = m_ComputeRequiredTextures.find(pipeline);
+  return found != m_ComputeRequiredTextures.end() && found->second.contains(index);
 }
 
 bool MetalReplay::ValidateGraphicsTargets(ResourceId id, const std::map<uint32_t, MTL::PixelFormat> &targets, uint32_t maxTargets,
@@ -1044,7 +1090,8 @@ bool MetalReplay::ValidateComputeThreadgroupSnapshot(ResourceId pipeline, const 
   uint64_t total = limits->second.first;
   for(const auto &binding : memory)
   {
-    if(total > maximumMemory || binding.second > maximumMemory - total)
+    if(binding.first >= 31 || (binding.second & 15) || total > maximumMemory ||
+       binding.second > maximumMemory - total)
       return false;
     total += binding.second;
   }
@@ -1100,12 +1147,35 @@ bool MetalReplay::IsComputeBufferActive(ResourceId pipeline, uint32_t slot) cons
   return required!=m_ComputeBufferMinimums.end() && required->second.count(slot)!=0;
 }
 
+bool MetalReplay::IsComputeBufferStaticallyUnused(ResourceId pipeline, uint32_t slot) const
+{
+  // An absent Native reflection is unknown, not an empty argument set. This
+  // stores immutable Native binding metadata, never a restoration decision.
+  const auto required = m_ComputeBufferMinimums.find(pipeline);
+  return required != m_ComputeBufferMinimums.end() && !required->second.count(slot);
+}
+
 bool MetalReplay::IsComputeBufferReadOnly(ResourceId pipeline, uint32_t slot) const
 {
   const auto active=m_ComputeBufferMinimums.find(pipeline);
   if(active!=m_ComputeBufferMinimums.end() && !active->second.count(slot)) return true;
   auto entry = m_ComputeReadOnlyBuffers.find(pipeline);
   return entry != m_ComputeReadOnlyBuffers.end() && entry->second.count(slot);
+}
+
+bool MetalReplay::IsGraphicsBufferStaticallyUnused(ResourceId pipeline, uint32_t stage,
+                                                 uint32_t slot) const
+{
+  const auto info = m_RenderPipelines.find(pipeline);
+  if(info == m_RenderPipelines.end() || (stage != 1 && stage != 2)) return false;
+  const ResourceId shader = stage == 1 ? info->second.vertexFunction : info->second.fragmentFunction;
+  if(shader == ResourceId()) return stage == 2;
+  const auto required = m_ShaderBufferMinimums.find(shader);
+  const auto readOnly = m_ShaderIndirectReadOnly.find(shader);
+  // Unknown reflection is not proof of an unused binding. This records only
+  // Native binding metadata; no payload value or integer type implies an address.
+  return required != m_ShaderBufferMinimums.end() && readOnly != m_ShaderIndirectReadOnly.end() &&
+         readOnly->second && !required->second.count(slot);
 }
 
 void MetalReplay::SetComputeTexture(uint32_t index, ResourceId id)
@@ -2386,6 +2456,46 @@ rdcarray<Descriptor> MetalReplay::GetDescriptors(ResourceId descriptorStore,
              binding.access.byteOffset == range.offset + i * range.descriptorSize &&
              binding.access.type == range.type)
             descriptor = binding.descriptor;
+        // Descriptor contents and observed shader access are separate APIs.
+        // Like DX12 heap/Vulkan set queries, expose a restored typed buffer
+        // row even if optional dynamic access feedback cannot select it.
+        const uint64_t offset=uint64_t(range.offset)+uint64_t(i)*range.descriptorSize;
+        const auto slot=m_pDriver->m_DescriptorSlotShadow.find({descriptorStore,offset});
+        if(descriptor.resource==ResourceId() && slot!=m_pDriver->m_DescriptorSlotShadow.end() &&
+           slot->second.live && MetalDescriptor::Buffer(slot->second.type) &&
+           !slot->second.sources.count(3) && slot->second.sources.count(0) &&
+           (range.type==DescriptorType::Buffer || range.type==DescriptorType::ConstantBuffer ||
+            (range.type==DescriptorType::ReadWriteBuffer && MetalDescriptor::Writable(slot->second.type))))
+        {
+          const auto &state=slot->second;
+          bool published=!state.gpuExpected || state.initialRestored;
+          if(state.gpuCopyPublished && state.sources.size()==state.gpuCopySources.size())
+          {
+            published=true;
+            for(const auto &source:state.sources)
+            {
+              const auto copied=state.gpuCopySources.find(source.first);
+              published &= copied!=state.gpuCopySources.end() &&
+                  copied->second.resource==source.second.resource && copied->second.offset==source.second.offset;
+            }
+          }
+          bytebuf patched;
+          if(published && m_pDriver->PatchDescriptorSlot(state,patched))
+          {
+            const auto &source=state.sources.at(0);
+            const auto buffer=GetBuffer(source.resource);
+            if(buffer.resourceId!=ResourceId() && source.offset<=buffer.length)
+            {
+              uint64_t size=buffer.length-source.offset;
+              uint32_t declared=0;memcpy(&declared,state.data.data()+16,4);
+              if(!declared || declared<=size)
+              {
+                descriptor.type=range.type;descriptor.resource=source.resource;
+                descriptor.byteOffset=source.offset;descriptor.byteSize=declared?declared:size;
+              }
+            }
+          }
+        }
         result.push_back(descriptor);
       }
     return result;
@@ -3915,9 +4025,19 @@ bool MetalReplay::ResolvePendingComputeIndirectActions()
   return success;
 }
 
+void MetalReplay::RecordRenderIndexRestoration(ResourceId encoder, uint32_t ordinal,
+    ResourceId buffer, uint64_t apiOffset, uint64_t stride,
+    const std::vector<rdcpair<uint64_t,uint64_t>> &ranges)
+{
+  // Actual restored intervals at this consumer's original submission, not an
+  // index-value model or cached decision about pipeline support.
+  auto &input=m_RenderIndexRestoration[make_rdcpair(encoder,ordinal)];
+  input.buffer=buffer;input.offset=apiOffset;input.stride=stride;input.ranges=ranges;
+}
+
 bool MetalReplay::RegisterRenderIndirectAction(uint32_t eventId,
     WrappedMTLRenderCommandEncoder *encoder, ResourceId buffer, uint64_t offset, uint32_t wordCount,
-    uint32_t *arguments)
+    uint32_t *arguments, WrappedMTLBuffer *indexBuffer, uint64_t indexOffset, uint64_t indexStride)
 {
   if(!m_pDriver->m_HasCapturedRenderIndirectArguments)return true;
   const ResourceId id=GetResID(encoder);
@@ -3933,6 +4053,25 @@ bool MetalReplay::RegisterRenderIndirectAction(uint32_t eventId,
   PendingRenderIndirectAction pending;
   pending.eventId=eventId;pending.pass=pass;pending.offset=offset;pending.wordCount=wordCount;
   pending.expected=proof->second.arguments;
+  if(wordCount==5)
+  {
+    // Save the actual immutable API binding extent, not a captured selection of
+    // index bytes. The command retains its Native inputs through completion.
+    auto native=indexBuffer && indexBuffer->m_Type==eResBuffer && indexBuffer->m_Real
+        ? Unwrap(indexBuffer) : NULL;
+    if(!native || native->device()!=Unwrap(m_pDriver) ||
+       (indexStride!=2 && indexStride!=4) || indexOffset%indexStride ||
+       indexOffset>native->length())return false;
+    pending.indexElements=(native->length()-indexOffset)/indexStride;
+    pending.indexOffset=indexOffset;pending.indexStride=indexStride;
+    if(HasSourcedRenderWorkBudget() && uint64_t(pending.expected[0])*pending.expected[1])
+    {
+      const auto input=m_RenderIndexRestoration.find(make_rdcpair(id,ordinal));
+      if(input==m_RenderIndexRestoration.end() || input->second.buffer!=GetResID(indexBuffer) ||
+         input->second.offset!=indexOffset || input->second.stride!=indexStride)return false;
+      pending.indexRestoredRanges=input->second.ranges;
+    }
+  }
   if(arguments)memcpy(arguments,pending.expected.data(),wordCount*4);
   pending.readback.source=NS::RetainPtr(Unwrap((WrappedMTLBuffer *)source));
   m_PendingRenderIndirectActions.push_back(pending);
@@ -3986,13 +4125,62 @@ bool MetalReplay::ResolvePendingRenderIndirectActions()
       fprintf(stderr," actual=");for(uint32_t i=0;i<pending.wordCount;i++)fprintf(stderr,"%u,",actual[i]);
       fprintf(stderr," snapshot=%d\n",bool(pending.readback.snapshot));
     }
-    if(!pending.readback.snapshot || !pending.readback.snapshot->contents() ||
-       memcmp(pending.expected.data(),pending.readback.snapshot->contents(),pending.wordCount*4))
+    if(!pending.readback.snapshot || !pending.readback.snapshot->contents())
     {
-      RDCERR("Metal render indirect per-use replay arguments differ at EID %u",pending.eventId);
+      RDCERR("Metal render indirect per-use replay arguments are unavailable at EID %u",pending.eventId);
       success=false;continue;
     }
     const uint32_t *args=(const uint32_t *)pending.readback.snapshot->contents();
+    if((pending.wordCount == 4 || pending.wordCount == 5) && HasSourcedRenderWorkBudget())
+    {
+      // Ordinary counts/base values belong to the Native GPU program, not a
+      // captured-value oracle. Keep the existing sourced frame work/ID bounds.
+      // Indexed arguments retain the real index buffer/type/offset bounds;
+      // ordinary index values and baseVertex execute through the Native API.
+      const bool indexed=pending.wordCount==5;
+      const uint64_t vertices=args[0],instances=args[1],start=args[2],base=args[indexed?4:3];
+      const uint64_t work=vertices*instances;
+      const uint64_t recorded=uint64_t(pending.expected[0])*pending.expected[1];
+      // An originally empty invocation has no shader-consumption closure.
+      // Preserve that zero-work contract until its newly needed inputs can be
+      // restored; numeric changes that still execute no shader are harmless.
+      if(!recorded && work)
+      {
+        RDCERR("Metal render indirect gained work without a restored invocation closure at EID %u",pending.eventId);
+        success=false;continue;
+      }
+      const bool inputRange=indexed
+          ? pending.indexElements!=UINT64_MAX && start<=pending.indexElements &&
+              vertices<=pending.indexElements-start
+          : start<=65534 && vertices<=65535-start;
+      if(vertices>65536 || instances>(vertices?65536/vertices:65536) ||
+         !inputRange || instances>UINT32_MAX-base ||
+         m_LoadRenderIndirectWork<recorded ||
+         work>1024*1024 || m_LoadRenderIndirectWork-recorded>1024*1024-work)
+      {
+        RDCERR("Metal render indirect actual work exceeds restored frame bounds at EID %u",pending.eventId);
+        success=false;continue;
+      }
+      if(indexed && work)
+      {
+        const uint64_t begin=pending.indexOffset+start*pending.indexStride;
+        const uint64_t end=begin+vertices*pending.indexStride;
+        bool restored=false;
+        for(const auto &range:pending.indexRestoredRanges)
+          restored |= range.first<=begin && end<=range.second;
+        if(!restored)
+        {
+          RDCERR("Metal indexed indirect actual selection lacks restored input state at EID %u",pending.eventId);
+          success=false;continue;
+        }
+      }
+      m_LoadRenderIndirectWork=m_LoadRenderIndirectWork-recorded+work;
+    }
+    else if(memcmp(pending.expected.data(),args,pending.wordCount*4))
+    {
+      RDCERR("Metal render indirect arguments differ from the legacy input at EID %u",pending.eventId);
+      success=false;continue;
+    }
     rdcarray<rdcarray<ActionDescription> *> lists={&m_FrameRecord.actionList};
     while(!lists.empty())
     {
@@ -4002,7 +4190,11 @@ bool MetalReplay::ResolvePendingRenderIndirectActions()
         if(!action.IsFakeMarker() && action.eventId==pending.eventId)
         {
           action.numIndices=args[0];action.numInstances=args[1];
-          if(pending.wordCount==5){action.baseVertex=(int32_t)args[3];action.instanceOffset=args[4];}
+          if(pending.wordCount==5)
+          {
+            action.baseVertex=(int32_t)args[3];action.instanceOffset=args[4];
+            if(HasSourcedRenderWorkBudget())action.indexOffset=args[2];
+          }
           else{action.vertexOffset=args[2];action.instanceOffset=args[3];}
           if(args[1]>1 || action.instanceOffset)action.flags|=ActionFlags::Instanced;
           action.customName=StringFormat::Fmt("%s(indirect, %u %s, %u instances)",
@@ -4412,6 +4604,8 @@ RDResult MetalReplay::ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBu
   m_LoadComputeIndirectOrdinals.clear();
   m_PendingRenderIndirectActions.clear();
   m_LoadRenderIndirectOrdinals.clear();
+  m_LoadRenderIndirectWork = UINT64_MAX;
+  m_RenderIndexRestoration.clear();
   m_RenderIndirectWrites.clear();
   m_PendingEvents.clear();
   m_ActionEncoderContexts.clear();
@@ -5436,6 +5630,19 @@ ResourceId MetalReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, De
 void MetalReplay::GetBufferData(ResourceId buff, uint64_t offset, uint64_t len, bytebuf &retData)
 {
   retData.clear();
+  const rdcstr dispatchEvent = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DISPATCH");
+  const rdcstr dispatchDirectory = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DISPATCH_DIRECTORY");
+  if(!dispatchEvent.empty() && !dispatchDirectory.empty())
+  {
+    char *end = NULL;
+    const unsigned long event = strtoul(dispatchEvent.c_str(), &end, 10);
+    if(!end || *end || !event || event > UINT32_MAX || !len || len > 4096 ||
+       !ProbeOriginalDispatch(buff, uint32_t(event), offset, len, dispatchDirectory))
+    {
+      RDCERR("Metal isolated original-dispatch diagnostic failed; no output accepted");
+      return;
+    }
+  }
   // Reject a texture or stale ID before casting the wrapped object to a buffer.
   if(GetBuffer(buff).resourceId == ResourceId())
     return;
@@ -5491,6 +5698,43 @@ void MetalReplay::GetBufferData(ResourceId buff, uint64_t offset, uint64_t len, 
   if(!real->contents())
     return;
   retData.assign((byte *)real->contents() + offset, len);
+  // Explicit diagnostic only: compare a requested packet with its current
+  // declared sources after real Native address/identity relocation. This is
+  // neither an access proof nor a condition on ordinary replay eligibility.
+  if(len == 24 && Process::GetEnvVariable("RENDERDOC_METAL_DIAG_TYPED_PACKET_LOG") == "1")
+  {
+    const auto slot = m_pDriver->m_DescriptorSlotShadow.find({buff, offset});
+    bytebuf expected;
+    bool published = false, patched = false;
+    if(slot != m_pDriver->m_DescriptorSlotShadow.end() && slot->second.live)
+    {
+      const auto &state = slot->second;
+      published = !state.gpuExpected || state.initialRestored;
+      if(state.gpuCopyPublished && state.sources.size() == state.gpuCopySources.size())
+      {
+        published = true;
+        for(const auto &source : state.sources)
+        {
+          const auto copied = state.gpuCopySources.find(source.first);
+          published &= copied != state.gpuCopySources.end() &&
+              copied->second.resource == source.second.resource &&
+              copied->second.offset == source.second.offset;
+        }
+      }
+      patched = m_pDriver->PatchDescriptorSlot(state, expected) && expected.size() == 24;
+    }
+    const bool known = published && patched;
+    const bool match = known && retData == expected;
+    fprintf(stderr, "Metal typed packet observation: table=%s offset=%llu published=%d patched=%d match=%s; actual Native bytes/current source relocation, not shader access proof\n",
+        ToStr(buff).c_str(), (unsigned long long)offset, published, patched,
+        known ? (match ? "1" : "0") : "unknown");
+    if(slot != m_pDriver->m_DescriptorSlotShadow.end())
+      for(const auto &source : slot->second.sources)
+        fprintf(stderr, "Metal typed packet source: table=%s offset=%llu generation=%llu kind=%u resource=%s memberOffset=%llu\n",
+            ToStr(buff).c_str(), (unsigned long long)offset,
+            (unsigned long long)slot->second.generation, source.first,
+            ToStr(source.second.resource).c_str(), (unsigned long long)source.second.offset);
+  }
 }
 
 void MetalReplay::GetTextureData(ResourceId tex, const Subresource &sub,
@@ -5513,7 +5757,3776 @@ void MetalReplay::GetTextureData(ResourceId tex, const Subresource &sub,
   WrappedMTLObject *resource = m_pDriver->GetResourceManager()->GetResource(tex, true);
   WrappedMTLTexture *texture = (WrappedMTLTexture *)resource;
   MTL::Texture *real = texture ? Unwrap(texture) : NULL;
+  const rdcstr sequence = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE");
+  const rdcstr sequenceDirectory = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_DIRECTORY");
+  if(!sequence.empty())
+  {
+    if(sequenceDirectory.empty() || sub.mip || sub.slice || sub.sample ||
+       !Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW").empty() ||
+       !Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMMIT_TEXTURE_DIRECTORY").empty() ||
+       !ProbeOriginalComputeSequence(tex, sequence, sequenceDirectory))
+    {
+      RDCERR("Metal isolated compute-sequence diagnostic failed; no output accepted");
+      return;
+    }
+    resource = m_pDriver->GetResourceManager()->GetResource(tex, true);
+    texture = (WrappedMTLTexture *)resource;
+    real = texture ? Unwrap(texture) : NULL;
+  }
+  const rdcstr commitDirectory = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMMIT_TEXTURE_DIRECTORY");
+  if(!commitDirectory.empty())
+  {
+    if(sub.mip || sub.slice || sub.sample ||
+       !Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW").empty() ||
+       !ProbeCommittedTextureBoundary(tex, commitDirectory))
+    {
+      RDCERR("Metal isolated commit-texture diagnostic failed; no output accepted");
+      return;
+    }
+    resource = m_pDriver->GetResourceManager()->GetResource(tex, true);
+    texture = (WrappedMTLTexture *)resource;
+    real = texture ? Unwrap(texture) : NULL;
+  }
+  const rdcstr probeEvent = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW");
+  const rdcstr probeDirectory = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_DIRECTORY");
+  if(!probeEvent.empty() && !probeDirectory.empty())
+  {
+    char *end = NULL;
+    const unsigned long event = strtoul(probeEvent.c_str(), &end, 10);
+    if(!end || *end || !event || event > UINT32_MAX || sub.mip || sub.slice || sub.sample ||
+       !ProbeOriginalDraw(tex, uint32_t(event), probeDirectory))
+    {
+      RDCERR("Metal isolated original-draw diagnostic failed; no output accepted");
+      return;
+    }
+    // The diagnostic reexecutes a prefix and owns a scratch attachment. The
+    // caller must restore the full capture before accepting any ordinary image.
+    resource = m_pDriver->GetResourceManager()->GetResource(tex, true);
+    texture = (WrappedMTLTexture *)resource;
+    real = texture ? Unwrap(texture) : NULL;
+  }
   ReadTextureSubresource(real, sub, data, tex);
+}
+
+bool MetalReplay::ProbeOriginalComputeSequence(ResourceId target, const rdcstr &selection,
+                                               const rdcstr &directory)
+{
+  auto fail = [](const char *reason) {
+    fprintf(stderr, "Metal compute sequence diagnostic failure: %s\n", reason); return false;
+  };
+  const rdcstr canonicalSchedule = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_CANONICAL_SCHEDULE");
+  const rdcstr scopeSchedule = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_SCOPE_SCHEDULE");
+  bool compareSubresourceReadback = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_COMPARE_SUBRESOURCE_READBACK") == "1";
+  if(!canonicalSchedule.empty())
+  {
+    // A bounded within-prefix control, not a replay support rule. Each digit
+    // selects the optional canonical comparison after that repetition's output
+    // is produced. It cannot explain a change in the same repetition retroactively.
+    if(compareSubresourceReadback || canonicalSchedule.size() > 12 ||
+       Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_BARRIER_COMPARE") != "1" ||
+       Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_COMPARE_DEPTH_READBACK") == "1")
+      return fail("canonical schedule requires the isolated writable diagnostic");
+    for(char digit : canonicalSchedule)
+      if(digit != '0' && digit != '1') return fail("canonical schedule digit");
+  }
+  if(!scopeSchedule.empty())
+  {
+    if(canonicalSchedule.empty() || scopeSchedule.size() != canonicalSchedule.size())
+      return fail("scope schedule requires bounded canonical control");
+    for(char digit : scopeSchedule)
+      if(digit != '0' && digit != '1') return fail("scope schedule digit");
+  }
+  const rdcstr residencySchedule = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_AS_RESIDENCY_SCHEDULE");
+  const rdcstr residencySelection = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_AS_RESIDENCY_RESOURCES");
+  rdcarray<MTL::Resource *> residencyResources;
+  if(!residencySchedule.empty() || !residencySelection.empty())
+  {
+    // Only an explicit, bounded diagnostic intervention. These identities do
+    // not grant replay support or manufacture missing AS contents/dependencies.
+    if(canonicalSchedule.empty() || residencySelection.empty() ||
+       residencySchedule.size() != canonicalSchedule.size())
+      return fail("AS residency control requires bounded same-prefix schedule");
+    for(char digit : residencySchedule)
+      if(digit != '0' && digit != '1') return fail("AS residency schedule digit");
+    const char *next = residencySelection.c_str();
+    while(*next)
+    {
+      char *end = NULL;
+      const uint64_t number = strtoull(next, &end, 10);
+      ResourceId id; memcpy(&id, &number, sizeof(id));
+      if(!number || end == next || (*end && *end != ',') || residencyResources.size() >= 256)
+        return fail("AS residency resource selection");
+      auto object = m_pDriver->GetResourceManager()->GetResource(id, true);
+      if(!object || object->m_Type != eResAccelerationStructure || !object->m_Real)
+        return fail("AS residency requires live Native structure");
+      auto structure = Unwrap((WrappedMTLAccelerationStructure *)object);
+      if(residencyResources.contains(structure)) return fail("duplicate AS residency resource");
+      residencyResources.push_back(structure);
+      fprintf(stderr, "Metal diagnostic AS residency identity: resource=%s heap=%p heapOffset=%llu size=%llu hazard=%llu; actual Native object, not opaque contents proof\n",
+          ToStr(id).c_str(), structure->heap(), (unsigned long long)structure->heapOffset(),
+          (unsigned long long)structure->allocatedSize(), (unsigned long long)structure->hazardTrackingMode());
+      if(!*end) break;
+      next = end + 1;
+      if(!*next) return fail("AS residency trailing separator");
+    }
+  }
+  rdcarray<uint32_t> events;
+  const auto &chunks = m_pDriver->GetStructuredFile()->chunks;
+  const char *cursor = selection.c_str();
+  while(*cursor)
+  {
+    char *end = NULL;
+    const unsigned long number = strtoul(cursor, &end, 10);
+    if(end == cursor || !number || number > UINT32_MAX || events.size() >= chunks.size() ||
+       (!events.empty() && number <= events.back()) || (*end && *end != ','))
+      return fail("bounded ascending event selection");
+    events.push_back(uint32_t(number));
+    if(!*end) break;
+    cursor = end + 1;
+    if(!*cursor) return fail("trailing separator");
+  }
+  if(events.empty()) return fail("empty original dispatch scope");
+  const APIEvent *first = GetEvent(events.front());
+  if(!first || first->chunkIndex >= chunks.size()) return fail("first event");
+  const auto field = chunks[first->chunkIndex]->FindChild("ComputeCommandEncoder");
+  if(!field) return fail("encoder identity");
+  const ResourceId encoderID = field->AsResourceId();
+  MTL::DispatchType dispatchType = MTL::DispatchTypeSerial;
+  bool factoryFound = false;
+  uint32_t firstIndirectOrdinal = 0;
+  for(uint32_t id = 1; id < events.front(); id++)
+  {
+    const APIEvent *event = GetEvent(id);
+    if(!event || event->chunkIndex >= chunks.size()) continue;
+    const SDChunk *chunk = chunks[event->chunkIndex];
+    const auto encoder = chunk->FindChild("ComputeCommandEncoder");
+    if(encoder && encoder->AsResourceId() == encoderID &&
+       chunk->name == "MTLComputeCommandEncoder::dispatchThreadgroups(indirect)")
+      firstIndirectOrdinal++;
+    if(!encoder || encoder->AsResourceId() != encoderID ||
+       !chunk->name.beginsWith("MTLCommandBuffer::computeCommandEncoder")) continue;
+    const auto type = chunk->FindChild("dispatchType");
+    if(type) dispatchType = MTL::DispatchType(type->data.basic.u);
+    factoryFound = true;
+  }
+  if(!factoryFound || (dispatchType != MTL::DispatchTypeSerial &&
+                      dispatchType != MTL::DispatchTypeConcurrent)) return fail("original dispatch type");
+  // Optional diagnostic continuation: another complete encoder prefix from
+  // the next captured owner. Validate original queue/submit order rather than
+  // treating CPU event order as a GPU dependency. Ordinary replay is unchanged.
+  rdcarray<uint32_t> followingEvents;
+  ResourceId followingEncoderID;
+  MTL::DispatchType followingType = MTL::DispatchTypeSerial;
+  WrappedMTLComputeCommandEncoder *followingSource = NULL;
+  const rdcstr followingSelection = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_FOLLOWING_EVENTS");
+  if(!followingSelection.empty())
+  {
+    const char *next = followingSelection.c_str();
+    while(*next)
+    {
+      char *end = NULL;
+      const unsigned long value = strtoul(next, &end, 10);
+      if(end == next || !value || value > UINT32_MAX || followingEvents.size() >= chunks.size() ||
+         (!followingEvents.empty() && value <= followingEvents.back()) || (*end && *end != ','))
+        return fail("following bounded event selection");
+      const APIEvent *event = GetEvent(uint32_t(value));
+      const SDChunk *chunk = event && event->chunkIndex < chunks.size() ? chunks[event->chunkIndex] : NULL;
+      const SDObject *encoder = chunk ? chunk->FindChild("ComputeCommandEncoder") : NULL;
+      if(!encoder || !chunk->name.beginsWith("MTLComputeCommandEncoder::dispatchThreadgroups"))
+        return fail("following original dispatch identity");
+      if(followingEvents.empty()) followingEncoderID = encoder->AsResourceId();
+      if(encoder->AsResourceId() != followingEncoderID) return fail("following encoder scope");
+      followingEvents.push_back(uint32_t(value));
+      if(!*end) break;
+      next = end + 1;
+      if(!*next) return fail("following trailing separator");
+    }
+    ResourceId owner, followingOwner, queue, followingQueue;
+    size_t commit = chunks.size(), followingCommit = chunks.size();
+    bool followingFactory = false;
+    for(size_t i = 0; i < chunks.size(); i++)
+    {
+      const SDChunk *chunk = chunks[i];
+      const auto encoder = chunk->FindChild("ComputeCommandEncoder");
+      const auto command = chunk->FindChild("CommandBuffer");
+      if(encoder && command && chunk->name.beginsWith("MTLCommandBuffer::computeCommandEncoder"))
+      {
+        if(encoder->AsResourceId() == encoderID) owner = command->AsResourceId();
+        if(encoder->AsResourceId() == followingEncoderID)
+        {
+          followingOwner = command->AsResourceId(); followingFactory = true;
+          if(const auto type = chunk->FindChild("dispatchType"))
+            followingType = MTL::DispatchType(type->AsUInt32());
+        }
+      }
+    }
+    for(size_t i = 0; i < chunks.size(); i++)
+    {
+      const SDChunk *chunk = chunks[i]; const auto command = chunk->FindChild("CommandBuffer");
+      if(!command) continue;
+      if(const auto sourceQueue = chunk->FindChild("CommandQueue"))
+      {
+        if(command->AsResourceId() == owner) queue = sourceQueue->AsResourceId();
+        if(command->AsResourceId() == followingOwner) followingQueue = sourceQueue->AsResourceId();
+      }
+      if(chunk->name == "MTLCommandBuffer::commit")
+      {
+        if(command->AsResourceId() == owner) commit = i;
+        if(command->AsResourceId() == followingOwner) followingCommit = i;
+      }
+    }
+    // A reduced scope is explicit, never proof of all intervening dependencies.
+    // Require the follower's first original dispatch; skipped prefix work is invalid.
+    for(uint32_t id = 1; id < followingEvents.front(); id++)
+    {
+      const APIEvent *event = GetEvent(id);
+      if(!event || event->chunkIndex >= chunks.size()) continue;
+      const SDChunk *chunk = chunks[event->chunkIndex];
+      const auto encoder = chunk->FindChild("ComputeCommandEncoder");
+      if(encoder && encoder->AsResourceId() == followingEncoderID &&
+         chunk->name.beginsWith("MTLComputeCommandEncoder::dispatchThreadgroups"))
+        return fail("following omitted original prefix");
+    }
+    if(!followingFactory || owner == ResourceId() || owner == followingOwner ||
+       queue == ResourceId() || queue != followingQueue || commit >= followingCommit ||
+       followingCommit == chunks.size() || (followingType != MTL::DispatchTypeSerial &&
+       followingType != MTL::DispatchTypeConcurrent)) return fail("following captured submit dependency");
+    auto resource = m_pDriver->GetResourceManager()->GetResource(followingEncoderID, true);
+    if(!resource || resource->m_Type != eResComputeCommandEncoder || !resource->m_Real)
+      return fail("following Native encoder lifetime");
+    followingSource = (WrappedMTLComputeCommandEncoder *)resource;
+    fprintf(stderr, "Metal original following diagnostic: producer=%s consumer=%s queue=%s commits=%zu,%zu; reduced scope, full input completeness unknown\n",
+        ToStr(owner).c_str(), ToStr(followingOwner).c_str(), ToStr(queue).c_str(), commit, followingCommit);
+  }
+  auto object = m_pDriver->GetResourceManager()->GetResource(encoderID, true);
+  if(!object || object->m_Type != eResComputeCommandEncoder || !object->m_Real ||
+     !InitialiseOutputResources() || !m_pDriver->BeginOverlayReplayPrefix(encoderID))
+    return fail("prefix setup");
+  ReplayLog(events.front(), eReplay_WithoutDraw);
+  m_OverlayNeedsFullReplay = true;
+  auto source = (WrappedMTLComputeCommandEncoder *)object;
+  const bool active = m_pDriver->GetReplayComputeCommandEncoder(source) == source;
+  const auto saved = SaveEncoderState();
+  const bool finished = m_pDriver->FinishOverlayReplayPrefix(encoderID);
+  RestoreEncoderState(saved);
+  if(!active || !finished || m_FatalError != ResultCode::Succeeded) return fail("prefix completion");
+  // WithoutDraw keeps pending per-use observations until its commands finish.
+  // They are now completed; validate them before borrowing the original encoder.
+  if(!ResolvePendingComputeIndirectActions()) return fail("completed prefix indirect arguments");
+  auto output = m_pDriver->GetResourceManager()->GetResource(target, true);
+  auto original = output && output->m_Type == eResTexture && output->m_Real ?
+      Unwrap((WrappedMTLTexture *)output) : NULL;
+  uint32_t bw = 0, bh = 0, bytes = 0;
+  const bool linearTarget = original && original->textureType() == MTL::TextureTypeTextureBuffer;
+  if(!original || (!linearTarget && original->textureType() != MTL::TextureType2D &&
+                   original->textureType() != MTL::TextureType2DArray) ||
+     original->mipmapLevelCount() != 1 || original->sampleCount() != 1 || original->arrayLength() != 1 ||
+     !original->width() || !original->height() ||
+     !GetTextureDataBlockShape(original->pixelFormat(), bw, bh, bytes) || bw != 1 || bh != 1 ||
+     MakeResourceFormat(original->pixelFormat()).compType == CompType::Depth)
+    return fail("selected texture scope");
+  // GPU seed uses the ordinary validated subresource layout. Export it in
+  // bounded row blocks rather than requiring the complete image to fit in a
+  // single diagnostic staging allocation. No replay eligibility limit changes.
+  RDMTL::TextureDescriptor layout;
+  layout.textureType = original->textureType(); layout.pixelFormat = original->pixelFormat();
+  layout.width = original->width(); layout.height = original->height(); layout.depth = 1;
+  layout.mipmapLevelCount = 1; layout.arrayLength = 1; layout.sampleCount = 1;
+  layout.storageMode = original->storageMode();
+  uint64_t logicalSize = 0;
+  MTL::Buffer *linearParent = NULL;
+  if(linearTarget)
+  {
+    const ResourceId parent = GetBufferTextureSource(target);
+    auto object = m_pDriver->GetResourceManager()->GetResource(parent,true);
+    linearParent = object && object->m_Type == eResBuffer && object->m_Real ?
+        Unwrap((WrappedMTLBuffer *)object) : NULL;
+    if(!linearParent || original->buffer() != linearParent || original->height() != 1 ||
+       original->depth() != 1 || original->width() > UINT64_MAX/bytes ||
+       original->bufferOffset() > linearParent->length() ||
+       original->width()*bytes > linearParent->length()-original->bufferOffset())
+      return fail("selected Native texel-buffer physical range");
+    logicalSize = original->width()*bytes;
+  }
+  else if(!MetalTextureReplayLayout(layout, logicalSize)) return fail("selected Native subresource layout");
+  MetalReplayAllocationBudget seedBudget;
+  seedBudget.Add(seedBudget.nativeBytes, linearParent ? linearParent->length() : logicalSize);
+  if(!seedBudget.Fits(Unwrap(m_pDriver)->recommendedMaxWorkingSetSize(),
+                      Unwrap(m_pDriver)->currentAllocatedSize()))
+    return fail("diagnostic GPU seed budget");
+  auto descriptor = MTL::TextureDescriptor::texture2DDescriptor(original->pixelFormat(),
+      original->width(), original->height(), false);
+  // Preserve the actual array API type, including a one-slice array. The copy
+  // below observes exactly subresource 0; broader arrays need their own scope.
+  descriptor->setTextureType(original->textureType());
+  descriptor->setStorageMode(MTL::StorageModePrivate);
+  descriptor->setUsage(MTL::TextureUsageShaderRead);
+  NS::SharedPtr<MTL::Buffer> linearSeed;
+  NS::SharedPtr<MTL::Texture> seed;
+  if(linearTarget)
+  {
+    descriptor->setAllowGPUOptimizedContents(false);
+    linearSeed = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(linearParent->length(),MTL::ResourceStorageModePrivate));
+    if(linearSeed) seed = NS::TransferPtr(linearSeed->newTexture(descriptor,
+        original->bufferOffset(),original->bufferBytesPerRow()));
+  }
+  else seed = NS::TransferPtr(Unwrap(m_pDriver)->newTexture(descriptor));
+  if(!seed) return fail("GPU seed allocation");
+  auto encodeCopy = [&](MTL::CommandBuffer *command, MTL::Texture *from, MTL::Texture *to) {
+    auto blit = command ? command->blitCommandEncoder() : NULL;
+    if(!blit) return false;
+    if(linearTarget)
+    {
+      auto sourceBuffer = from ? from->buffer() : NULL;
+      auto targetBuffer = to ? to->buffer() : NULL;
+      if(!sourceBuffer || !targetBuffer || from->bufferOffset()>sourceBuffer->length() ||
+         to->bufferOffset()>targetBuffer->length() ||
+         logicalSize>sourceBuffer->length()-from->bufferOffset() ||
+         logicalSize>targetBuffer->length()-to->bufferOffset())
+      { blit->endEncoding(); return false; }
+      if(sourceBuffer->length() != targetBuffer->length())
+      { blit->endEncoding(); return false; }
+      // A texel view's shader may also use a captured buffer pointer to its
+      // parent. Preserve the parent's complete physical bytes, including its
+      // small tail, instead of silently assuming only texels are writable.
+      blit->copyFromBuffer(sourceBuffer,0,targetBuffer,0,sourceBuffer->length());
+    }
+    else blit->copyFromTexture(from, 0, 0, MTL::Origin(0,0,0),
+        MTL::Size(original->width(), original->height(), 1), to, 0, 0, MTL::Origin(0,0,0));
+    blit->endEncoding(); return true;
+  };
+  auto finish = [](MTL::CommandBuffer *command) {
+    if(!command) return false;
+    command->commit(); command->waitUntilCompleted();
+    return command->status() == MTL::CommandBufferStatusCompleted && !command->error();
+  };
+  auto writeTexture = [&](MTL::Texture *texture, const rdcstr &name,
+                          ResourceId id = ResourceId()) {
+    if(!texture || texture->sampleCount() != 1 || !texture->mipmapLevelCount()) return false;
+    const auto type = texture->textureType();
+    if(type == MTL::TextureTypeTextureBuffer)
+    {
+      // Texel-buffer views consume the base buffer range, as in DX12/Vulkan.
+      // Use the ordinary buffer reader, never a texture blit or the whole arena.
+      const ResourceId parent = GetBufferTextureSource(id);
+      auto bufferObject = m_pDriver->GetResourceManager()->GetResource(parent, true);
+      MTL::Buffer *buffer = bufferObject && bufferObject->m_Type == eResBuffer && bufferObject->m_Real ?
+          Unwrap((WrappedMTLBuffer *)bufferObject) : NULL;
+      uint32_t blockWidth = 0, blockHeight = 0, blockBytes = 0;
+      if(!buffer || texture->buffer() != buffer || texture->mipmapLevelCount() != 1 ||
+         texture->arrayLength() != 1 || texture->height() != 1 || texture->depth() != 1 ||
+         !GetTextureDataBlockShape(texture->pixelFormat(), blockWidth, blockHeight, blockBytes) ||
+         blockWidth != 1 || blockHeight != 1 || !blockBytes || !texture->width() ||
+         texture->width() > (128ULL << 20) / blockBytes) return false;
+      const uint64_t length = texture->width() * blockBytes, offset = texture->bufferOffset();
+      if(offset > buffer->length() || length > buffer->length() - offset) return false;
+      const uint64_t stagingBudget = 1024 * 1024;
+      FILE *file = fopen((directory + "/" + name + ".bin").c_str(), "wbx");
+      if(!file) return false;
+      bool success = true;
+      for(uint64_t position = 0; position < length && success; position += stagingBudget)
+      {
+        const uint64_t count = RDCMIN(stagingBudget, length - position);
+        bytebuf viewBytes;
+        GetBufferData(parent, offset + position, count, viewBytes);
+        success = viewBytes.size() == count && fwrite(viewBytes.data(), 1, viewBytes.size(), file) == viewBytes.size();
+      }
+      success = fclose(file) == 0 && success;
+      if(success && compareSubresourceReadback)
+      {
+        bytebuf canonical, block;
+        success = ReadTextureSubresource(texture, {0,0,0}, canonical, id) && canonical.size() == length;
+        FILE *check = success ? fopen((directory + "/" + name + ".bin").c_str(), "rb") : NULL;
+        success = check != NULL; block.resize(stagingBudget);
+        for(size_t position = 0; position < canonical.size() && success; position += block.size())
+        {
+          const size_t count = RDCMIN(block.size(), canonical.size() - position);
+          success = fread(block.data(), 1, count, check) == count &&
+                    memcmp(block.data(), canonical.data() + position, count) == 0;
+        }
+        if(check) { success = fgetc(check) == EOF && success; fclose(check); }
+        fprintf(stderr, "Metal diagnostic streamed Native canonical readback: resource=%s format=%u bytes=%zu exact=%d stagingBudget=%llu; optional validation\n",
+            ToStr(id).c_str(), unsigned(texture->pixelFormat()), canonical.size(), success,
+            (unsigned long long)stagingBudget);
+      }
+      if(success)
+        fprintf(stderr, "Metal diagnostic streamed buffer view: resource=%s parent=%s offset=%llu bytes=%llu stagingBudget=%llu; optional access completeness unknown\n",
+            ToStr(id).c_str(), ToStr(parent).c_str(), (unsigned long long)offset,
+            (unsigned long long)length, (unsigned long long)stagingBudget);
+      return success;
+    }
+    const bool volume = type == MTL::TextureType3D;
+    const bool cube = type == MTL::TextureTypeCube || type == MTL::TextureTypeCubeArray;
+    const bool depthStencil = texture->pixelFormat() == MTL::PixelFormatDepth32Float_Stencil8;
+    const bool depth = depthStencil || texture->pixelFormat() == MTL::PixelFormatDepth16Unorm ||
+        texture->pixelFormat() == MTL::PixelFormatDepth32Float ||
+        texture->pixelFormat() == MTL::PixelFormatStencil8;
+    uint32_t blockWidth = 1, blockHeight = 1, size = 4;
+    if((!volume && !cube && type != MTL::TextureType2D && type != MTL::TextureType2DArray) ||
+       (!depthStencil && !GetTextureDataBlockShape(texture->pixelFormat(), blockWidth, blockHeight, size)) ||
+       (!depth && MakeResourceFormat(texture->pixelFormat()).compType == CompType::Depth)) return false;
+    RDMTL::TextureDescriptor observedLayout;
+    observedLayout.textureType = type; observedLayout.pixelFormat = texture->pixelFormat();
+    observedLayout.width = texture->width(); observedLayout.height = texture->height();
+    observedLayout.depth = texture->depth(); observedLayout.arrayLength = texture->arrayLength();
+    observedLayout.mipmapLevelCount = texture->mipmapLevelCount(); observedLayout.sampleCount = 1;
+    observedLayout.storageMode = texture->storageMode();
+    uint64_t observedSize = 0;
+    if(!MetalTextureReplayLayout(observedLayout, observedSize)) return false;
+    const uint64_t slices = volume ? 1 : texture->arrayLength() * (cube ? 6 : 1);
+    const uint64_t stagingBudget = 1024 * 1024;
+    const bool compressed = blockWidth > 1 || blockHeight > 1;
+    const uint64_t alignment = depth ? 256 : compressed ? 1 : RDCMAX<uint64_t>(1,
+        Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
+    if(!slices || alignment > stagingBudget) return false;
+    FILE *file = fopen((directory + "/" + name + ".bin").c_str(), "wbx");
+    if(!file) return false;
+    bool success = true;
+    uint64_t logicalWritten = 0;
+    // Observe all visible subresources in mip/slice/z order, retaining Native
+    // views and identities. Each blit uses the real block/aspect layout; a
+    // shader's unknown dynamic LOD does not mean only mip zero is its input.
+    for(uint32_t mip = 0; mip < texture->mipmapLevelCount() && success; mip++)
+    {
+      const uint64_t width = RDCMAX(1ULL, uint64_t(texture->width()) >> mip);
+      const uint64_t height = RDCMAX(1ULL, uint64_t(texture->height()) >> mip);
+      const uint64_t levels = volume ? RDCMAX(1ULL, uint64_t(texture->depth()) >> mip) : 1;
+      const uint64_t row = ((width + blockWidth - 1) / blockWidth) * size;
+      const uint64_t rowCount = (height + blockHeight - 1) / blockHeight;
+      if(row > stagingBudget - (alignment - 1)) { success = false; break; }
+      const uint64_t pitch = AlignUp(row, alignment);
+      const uint64_t stencilPitch = depthStencil ? AlignUp(width, alignment) : 0;
+      if(stencilPitch > stagingBudget - pitch) { success = false; break; }
+      const uint64_t rowsPerBlock = stagingBudget / (pitch + stencilPitch);
+      auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(
+          (pitch + stencilPitch) * rowsPerBlock, MTL::ResourceStorageModeShared));
+      if(!rowsPerBlock || !staging || !staging->contents()) { success = false; break; }
+      bytebuf merged;
+      if(depthStencil) merged.resize(size_t(width * 8));
+      for(uint64_t slice = 0; slice < slices && success; slice++)
+      for(uint64_t z = 0; z < levels && success; z++)
+      for(uint64_t y = 0; y < rowCount && success; y += rowsPerBlock)
+      {
+        const uint64_t rows = RDCMIN(rowsPerBlock, rowCount - y);
+        const uint64_t pixelsHigh = RDCMIN(rows * blockHeight, height - y * blockHeight);
+        auto copy = m_OutputQueue->commandBuffer();
+        auto blit = copy ? copy->blitCommandEncoder() : NULL;
+        if(!blit) { success = false; break; }
+        blit->copyFromTexture(texture, slice, mip, MTL::Origin(0,y * blockHeight,z),
+            MTL::Size(width, pixelsHigh, 1), staging.get(), 0, pitch, pitch * rows,
+            depthStencil ? MTL::BlitOptionDepthFromDepthStencil : MTL::BlitOptionNone);
+        if(depthStencil)
+          blit->copyFromTexture(texture, slice, mip, MTL::Origin(0,y,z),
+              MTL::Size(width, rows, 1), staging.get(), pitch * rowsPerBlock,
+              stencilPitch, stencilPitch * rows, MTL::BlitOptionStencilFromDepthStencil);
+        blit->endEncoding(); success = finish(copy);
+        for(uint64_t line = 0; line < rows && success; line++)
+        {
+          const byte *pixels = (byte *)staging->contents() + line * pitch;
+          if(depthStencil)
+          {
+            const byte *stencil = (byte *)staging->contents() + pitch * rowsPerBlock +
+                                 line * stencilPitch;
+            memset(merged.data(), 0, merged.size());
+            for(uint64_t column = 0; column < width; column++)
+            {
+              memcpy(merged.data() + column * 8, pixels + column * 4, 4);
+              merged[column * 8 + 4] = stencil[column];
+            }
+            success = fwrite(merged.data(), 1, merged.size(), file) == merged.size();
+          }
+          else success = fwrite(pixels, 1, row, file) == row;
+          if(success) logicalWritten += row + (depthStencil ? width : 0);
+        }
+      }
+    }
+    success = fclose(file) == 0 && success && logicalWritten == observedSize;
+    if(success && ((depth && Process::GetEnvVariable(
+        "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_COMPARE_DEPTH_READBACK") == "1") ||
+        compareSubresourceReadback))
+    {
+      // Independent public Native readback, explicit validation only. Reuse
+      // its existing aggregate budget; never turn this observer into admission.
+      bytebuf canonical, block;
+      for(uint32_t mip = 0; mip < texture->mipmapLevelCount() && success; mip++)
+      for(uint32_t slice = 0; slice < slices && success; slice++)
+      {
+        bytebuf part;
+        success = ReadTextureSubresource(texture, {mip,slice,0}, part, id) &&
+                  part.size() <= (128ULL << 20) - canonical.size();
+        if(success) canonical.append(part);
+      }
+      FILE *check = success ? fopen((directory + "/" + name + ".bin").c_str(), "rb") : NULL;
+      success = check != NULL; block.resize(stagingBudget);
+      for(size_t offset = 0; offset < canonical.size() && success; offset += block.size())
+      {
+        const size_t count = RDCMIN(block.size(), canonical.size() - offset);
+        success = fread(block.data(), 1, count, check) == count &&
+                  memcmp(block.data(), canonical.data() + offset, count) == 0;
+      }
+      if(check) { success = fgetc(check) == EOF && success; fclose(check); }
+      fprintf(stderr, "Metal diagnostic streamed Native canonical readback: resource=%s format=%u bytes=%zu exact=%d stagingBudget=%llu; optional validation\n",
+          ToStr(id).c_str(), unsigned(texture->pixelFormat()), canonical.size(), success,
+          (unsigned long long)stagingBudget);
+    }
+    if(success)
+      fprintf(stderr, "Metal diagnostic streamed subresources: resource=%s type=%u mips=%llu slices=%llu depth=%llu logicalBytes=%llu stagingBudget=%llu; optional access completeness unknown\n",
+          ToStr(id).c_str(), unsigned(type), (unsigned long long)texture->mipmapLevelCount(),
+          (unsigned long long)slices, (unsigned long long)texture->depth(),
+          (unsigned long long)logicalWritten, (unsigned long long)stagingBudget);
+    return success;
+  };
+  auto write = [&](const rdcstr &name) { return writeTexture(original, name, target); };
+  // Optional diagnostics use existing actual-access facts, never the entire
+  // residency inventory. Unknown accesses do not qualify ordinary replay.
+  // Exclude any texture also written by this group from input substitution.
+  std::set<ResourceId> readTextures, writtenTextures;
+  const bool observeNumericFields = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_READ_FIELDS") != "none";
+  uint64_t fieldBudget = 16 * 1024;
+  for(uint32_t selected : events)
+  {
+    const APIEvent *event = GetEvent(selected);
+    if(!event) return fail("selected event metadata");
+    auto facts = m_pDriver->m_IRRuntimeDescriptorAccesses.find({event->fileOffset, 0});
+    if(facts == m_pDriver->m_IRRuntimeDescriptorAccesses.end()) continue;
+    for(const auto &access : facts->second)
+    {
+      ResourceId id; memcpy(&id, &access.object, sizeof(id));
+      if(!Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_ACCESS_FACTS").empty())
+        fprintf(stderr, "Metal original compute optional access fact: event=%u kind=%u write=%d resourceOnly=%d object=%llu offset=%llu bytes=%llu descriptorObject=%llu descriptorOffset=%llu; partial candidate, not complete actual consumption proof\n",
+            selected, unsigned(access.kind), int(access.write), int(access.resourceOnly),
+            (unsigned long long)access.object, (unsigned long long)access.offset,
+            (unsigned long long)access.byteSize, (unsigned long long)access.descriptorObject,
+            (unsigned long long)access.descriptorOffset);
+      if(access.kind == 3 && !access.resourceOnly)
+      {
+        ResourceId table; memcpy(&table, &access.descriptorObject, sizeof(table));
+        uint64_t slotOffset = access.descriptorOffset;
+        if(table == ResourceId() && access.offset >= 8)
+        { table = id; slotOffset = access.offset - 8; }
+        const auto slot = m_pDriver->m_DescriptorSlotShadow.find({table, slotOffset});
+        if(slot != m_pDriver->m_DescriptorSlotShadow.end())
+          for(const auto &binding : slot->second.sources)
+            if(binding.first == 1)
+              (access.write ? writtenTextures : readTextures).insert(binding.second.resource);
+      }
+      if(!observeNumericFields || access.kind != 6 || access.write || access.resourceOnly ||
+         !access.byteSize) continue;
+      const rdcstr name = StringFormat::Fmt("input-%s-%llu-%llu.bin", ToStr(id).c_str(),
+          access.offset, access.byteSize);
+      if(FileIO::exists(directory + "/" + name)) continue;
+      if(access.byteSize > fieldBudget) return fail("actual numeric field budget");
+      auto resource = m_pDriver->GetResourceManager()->GetResource(id, true);
+      auto buffer = resource && resource->m_Type == eResBuffer && resource->m_Real ?
+          Unwrap((WrappedMTLBuffer *)resource) : NULL;
+      if(!buffer || access.offset > buffer->length() ||
+         access.byteSize > buffer->length() - access.offset) return fail("actual numeric field range");
+      auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(access.byteSize,
+          MTL::ResourceStorageModeShared));
+      auto copyCommand = m_OutputQueue->commandBuffer();
+      auto blit = staging && copyCommand ? copyCommand->blitCommandEncoder() : NULL;
+      if(!blit || !staging->contents()) return fail("actual numeric field staging");
+      blit->copyFromBuffer(buffer, access.offset, staging.get(), 0, access.byteSize);
+      blit->endEncoding();
+      if(!finish(copyCommand)) return fail("actual numeric field completion");
+      FILE *file = fopen((directory + "/" + name).c_str(), "wbx");
+      if(!file) return fail("actual numeric field export");
+      const bool wrote = fwrite(staging->contents(), 1, access.byteSize, file) == access.byteSize;
+      if(fclose(file) || !wrote) return fail("actual numeric field export size");
+      fieldBudget -= access.byteSize;
+    }
+  }
+  std::map<ResourceId, bytebuf> inputPixels;
+  // Native execution does not depend on optional access-display exports. A
+  // producer reduction can explicitly omit texture observation without
+  // pretending its complete input boundary has been proved or substituting it.
+  const bool observeInputTextures = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_READ_TEXTURES") != "none";
+  const bool streamInputTextures = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_READ_TEXTURES") == "stream";
+  // Bound a causal experiment to its selected input, without observing every
+  // partial candidate or changing any ordinary recovery/admission decision.
+  std::set<ResourceId> observedTextures;
+  const rdcstr observationFilter = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_READ_TEXTURE_FILTER");
+  const char *inputCursor = observationFilter.c_str();
+  while(*inputCursor)
+  {
+    char *end = NULL;
+    const uint64_t number = strtoull(inputCursor, &end, 10);
+    ResourceId id; memcpy(&id, &number, sizeof(id));
+    if(!observeInputTextures || !number || end == inputCursor ||
+       (*end && *end != ',') || !readTextures.count(id) || writtenTextures.count(id) ||
+       id == target || !observedTextures.insert(id).second)
+      return fail("selected diagnostic readonly observation");
+    if(!*end) break;
+    inputCursor = end + 1;
+    if(!*inputCursor) return fail("selected observation trailing separator");
+  }
+  if(!observeInputTextures && !Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_REPLACE_INPUT").empty())
+    return fail("texture intervention requires actual observed input");
+  fprintf(stderr, "Metal original compute group boundary: readonlyTextureObservation=%d readonlyCandidates=%zu writtenCandidates=%zu; access completeness unknown\n",
+      observeInputTextures, readTextures.size(), writtenTextures.size());
+  uint64_t inputBudget = 1024 * 1024;
+  for(ResourceId id : readTextures)
+  {
+    if(!observeInputTextures) continue;
+    if(!observedTextures.empty() && !observedTextures.count(id)) continue;
+    if(writtenTextures.count(id) || id == target) continue;
+    auto resource = m_pDriver->GetResourceManager()->GetResource(id, true);
+    auto texture = resource && resource->m_Type == eResTexture && resource->m_Real ?
+        Unwrap((WrappedMTLTexture *)resource) : NULL;
+    if(streamInputTextures)
+    {
+      // Observe the real Native view with fixed-size staging, without retaining
+      // the entire image in RAM or increasing the diagnostic transfer budget.
+      if(!writeTexture(texture, "input-" + ToStr(id), id))
+        return fail("actual readonly Native subresource streaming");
+      continue;
+    }
+    uint32_t x = 0, y = 0, size = 0;
+    if(!texture || texture->textureType() != MTL::TextureType2D || texture->mipmapLevelCount() != 1 ||
+       texture->sampleCount() != 1 || texture->arrayLength() != 1 || !texture->height() ||
+       !GetTextureDataBlockShape(texture->pixelFormat(), x, y, size) || x != 1 || y != 1 ||
+       MakeResourceFormat(texture->pixelFormat()).compType == CompType::Depth ||
+       texture->width() > inputBudget / size / texture->height())
+      return fail("actual readonly input needs a different bounded diagnostic");
+    bytebuf pixels;
+    if(!ReadTextureSubresource(texture, {0,0,0}, pixels, id) || pixels.empty() ||
+       pixels.size() > inputBudget) return fail("actual readonly input readback");
+    FILE *file = fopen((directory + "/input-" + ToStr(id) + ".bin").c_str(), "wbx");
+    if(!file) return fail("actual readonly input export");
+    const bool wrote = fwrite(pixels.data(), 1, pixels.size(), file) == pixels.size();
+    if(fclose(file) || !wrote) return fail("actual readonly input export size");
+    inputBudget -= pixels.size(); inputPixels[id] = pixels;
+  }
+  auto command = m_OutputQueue->commandBuffer();
+  if(!encodeCopy(command, original, seed.get()) || !finish(command) || !write("output-seed"))
+    return fail("GPU seed capture");
+  const bool barrierComparison = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_BARRIER_COMPARE") == "1";
+  struct WritableSeed
+  {
+    MTL::Texture *original = NULL;
+    NS::SharedPtr<MTL::Texture> seed;
+    uint64_t begin = 0, end = 0;
+  };
+  std::map<ResourceId, WritableSeed> writableSeeds;
+  struct ArgumentSeed
+  {
+    ResourceId source;
+    uint64_t offset = 0;
+    NS::SharedPtr<MTL::Buffer> seed;
+    bytebuf bytes;
+  };
+  rdcarray<ArgumentSeed> argumentSeeds;
+  rdcarray<MTL::Buffer *> sequenceArguments;
+  if(barrierComparison)
+  {
+    // Control this reduced group's known writable boundary, not its entire
+    // residency inventory. Partial access facts are not a completeness proof.
+    // A single original dispatch also has a meaningful writable-boundary
+    // repetition control; it needs no artificial adjacent dispatch or barrier.
+    if(events.empty() || !followingEvents.empty() || linearTarget ||
+       observeNumericFields || observeInputTextures || !writtenTextures.count(target) ||
+       !Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_MUTABLE_BUFFER").empty() ||
+       !Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_REPLACE_INPUT").empty())
+      return fail("barrier comparison requires a bounded writable group without other interventions");
+    for(ResourceId id : writtenTextures)
+    {
+      auto object = m_pDriver->GetResourceManager()->GetResource(id, true);
+      auto texture = object && object->m_Type == eResTexture && object->m_Real ?
+          Unwrap((WrappedMTLTexture *)object) : NULL;
+      uint32_t x = 0, y = 0, size = 0;
+      if(!texture || texture->textureType() != MTL::TextureType2D || texture->parentTexture() ||
+         texture->buffer() || texture->mipmapLevelCount() != 1 || texture->sampleCount() != 1 ||
+         texture->arrayLength() != 1 || !texture->width() || !texture->height() ||
+         !GetTextureDataBlockShape(texture->pixelFormat(), x, y, size) || x != 1 || y != 1 ||
+         MakeResourceFormat(texture->pixelFormat()).compType == CompType::Depth)
+        return fail("known writable boundary needs a different bounded Native reduction");
+      auto desc = MTL::TextureDescriptor::texture2DDescriptor(texture->pixelFormat(),
+          texture->width(), texture->height(), false);
+      desc->setStorageMode(texture->storageMode());
+      desc->setUsage(texture->usage());
+      WritableSeed state; state.original = texture;
+      if(texture->heap())
+      {
+        // This is a current Native diagnostic range, not invented old-capture
+        // allocation metadata or an ordinary replay qualification decision.
+        const auto range = Unwrap(m_pDriver)->heapTextureSizeAndAlign(desc);
+        state.begin = texture->heapOffset();
+        if(!range.size || state.begin > texture->heap()->size() ||
+           range.size > texture->heap()->size() - state.begin)
+          return fail("known writable Native allocation range");
+        state.end = state.begin + range.size;
+        for(const auto &other : writableSeeds)
+          if(texture->heap() == other.second.original->heap() &&
+             state.begin < other.second.end && other.second.begin < state.end)
+            return fail("known writable aliases require a physical seed owner");
+      }
+      if(id == target) state.seed = seed;
+      else
+      {
+        seedBudget.Add(seedBudget.nativeBytes, texture->allocatedSize());
+        if(!seedBudget.Fits(Unwrap(m_pDriver)->recommendedMaxWorkingSetSize(),
+                            Unwrap(m_pDriver)->currentAllocatedSize()))
+          return fail("known writable GPU seed budget");
+        desc->setStorageMode(MTL::StorageModePrivate);
+        desc->setUsage(MTL::TextureUsageShaderRead);
+        state.seed = NS::TransferPtr(Unwrap(m_pDriver)->newTexture(desc));
+        if(!state.seed) return fail("known writable GPU seed allocation");
+      }
+      writableSeeds[id] = state;
+    }
+    auto capture = m_OutputQueue->commandBuffer();
+    auto blit = capture ? capture->blitCommandEncoder() : NULL;
+    if(!blit) return fail("known writable GPU seed encoder");
+    for(const auto &entry : writableSeeds)
+      if(entry.first != target)
+        blit->copyFromTexture(entry.second.original, 0, 0, MTL::Origin(0,0,0),
+            MTL::Size(entry.second.original->width(), entry.second.original->height(), 1),
+            entry.second.seed.get(), 0, 0, MTL::Origin(0,0,0));
+    blit->endEncoding();
+    if(!finish(capture)) return fail("known writable GPU seed capture");
+    for(const auto &entry : writableSeeds)
+      if(entry.first != target && !writeTexture(entry.second.original,
+          "writable-seed-" + ToStr(entry.first), entry.first))
+        return fail("known writable seed verification");
+    // The ordinary per-use observation kernel itself inserts memory barriers.
+    // Both comparison branches use the same current GPU argument snapshots to
+    // isolate the original dispatch-to-dispatch visibility obligation instead.
+    for(uint32_t id : events)
+    {
+      const auto event = GetEvent(id);
+      const auto call = event ? chunks[event->chunkIndex] : NULL;
+      const auto input = call ? call->FindChild("indirectBuffer") : NULL;
+      const auto offset = call ? call->FindChild("indirectBufferOffset") : NULL;
+      const auto threads = call ? call->FindChild("threadsPerGroup") : NULL;
+      if(!call || call->metadata.chunkID != uint32_t(MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups_indirect) ||
+         !input || !offset || !threads) return fail("barrier comparison current indirect window");
+      ArgumentSeed arg; arg.source = input->AsResourceId(); arg.offset = offset->data.basic.u;
+      auto object = m_pDriver->GetResourceManager()->GetResource(arg.source, true);
+      auto buffer = object && object->m_Type == eResBuffer && object->m_Real ?
+          Unwrap((WrappedMTLBuffer *)object) : NULL;
+      arg.seed = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(
+          sizeof(MTL::DispatchThreadgroupsIndirectArguments), MTL::ResourceStorageModeShared));
+      auto copy = m_OutputQueue->commandBuffer();
+      auto blit = copy && arg.seed && buffer && arg.offset <= buffer->length() &&
+          arg.seed->length() <= buffer->length() - arg.offset ? copy->blitCommandEncoder() : NULL;
+      if(!blit) return fail("barrier comparison current indirect extent");
+      blit->copyFromBuffer(buffer, arg.offset, arg.seed.get(), 0, arg.seed->length());
+      blit->endEncoding();
+      if(!finish(copy) || !arg.seed->contents()) return fail("barrier comparison current indirect copy");
+      arg.bytes = bytebuf((byte *)arg.seed->contents(), arg.seed->length());
+      uint32_t groups[3] = {}; memcpy(groups, arg.bytes.data(), sizeof(groups));
+      uint64_t work = 1;
+      for(const char *axis : {"width", "height", "depth"})
+      {
+        const auto value = threads->FindChild(axis);
+        if(!value || !value->data.basic.u || value->data.basic.u > 1024 / work)
+          return fail("barrier comparison threadgroup arithmetic");
+        work *= value->data.basic.u;
+      }
+      for(uint32_t count : groups)
+      {
+        if(!count || count > (4ULL * 1024 * 1024) / work)
+          return fail("barrier comparison bounded current Native workload");
+        work *= count;
+      }
+      fprintf(stderr, "Metal diagnostic sequence argument: ordinal=%zu source=%s offset=%llu groups=%u,%u,%u invocations=%llu; current GPU own seed, not production frozen input\n",
+          argumentSeeds.size(), ToStr(arg.source).c_str(), arg.offset,
+          groups[0], groups[1], groups[2], work);
+      argumentSeeds.push_back(arg); sequenceArguments.push_back(arg.seed.get());
+    }
+    fprintf(stderr, "Metal diagnostic writable boundary: textures=%zu Native physical ranges disjoint; partial completeness only, ordinary replay unchanged\n",
+        writableSeeds.size());
+  }
+  auto restoreKnownWrites = [&](MTL::CommandBuffer *copy) {
+    if(!barrierComparison) return true;
+    auto blit = copy ? copy->blitCommandEncoder() : NULL;
+    if(!blit) return false;
+    for(const auto &entry : writableSeeds)
+      if(entry.first != target)
+        blit->copyFromTexture(entry.second.seed.get(), 0, 0, MTL::Origin(0,0,0),
+            MTL::Size(entry.second.original->width(), entry.second.original->height(), 1),
+            entry.second.original, 0, 0, MTL::Origin(0,0,0));
+    blit->endEncoding(); return true;
+  };
+  // Isolated original-call object replacement. Keep the real shader, setters,
+  // arguments and submission; change only an explicitly selected coherent
+  // Native texture/typed-descriptor group. This is never a replay eligibility
+  // rule. Parent/view, buffer-backed and physical aliases need a shared owner,
+  // so this bounded diagnostic refuses to split them into unrelated objects.
+  const rdcstr textureGroupFile = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_TEXTURE_GROUP");
+  struct TextureGroupEntry
+  {
+    MTL::Texture *original = NULL;
+    NS::SharedPtr<MTL::Texture> replacement;
+  };
+  struct TextureGroupField
+  {
+    MTL::Buffer *table = NULL;
+    uint64_t offset = 0;
+    ResourceId resource;
+    bytebuf own;
+  };
+  std::map<ResourceId, TextureGroupEntry> textureGroup;
+  rdcarray<TextureGroupField> textureGroupFields;
+  if(!textureGroupFile.empty())
+  {
+    if(!barrierComparison || events.size() != 1 || argumentSeeds.size() != 1)
+      return fail("texture-group replacement requires the controlled two-write boundary");
+    FILE *file = fopen(textureGroupFile.c_str(), "rb");
+    if(!file) return fail("texture-group CSV");
+    char line[64]; bool valid = true;
+    while(valid && fgets(line, sizeof(line), file))
+    {
+      unsigned long long number = 0; char extra = 0;
+      if(sscanf(line, "%llu %c", &number, &extra) != 1 || !number || textureGroup.size() >= 32)
+      { valid = false; break; }
+      ResourceId id; memcpy(&id, &number, sizeof(id));
+      auto resource = m_pDriver->GetResourceManager()->GetResource(id, true);
+      auto texture = resource && resource->m_Type == eResTexture && resource->m_Real ?
+          Unwrap((WrappedMTLTexture *)resource) : NULL;
+      if(!texture || (!readTextures.count(id) && !writtenTextures.count(id)) ||
+         textureGroup.count(id) || texture->parentTexture() || texture->buffer() ||
+         texture->sampleCount() != 1 || texture->arrayLength() != 1 ||
+         (texture->textureType() != MTL::TextureType2D &&
+          texture->textureType() != MTL::TextureTypeCube) || texture->isSparse() ||
+         texture->framebufferOnly() || texture->iosurface())
+      { valid = false; break; }
+      TextureGroupEntry entry; entry.original = texture; textureGroup[id] = entry;
+    }
+    if(fclose(file) || !valid || textureGroup.empty())
+      return fail("texture-group needs a coherent supported Native object owner");
+    auto descriptor = [](MTL::Texture *texture) {
+      auto desc = NS::TransferPtr(MTL::TextureDescriptor::alloc()->init());
+      desc->setTextureType(texture->textureType()); desc->setPixelFormat(texture->pixelFormat());
+      desc->setWidth(texture->width()); desc->setHeight(texture->height()); desc->setDepth(texture->depth());
+      desc->setMipmapLevelCount(texture->mipmapLevelCount()); desc->setArrayLength(texture->arrayLength());
+      desc->setSampleCount(texture->sampleCount()); desc->setUsage(texture->usage());
+      desc->setStorageMode(texture->storageMode()); desc->setCpuCacheMode(texture->cpuCacheMode());
+      desc->setHazardTrackingMode(texture->hazardTrackingMode()); desc->setSwizzle(texture->swizzle());
+      desc->setAllowGPUOptimizedContents(texture->allowGPUOptimizedContents());
+      desc->setCompressionType(texture->compressionType()); return desc;
+    };
+    std::set<ResourceId> boundaryTextures = readTextures;
+    boundaryTextures.insert(writtenTextures.begin(), writtenTextures.end());
+    for(auto &entry : textureGroup)
+    {
+      auto texture = entry.second.original; auto desc = descriptor(texture);
+      if(texture->heap())
+      {
+        const auto range = Unwrap(m_pDriver)->heapTextureSizeAndAlign(desc.get());
+        const uint64_t begin = texture->heapOffset();
+        if(!range.size || begin > texture->heap()->size() || range.size > texture->heap()->size()-begin)
+          return fail("texture-group Native physical extent");
+        for(ResourceId otherID : boundaryTextures)
+        {
+          if(otherID == entry.first) continue;
+          auto object = m_pDriver->GetResourceManager()->GetResource(otherID, true);
+          auto other = object && object->m_Type == eResTexture && object->m_Real ?
+              Unwrap((WrappedMTLTexture *)object) : NULL;
+          if(!other || other->heap() != texture->heap()) continue;
+          auto otherDesc = descriptor(other);
+          const auto otherRange = Unwrap(m_pDriver)->heapTextureSizeAndAlign(otherDesc.get());
+          const uint64_t otherBegin = other->heapOffset();
+          if(!otherRange.size || otherBegin > other->heap()->size() ||
+             otherRange.size > other->heap()->size()-otherBegin)
+            return fail("texture-group related Native physical extent");
+          if(begin < otherBegin+otherRange.size && otherBegin < begin+range.size)
+            return fail("texture-group physical alias requires one shared replacement owner");
+        }
+      }
+      seedBudget.Add(seedBudget.nativeBytes, texture->allocatedSize());
+      if(!seedBudget.Fits(Unwrap(m_pDriver)->recommendedMaxWorkingSetSize(),
+                          Unwrap(m_pDriver)->currentAllocatedSize()))
+        return fail("texture-group Native allocation budget");
+      entry.second.replacement = NS::TransferPtr(Unwrap(m_pDriver)->newTexture(desc.get()));
+      if(!entry.second.replacement || !entry.second.replacement->gpuResourceID()._impl)
+        return fail("texture-group Native allocation");
+      fprintf(stderr, "Metal original-call texture group: id=%s type=%u format=%u extent=%llu,%llu,%llu mips=%llu usage=%llu hazard=%llu originalHeap=%d parent=0 buffer=0; Native descriptor cloned, diagnostic only\n",
+          ToStr(entry.first).c_str(), unsigned(texture->textureType()), unsigned(texture->pixelFormat()),
+          uint64_t(texture->width()), uint64_t(texture->height()), uint64_t(texture->depth()),
+          uint64_t(texture->mipmapLevelCount()), uint64_t(texture->usage()),
+          uint64_t(texture->hazardTrackingMode()), texture->heap() != NULL);
+    }
+    // A globally live shadow can describe a slot since reused by another
+    // publication. It is not automatically a binding of this original call.
+    // Retain hard checks on identified current accesses; include additional
+    // aliases only when their actual Native bytes still name this object.
+    std::set<rdcpair<ResourceId, uint64_t>> requiredFields;
+    const auto facts = m_pDriver->m_IRRuntimeDescriptorAccesses.find({first->fileOffset, 0});
+    if(facts == m_pDriver->m_IRRuntimeDescriptorAccesses.end())
+      return fail("texture-group current binding facts missing");
+    for(const auto &access : facts->second)
+    {
+      if(access.kind != 3 || access.resourceOnly) continue;
+      ResourceId table; memcpy(&table, &access.descriptorObject, sizeof(table));
+      uint64_t offset = access.descriptorOffset;
+      if(table == ResourceId() && access.offset >= 8)
+      { memcpy(&table, &access.object, sizeof(table)); offset = access.offset-8; }
+      requiredFields.insert({table, offset});
+    }
+    std::set<ResourceId> identified; size_t historicalFields = 0;
+    for(const auto &slot : m_pDriver->m_DescriptorSlotShadow)
+    {
+      if(!slot.second.live || !slot.second.sources.count(1)) continue;
+      const ResourceId id = slot.second.sources.at(1).resource;
+      if(!textureGroup.count(id)) continue;
+      auto object = m_pDriver->GetResourceManager()->GetResource(slot.first.first, true);
+      auto table = object && object->m_Type == eResBuffer && object->m_Real ?
+          Unwrap((WrappedMTLBuffer *)object) : NULL;
+      bytebuf patched; const uint64_t offset = slot.first.second;
+      const bool required = requiredFields.count(slot.first) != 0;
+      uint64_t currentHandle = 0;
+      const bool readable = table && table->storageMode() == MTL::StorageModeShared && table->contents() &&
+          offset <= table->length() && 24 <= table->length()-offset;
+      if(readable) memcpy(&currentHandle, (byte *)table->contents()+offset+8, 8);
+      if(!required && (!readable || currentHandle != textureGroup.at(id).original->gpuResourceID()._impl))
+      { historicalFields++; continue; }
+      // Extra current aliases need their declared handle lane and actual
+      // Native identity, not a proof of unrelated bytes in the same 24-byte
+      // record. Preserve both other lanes exactly. Identified call bindings
+      // still require the existing full current-publication check.
+      if(slot.second.sources.at(1).offset || !readable ||
+         currentHandle != textureGroup.at(id).original->gpuResourceID()._impl ||
+         (required && (slot.second.gpuExpected ||
+          !m_pDriver->PatchDescriptorSlot(slot.second, patched) || patched.size() != 24 ||
+          memcmp((byte *)table->contents()+offset, patched.data(), 16))))
+      {
+        fprintf(stderr, "Metal original-call current descriptor mismatch: table=%s offset=%llu resource=%s required=%d currentHandle=%llu; diagnostic NOT_RUN, no ordinary replay conclusion\n",
+            ToStr(slot.first.first).c_str(), offset, ToStr(id).c_str(), required, currentHandle);
+        return fail("texture-group current typed identity and Native handle");
+      }
+      TextureGroupField field; field.table = table; field.offset = offset; field.resource = id;
+      field.own.assign((byte *)table->contents()+offset, 24);
+      uint64_t handle = 0; memcpy(&handle, field.own.data()+8, 8);
+      if(handle != textureGroup.at(id).original->gpuResourceID()._impl)
+        return fail("texture-group publication points at a different Native object");
+      textureGroupFields.push_back(field); identified.insert(id);
+    }
+    if(identified.size() != textureGroup.size()) return fail("texture-group typed publication missing");
+    fprintf(stderr, "Metal original-call texture publications: currentFields=%zu historicalNonBindings=%zu; partial access completeness, no replay qualification change\n",
+        textureGroupFields.size(), historicalFields);
+  }
+  bool useTextureGroup = false;
+  auto restoreTextureGroupFields = [&]() {
+    bool exact = true;
+    for(const auto &field : textureGroupFields)
+    {
+      memcpy((byte *)field.table->contents()+field.offset, field.own.data(), field.own.size());
+      exact = !memcmp((byte *)field.table->contents()+field.offset, field.own.data(), field.own.size()) && exact;
+    }
+    return exact;
+  };
+  auto copyTextureGroup = [&](MTL::CommandBuffer *copy) {
+    if(textureGroup.empty()) return true;
+    auto blit = copy ? copy->blitCommandEncoder() : NULL;
+    if(!blit) return false;
+    // Both branches copy the same original prefix-restored objects to fresh
+    // objects. Only descriptor handles differ. No CPU wait inside the group.
+    for(const auto &entry : textureGroup)
+    {
+      auto texture = entry.second.original;
+      const uint32_t slices = texture->textureType() == MTL::TextureTypeCube ? 6 : 1;
+      for(uint32_t slice = 0; slice < slices; slice++)
+        for(uint32_t mip = 0; mip < texture->mipmapLevelCount(); mip++)
+          blit->copyFromTexture(texture, slice, mip, MTL::Origin(0,0,0),
+              MTL::Size(RDCMAX(uint64_t(1), uint64_t(texture->width()) >> mip),
+                        RDCMAX(uint64_t(1), uint64_t(texture->height()) >> mip), 1),
+              entry.second.replacement.get(), slice, mip, MTL::Origin(0,0,0));
+    }
+    blit->endEncoding(); return true;
+  };
+  // One explicitly authorized diagnostic contrast: equal-capacity carriers,
+  // original Native resources and current typed roots. No replay qualification
+  // or production restoration decision uses this fixture-selection file.
+  const rdcstr carrierFile = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_CARRIERS");
+  struct Carrier
+  {
+    MTL::Buffer *original = NULL;
+    NS::SharedPtr<MTL::Buffer> own, full, partial, fixture, fullPatches;
+    rdcarray<rdcpair<uint64_t, uint64_t>> links;
+  };
+  struct CarrierKeep
+  {
+    ResourceId table, source;
+    uint64_t offset = 0, sourceOffset = 0, thirdWord = 0;
+    uint32_t kind = 0;
+  };
+  std::map<ResourceId, Carrier> carriers;
+  rdcarray<CarrierKeep> carrierKeeps;
+  std::map<ResourceId, MTL::Buffer *> carrierBindings;
+  struct CarrierReference
+  {
+    MTL::Buffer *table = NULL;
+    uint64_t offset = 0, own = 0, full = 0, partial = 0;
+  };
+  rdcarray<CarrierReference> carrierReferences;
+  auto restoreCarrierReferences = [&]() {
+    bool exact = true;
+    for(const auto &reference : carrierReferences)
+    {
+      memcpy((byte *)reference.table->contents() + reference.offset, &reference.own, 8);
+      uint64_t value = 0; memcpy(&value, (byte *)reference.table->contents() + reference.offset, 8);
+      exact = value == reference.own && exact;
+    }
+    return exact;
+  };
+  unsigned carrierMode = 0;
+  if(!carrierFile.empty())
+  {
+    if(!barrierComparison || events.size() != 1 || argumentSeeds.size() != 1 ||
+       !textureGroup.empty() || !canonicalSchedule.empty())
+      return fail("carrier contrast requires isolated original single-call writable boundary");
+    FILE *file = fopen(carrierFile.c_str(), "rb");
+    if(!file) return fail("carrier diagnostic selection");
+    char line[256]; bool valid = true; uint64_t bytes = 0;
+    while(fgets(line, sizeof(line), file) && valid)
+    {
+      unsigned long long table = 0, offset = 0, source = 0, sourceOffset = 0, third = 0;
+      unsigned kind = 0; char extra = 0;
+      if(sscanf(line, "c,%llu %c", &table, &extra) == 1)
+      {
+        ResourceId id; memcpy(&id, &table, sizeof(id));
+        auto object = m_pDriver->GetResourceManager()->GetResource(id, true);
+        auto buffer = object && object->m_Type == eResBuffer && object->m_Real ?
+            Unwrap((WrappedMTLBuffer *)object) : NULL;
+        if(!table || carriers.size() >= 8 || carriers.count(id) || !buffer ||
+           !buffer->length() || buffer->storageMode() != MTL::StorageModeShared ||
+           !buffer->contents() || buffer->length() > (64ULL << 20) - bytes)
+        { valid = false; break; }
+        Carrier value; value.original = buffer;
+        MetalReplayAllocationBudget allocation;
+        allocation.Add(allocation.nativeBytes, (bytes + buffer->length()) * 5);
+        if(!allocation.Fits(Unwrap(m_pDriver)->recommendedMaxWorkingSetSize(),
+                            Unwrap(m_pDriver)->currentAllocatedSize()))
+        { valid = false; break; }
+        for(auto *destination : {&value.own, &value.full, &value.partial, &value.fixture, &value.fullPatches})
+        {
+          *destination = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(
+              buffer->length(), buffer->resourceOptions()));
+          if(!*destination || !(*destination)->contents()) valid = false;
+        }
+        bytes += buffer->length(); carriers[id] = value;
+      }
+      else if(sscanf(line, "k,%llu,%llu,%u,%llu,%llu,%llu %c",
+              &table, &offset, &kind, &source, &sourceOffset, &third, &extra) == 6)
+      {
+        CarrierKeep keep; memcpy(&keep.table, &table, sizeof(keep.table));
+        memcpy(&keep.source, &source, sizeof(keep.source));
+        keep.offset = offset; keep.kind = kind; keep.sourceOffset = sourceOffset; keep.thirdWord = third;
+        if(carrierKeeps.size() >= 128 || !carriers.count(keep.table) || kind > 2 || !source ||
+           offset > carriers[keep.table].original->length() ||
+           24 > carriers[keep.table].original->length() - offset)
+        { valid = false; break; }
+        for(const auto &prior : carrierKeeps)
+          if(prior.table == keep.table && prior.offset < offset + 24 && offset < prior.offset + 24)
+            valid = false;
+        carrierKeeps.push_back(keep);
+      }
+      else valid = false;
+    }
+    valid = fclose(file) == 0 && valid;
+    if(!valid || carriers.empty() || carrierKeeps.empty()) return fail("carrier fixture contract");
+    for(const auto &entry : carriers)
+      for(const auto &other : carriers)
+        if(entry.first != other.first && entry.second.original->heap() &&
+           entry.second.original->heap() == other.second.original->heap() &&
+           entry.second.original->heapOffset() < other.second.original->heapOffset() + other.second.original->allocatedSize() &&
+           other.second.original->heapOffset() < entry.second.original->heapOffset() + entry.second.original->allocatedSize())
+          return fail("carrier physical aliases need a shared diagnostic owner");
+    auto copy = m_OutputQueue->commandBuffer();
+    auto blit = copy ? copy->blitCommandEncoder() : NULL;
+    if(!blit) return fail("carrier full Native copy encoder");
+    for(auto &entry : carriers)
+      blit->copyFromBuffer(entry.second.original, 0, entry.second.own.get(), 0, entry.second.original->length());
+    blit->endEncoding();
+    if(!finish(copy)) return fail("carrier full Native copy completion");
+    for(auto &entry : carriers)
+    {
+      auto &value = entry.second;
+      if(memcmp(value.original->contents(), value.own->contents(), value.original->length()))
+        return fail("carrier original snapshot equivalence");
+      memset(value.fixture->contents(), 0, value.fixture->length());
+      memset(value.fullPatches->contents(), 0, value.fullPatches->length());
+      const rdcstr path = directory + "/carrier-own-" + ToStr(entry.first) + ".bin";
+      FILE *out = fopen(path.c_str(), "wbx");
+      if(!out) return fail("carrier evidence creation");
+      const bool saved = fwrite(value.own->contents(), 1, value.own->length(), out) == value.own->length();
+      if(fclose(out) || !saved) return fail("carrier evidence write");
+      fprintf(stderr, "Metal diagnostic carrier allocation: resource=%s original=%llu full=%llu partial=%llu length=%llu heap=%d hazard=%u; equal capacity and original resources\n",
+          ToStr(entry.first).c_str(), (unsigned long long)value.original->gpuAddress(),
+          (unsigned long long)value.full->gpuAddress(), (unsigned long long)value.partial->gpuAddress(),
+          (unsigned long long)value.original->length(), value.original->heap() != NULL,
+          unsigned(value.original->hazardTrackingMode()));
+    }
+    // Only real, currently published typed buffer references need relocation.
+    // Ordinary values are copied unchanged; unknown access analysis is irrelevant.
+    for(const auto &slot : m_pDriver->m_DescriptorSlotShadow)
+      for(const auto &source : slot.second.sources)
+      {
+        if(source.first != 0 || !carriers.count(source.second.resource)) continue;
+        auto tableObject = m_pDriver->GetResourceManager()->GetResource(slot.first.first, true);
+        auto table = tableObject && tableObject->m_Type == eResBuffer && tableObject->m_Real ?
+            Unwrap((WrappedMTLBuffer *)tableObject) : NULL;
+        if(!table || table->storageMode() != MTL::StorageModeShared || !table->contents() ||
+           slot.first.second > table->length() || 8 > table->length() - slot.first.second) continue;
+        const auto &sourceCarrier = carriers.at(source.second.resource);
+        uint64_t address = 0; memcpy(&address, (byte *)table->contents() + slot.first.second, 8);
+        if(source.second.offset >= sourceCarrier.original->length() ||
+           address != sourceCarrier.original->gpuAddress() + source.second.offset) continue;
+        if(!carriers.count(slot.first.first))
+        {
+          // Keep existing Native resource identities. Address-bearing fields
+          // referring to the substituted carriers change consistently and are
+          // restored after GPU completion. This is not another content group.
+          if(carrierReferences.size() >= 4096) return fail("carrier diagnostic reference budget");
+          for(const auto &owner : carriers)
+            if(table->heap() && table->heap() == owner.second.original->heap() &&
+               table->heapOffset() < owner.second.original->heapOffset() + owner.second.original->allocatedSize() &&
+               owner.second.original->heapOffset() < table->heapOffset() + table->allocatedSize())
+              return fail("carrier external reference physically aliases copied owner");
+          CarrierReference reference; reference.table = table; reference.offset = slot.first.second;
+          reference.own = address; reference.full = sourceCarrier.full->gpuAddress() + source.second.offset;
+          reference.partial = sourceCarrier.partial->gpuAddress() + source.second.offset;
+          carrierReferences.push_back(reference);
+          fprintf(stderr, "Metal diagnostic carrier reference: table=%s offset=%llu source=%s memberOffset=%llu; typed Native pointer, temporary relocation and restoration only\n",
+              ToStr(slot.first.first).c_str(), (unsigned long long)reference.offset,
+              ToStr(source.second.resource).c_str(), (unsigned long long)source.second.offset);
+          continue;
+        }
+        auto &value = carriers.at(slot.first.first);
+        const uint64_t relocated = sourceCarrier.full->gpuAddress() + source.second.offset;
+        memcpy((byte *)value.fullPatches->contents() + slot.first.second, &relocated, 8);
+        value.links.push_back({slot.first.second, relocated});
+      }
+    for(const auto &keep : carrierKeeps)
+    {
+      auto object = m_pDriver->GetResourceManager()->GetResource(keep.source, true);
+      uint64_t words[3] = {0, 0, keep.thirdWord};
+      if(!object || !object->m_Real) return fail("carrier fixture live original source");
+      if(keep.kind == 0 && object->m_Type == eResBuffer)
+      {
+        auto buffer = Unwrap((WrappedMTLBuffer *)object);
+        if(keep.sourceOffset >= buffer->length()) return fail("carrier fixture buffer offset");
+        words[0] = (carriers.count(keep.source) ? carriers.at(keep.source).partial.get() : buffer)->gpuAddress() + keep.sourceOffset;
+      }
+      else if(keep.kind == 1 && object->m_Type == eResTexture && !keep.sourceOffset)
+        words[1] = Unwrap((WrappedMTLTexture *)object)->gpuResourceID()._impl;
+      else if(keep.kind == 2 && object->m_Type == eResSamplerState && !keep.sourceOffset)
+        words[0] = Unwrap((WrappedMTLSamplerState *)object)->gpuResourceID()._impl;
+      else return fail("carrier fixture source type");
+      memcpy((byte *)carriers.at(keep.table).fixture->contents() + keep.offset, words, 24);
+    }
+    fprintf(stderr, "Metal diagnostic carrier contract: carriers=%zu bytes=%llu kept=%zu; C restores old fixture rows with original Native resources, all other bytes zero; no AIR proof or production input change\n",
+        carriers.size(), (unsigned long long)bytes, carrierKeeps.size());
+  }
+  auto copyCarriers = [&](MTL::CommandBuffer *copy) {
+    if(carriers.empty()) return true;
+    auto blit = copy ? copy->blitCommandEncoder() : NULL;
+    if(!blit) return false;
+    // A/B/C encode exactly these same copies, only the final bindings change.
+    for(auto &entry : carriers)
+    {
+      auto &value = entry.second;
+      if(memcmp(value.original->contents(), value.own->contents(), value.original->length()))
+      { blit->endEncoding(); return false; }
+      blit->copyFromBuffer(value.original, 0, value.full.get(), 0, value.original->length());
+      blit->copyFromBuffer(value.original, 0, value.partial.get(), 0, value.original->length());
+      for(const auto &link : value.links)
+        blit->copyFromBuffer(value.fullPatches.get(), link.first, value.full.get(), link.first, 8);
+      // Deliberate C intervention: reproduce only the old content omission,
+      // with full original capacity. The fixture contains relocated live handles.
+      blit->copyFromBuffer(value.fixture.get(), 0, value.partial.get(), 0, value.partial->length());
+    }
+    blit->endEncoding(); return true;
+  };
+  auto verifyCarriers = [&](const rdcstr &name) {
+    for(const auto &entry : carriers)
+    {
+      const auto &value = entry.second;
+      if(memcmp(value.original->contents(), value.own->contents(), value.original->length()) ||
+         memcmp(value.partial->contents(), value.fixture->contents(), value.partial->length())) return false;
+      bytebuf expected((byte *)value.own->contents(), value.own->length());
+      for(const auto &link : value.links) memcpy(expected.data() + link.first, &link.second, 8);
+      if(memcmp(value.full->contents(), expected.data(), expected.size())) return false;
+      if(name == "sequence-carrier-A-0")
+        for(const auto &variant : {make_rdcpair(rdcstr("B"), value.full.get()), make_rdcpair(rdcstr("C"), value.partial.get())})
+        {
+          FILE *out = fopen((directory + "/carrier-" + variant.first + "-" + ToStr(entry.first) + ".bin").c_str(), "wbx");
+          if(!out) return false;
+          const bool saved = fwrite(variant.second->contents(), 1, variant.second->length(), out) == variant.second->length();
+          if(fclose(out) || !saved) return false;
+        }
+    }
+    return true;
+  };
+  // Optional, bounded observation of the explicitly selected necessary input
+  // boundary. Copies are encoded in the same command as the original dispatches;
+  // the CPU reads them only after that complete command finishes. This changes
+  // GPU scheduling, so callers must also retain a snapshot-disabled control.
+  // Neither this CSV nor its observations participate in replay qualification.
+  struct BoundaryObservation
+  {
+    ResourceId resource;
+    MTL::Buffer *buffer = NULL;
+    MTL::Texture *texture = NULL;
+    uint64_t offset = 0, bytes = 0, row = 0, pitch = 0, rows = 1, depth = 1;
+    uint32_t mip = 0, slice = 0;
+    MTL::Size size = MTL::Size(1, 1, 1);
+    NS::SharedPtr<MTL::Buffer> before, after;
+  };
+  rdcarray<BoundaryObservation> boundaryObservations;
+  const rdcstr boundaryFile = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_BOUNDARY_RESOURCES");
+  if(!boundaryFile.empty())
+  {
+    FILE *file = fopen(boundaryFile.c_str(), "rb");
+    if(!file) return fail("diagnostic necessary boundary CSV");
+    char line[256]; uint64_t total = 0; bool valid = true;
+    while(valid && fgets(line, sizeof(line), file))
+    {
+      char kind = 0, extra = 0;
+      unsigned long long number = 0, first = 0, second = 0;
+      if(sscanf(line, "%c,%llu,%llu,%llu %c", &kind, &number, &first, &second, &extra) != 4 ||
+         !number || (kind != 'b' && kind != 't') || boundaryObservations.size() >= 256)
+      { valid = false; break; }
+      BoundaryObservation value;
+      memcpy(&value.resource, &number, sizeof(value.resource));
+      auto object = m_pDriver->GetResourceManager()->GetResource(value.resource, true);
+      if(!object || !object->m_Real) { valid = false; break; }
+      if(kind == 'b')
+      {
+        value.buffer = object->m_Type == eResBuffer ? Unwrap((WrappedMTLBuffer *)object) : NULL;
+        value.offset = first; value.bytes = value.row = value.pitch = second;
+        valid = value.buffer && second && first <= value.buffer->length() &&
+            second <= value.buffer->length() - first;
+      }
+      else
+      {
+        value.texture = object->m_Type == eResTexture ? Unwrap((WrappedMTLTexture *)object) : NULL;
+        if(!value.texture || first >= value.texture->mipmapLevelCount() ||
+           value.texture->sampleCount() != 1 || first > UINT32_MAX || second > UINT32_MAX)
+        { valid = false; break; }
+        auto texture = value.texture;
+        const auto type = texture->textureType();
+        const bool cube = type == MTL::TextureTypeCube || type == MTL::TextureTypeCubeArray;
+        const bool volume = type == MTL::TextureType3D;
+        uint32_t bw = 0, bh = 0, block = 0;
+        if(!GetTextureDataBlockShape(texture->pixelFormat(), bw, bh, block) || !block ||
+           bw != 1 || bh != 1 ||
+           (type != MTL::TextureTypeTextureBuffer && type != MTL::TextureType2D &&
+            type != MTL::TextureType2DArray && !cube && !volume) ||
+           second >= (volume ? 1 : texture->arrayLength() * (cube ? 6 : 1)))
+        { valid = false; break; }
+        value.mip = uint32_t(first); value.slice = uint32_t(second);
+        value.size = MTL::Size(RDCMAX(1ULL, uint64_t(texture->width()) >> first),
+            RDCMAX(1ULL, uint64_t(texture->height()) >> first),
+            volume ? RDCMAX(1ULL, uint64_t(texture->depth()) >> first) : 1);
+        if(value.size.width > (128ULL << 20) / block) { valid = false; break; }
+        value.row = value.size.width * block;
+        value.rows = value.size.height; value.depth = value.size.depth;
+        const uint64_t alignment = RDCMAX<uint64_t>(256,
+            Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
+        if(alignment > (128ULL << 20) || value.row > (128ULL << 20) - alignment)
+        { valid = false; break; }
+        value.pitch = AlignUp(value.row, alignment);
+        if(value.rows > (128ULL << 20) / value.pitch ||
+           value.depth > (128ULL << 20) / (value.pitch * value.rows))
+        { valid = false; break; }
+        value.bytes = value.pitch * value.rows * value.depth;
+        if(type == MTL::TextureTypeTextureBuffer)
+        {
+          value.buffer = texture->buffer(); value.offset = texture->bufferOffset();
+          value.bytes = value.pitch = value.row;
+          valid = !first && !second && value.rows == 1 && value.buffer &&
+              value.offset <= value.buffer->length() &&
+              value.bytes <= value.buffer->length() - value.offset;
+        }
+      }
+      if(!valid || !value.bytes || value.bytes > (128ULL << 20) - total)
+      { valid = false; break; }
+      MetalReplayAllocationBudget allocation;
+      allocation.Add(allocation.nativeBytes, value.bytes * 2);
+      if(!allocation.Fits(Unwrap(m_pDriver)->recommendedMaxWorkingSetSize(),
+                          Unwrap(m_pDriver)->currentAllocatedSize()))
+      { valid = false; break; }
+      value.before = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(value.bytes, MTL::ResourceStorageModeShared));
+      value.after = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(value.bytes, MTL::ResourceStorageModeShared));
+      if(!value.before || !value.after || !value.before->contents() || !value.after->contents())
+      { valid = false; break; }
+      total += value.bytes; boundaryObservations.push_back(value);
+    }
+    valid = !ferror(file) && valid; fclose(file);
+    if(!valid || boundaryObservations.empty()) return fail("diagnostic necessary boundary extent/budget");
+    fprintf(stderr, "Metal diagnostic necessary boundary: subresources=%zu staging=%llu; same-command GPU snapshots, no intermediate CPU wait; snapshot OFF control required\n",
+        boundaryObservations.size(), (unsigned long long)(total * 2));
+  }
+  auto captureBoundary = [&](MTL::CommandBuffer *copy, bool before) {
+    if(boundaryObservations.empty()) return true;
+    auto blit = copy ? copy->blitCommandEncoder() : NULL;
+    if(!blit) return false;
+    for(const auto &value : boundaryObservations)
+    {
+      auto staging = before ? value.before.get() : value.after.get();
+      if(value.buffer)
+        blit->copyFromBuffer(value.buffer, value.offset, staging, 0, value.bytes);
+      else
+        blit->copyFromTexture(value.texture, value.slice, value.mip, MTL::Origin(0,0,0),
+            value.size, staging, 0, value.pitch, value.pitch * value.rows);
+    }
+    blit->endEncoding(); return true;
+  };
+  auto writeBoundary = [&](const rdcstr &name) {
+    for(size_t index = 0; index < boundaryObservations.size(); index++)
+    {
+      const auto &value = boundaryObservations[index];
+      for(bool before : {true, false})
+      {
+        const rdcstr path = StringFormat::Fmt("%s/boundary-%s-%s-%zu.bin", directory.c_str(),
+            name.c_str(), before ? "before" : "after", index);
+        FILE *file = fopen(path.c_str(), "wbx");
+        if(!file) return false;
+        auto staging = before ? value.before.get() : value.after.get(); bool good = true;
+        for(uint64_t row = 0; row < value.rows * value.depth && good; row++)
+          good = fwrite((byte *)staging->contents() + row * value.pitch, 1, value.row, file) == value.row;
+        good = fclose(file) == 0 && good;
+        if(!good) return false;
+      }
+    }
+    return true;
+  };
+  // An explicitly selected mutable input is isolated only in this diagnostic.
+  // Copy its current Native bytes; never persist them as captured initial state
+  // or replace any ordinary replay restoration/qualification decision.
+  const rdcstr mutableNumber = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_MUTABLE_BUFFER");
+  const bool mutableSham = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_MUTABLE_SHAM") == "1";
+  MTL::Buffer *mutableBuffer = NULL;
+  uint64_t mutableOffset = 0, mutableBytes = 0;
+  const rdcstr mutableRange = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_MUTABLE_BUFFER_RANGE");
+  const rdcstr mutableReferenceFile = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_MUTABLE_REFERENCE_FILE");
+  if(mutableNumber.empty() && (!mutableRange.empty() || !mutableReferenceFile.empty()))
+    return fail("diagnostic input range requires a buffer identity");
+  NS::SharedPtr<MTL::Buffer> mutableSeed, mutableDirty, mutableOwn, mutableReference;
+  auto copyBuffer = [&](MTL::Buffer *fromBuffer, MTL::Buffer *toBuffer) {
+    auto copy = m_OutputQueue->commandBuffer();
+    auto blit = copy ? copy->blitCommandEncoder() : NULL;
+    const uint64_t fromOffset = fromBuffer == mutableBuffer ? mutableOffset : 0;
+    const uint64_t toOffset = toBuffer == mutableBuffer ? mutableOffset : 0;
+    if(!blit || !fromBuffer || !toBuffer || !mutableBytes ||
+       fromOffset > fromBuffer->length() || mutableBytes > fromBuffer->length() - fromOffset ||
+       toOffset > toBuffer->length() || mutableBytes > toBuffer->length() - toOffset) return false;
+    blit->copyFromBuffer(fromBuffer, fromOffset, toBuffer, toOffset, mutableBytes);
+    blit->endEncoding(); return finish(copy);
+  };
+  auto writeBuffer = [&](MTL::Buffer *buffer, const char *name) {
+    if(!buffer) return false;
+    const uint64_t bufferOffset = buffer == mutableBuffer ? mutableOffset : 0;
+    if(!mutableBytes || bufferOffset > buffer->length() ||
+       mutableBytes > buffer->length() - bufferOffset) return false;
+    const uint64_t block = RDCMIN<uint64_t>(1024 * 1024, mutableBytes);
+    auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(block, MTL::ResourceStorageModeShared));
+    if(!staging || !staging->contents()) return false;
+    FILE *file = fopen((directory + "/" + name + ".bin").c_str(), "wbx");
+    if(!file) return false;
+    bool good = true;
+    for(uint64_t offset = 0; offset < mutableBytes && good; offset += block)
+    {
+      const uint64_t length = RDCMIN(block, mutableBytes - offset);
+      auto copy = m_OutputQueue->commandBuffer();
+      auto blit = copy ? copy->blitCommandEncoder() : NULL;
+      if(!blit) { good = false; break; }
+      blit->copyFromBuffer(buffer, bufferOffset + offset, staging.get(), 0, length);
+      blit->endEncoding(); good = finish(copy) &&
+          fwrite(staging->contents(), 1, length, file) == length;
+    }
+    return fclose(file) == 0 && good;
+  };
+  if(!mutableNumber.empty())
+  {
+    char *end = NULL; const uint64_t number = strtoull(mutableNumber.c_str(), &end, 10);
+    ResourceId id; memcpy(&id, &number, sizeof(id));
+    auto resource = m_pDriver->GetResourceManager()->GetResource(id, true);
+    if(!number || !end || *end || !resource || resource->m_Type != eResBuffer || !resource->m_Real)
+      return fail("diagnostic mutable buffer identity");
+    mutableBuffer = Unwrap((WrappedMTLBuffer *)resource);
+    mutableBytes = mutableBuffer->length();
+    if(!mutableRange.empty())
+    {
+      const char *cursor = mutableRange.c_str();
+      mutableOffset = strtoull(cursor, &end, 10);
+      if(end == cursor || *end != ':') return fail("diagnostic input window offset");
+      cursor = end + 1; mutableBytes = strtoull(cursor, &end, 10);
+      if(end == cursor || *end || !mutableBytes || mutableBytes > 1024 * 1024 ||
+         mutableOffset > mutableBuffer->length() ||
+         mutableBytes > mutableBuffer->length() - mutableOffset)
+        return fail("diagnostic input window actual range/budget");
+    }
+    if(!mutableReferenceFile.empty() && mutableRange.empty())
+      return fail("diagnostic reference requires an explicit bounded input window");
+    MetalReplayAllocationBudget budget;
+    budget.Add(budget.nativeBytes, logicalSize);
+    for(unsigned i = 0; i < (mutableReferenceFile.empty() ? 3U : 5U); i++)
+      budget.Add(budget.nativeBytes, mutableBytes);
+    auto device = Unwrap(m_pDriver);
+    if(!mutableBuffer->length() || !budget.Fits(device->recommendedMaxWorkingSetSize(), device->currentAllocatedSize()))
+      return fail("diagnostic mutable GPU snapshot budget");
+    mutableSeed = NS::TransferPtr(device->newBuffer(mutableBytes, MTL::ResourceStorageModePrivate));
+    mutableDirty = NS::TransferPtr(device->newBuffer(mutableBytes, MTL::ResourceStorageModePrivate));
+    mutableOwn = NS::TransferPtr(device->newBuffer(mutableBytes, MTL::ResourceStorageModePrivate));
+    if(!mutableSeed || !mutableDirty || !mutableOwn || !copyBuffer(mutableBuffer, mutableSeed.get()) ||
+       !writeBuffer(mutableSeed.get(), "mutable-seed")) return fail("diagnostic mutable GPU snapshot");
+    if(!mutableReferenceFile.empty())
+    {
+      // Imported bytes are an isolated plain-data intervention, not a pointer
+      // relocation mechanism. The caller must establish the scalar/content ABI.
+      // Do not transplant known typed fields or unknown physical aliases across
+      // prefixes; ordinary replay is unaffected by this diagnostic scope.
+      const auto storage = m_pDriver->m_DescriptorBufferStorage.find(id);
+      if(storage == m_pDriver->m_DescriptorBufferStorage.end() || !storage->second.independent)
+        return fail("diagnostic reference requires independent ordinary backing");
+      for(const auto &table : m_pDriver->GetDeclaredDescriptorTables())
+      {
+        if(table.buffer != id) continue;
+        if(!table.stride || table.count > (UINT64_MAX - table.offset) / table.stride)
+          return fail("diagnostic typed reference layout");
+        const uint64_t tableEnd = table.offset + table.count * table.stride;
+        if(mutableOffset < tableEnd && table.offset < mutableOffset + mutableBytes)
+          return fail("diagnostic reference cannot replace typed address fields");
+      }
+      auto staging = NS::TransferPtr(device->newBuffer(mutableBytes, MTL::ResourceStorageModeShared));
+      mutableReference = NS::TransferPtr(device->newBuffer(mutableBytes, MTL::ResourceStorageModePrivate));
+      FILE *file = staging && staging->contents() && mutableReference ?
+          fopen(mutableReferenceFile.c_str(), "rb") : NULL;
+      if(!file) return fail("diagnostic reference input file/staging");
+      const bool valid = fread(staging->contents(), 1, mutableBytes, file) == mutableBytes &&
+                         fgetc(file) == EOF;
+      const bool closed = fclose(file) == 0;
+      if(!valid || !closed || !copyBuffer(staging.get(), mutableReference.get()) ||
+         !writeBuffer(mutableReference.get(), "mutable-reference"))
+        return fail("diagnostic reference input exact window size/copy");
+    }
+    fprintf(stderr, "Metal diagnostic input window: buffer=%s offset=%llu bytes=%llu reference=%d; scalar/content intervention only, no ordinary replay qualification\n",
+        mutableNumber.c_str(), (unsigned long long)mutableOffset,
+        (unsigned long long)mutableBytes, mutableReference ? 1 : 0);
+  }
+  ResourceId observedOutputBuffer;
+  uint64_t observedOutputOffset=0,observedOutputBytes=0;
+  const rdcstr outputRange = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_OUTPUT_BUFFER_RANGE");
+  if(!outputRange.empty())
+  {
+    const char *cursor=outputRange.c_str(); char *end=NULL;
+    const uint64_t number=strtoull(cursor,&end,10);
+    if(!number || end==cursor || *end!=':') return fail("diagnostic output buffer identity");
+    memcpy(&observedOutputBuffer,&number,sizeof(observedOutputBuffer)); cursor=end+1;
+    observedOutputOffset=strtoull(cursor,&end,10);
+    if(end==cursor || *end!=':') return fail("diagnostic output buffer offset");
+    cursor=end+1; observedOutputBytes=strtoull(cursor,&end,10);
+    auto resource=m_pDriver->GetResourceManager()->GetResource(observedOutputBuffer,true);
+    auto buffer=resource && resource->m_Type==eResBuffer && resource->m_Real ?
+        Unwrap((WrappedMTLBuffer *)resource) : NULL;
+    if(end==cursor || *end || !observedOutputBytes || observedOutputBytes>1024*1024 ||
+       !buffer || observedOutputOffset>buffer->length() ||
+       observedOutputBytes>buffer->length()-observedOutputOffset)
+      return fail("diagnostic output buffer actual range/budget");
+  }
+  auto observeOutputBuffer = [&](const rdcstr &name) {
+    if(observedOutputBuffer==ResourceId()) return true;
+    bytebuf bytes;
+    GetBufferData(observedOutputBuffer,observedOutputOffset,observedOutputBytes,bytes);
+    if(bytes.size()!=observedOutputBytes) return false;
+    const rdcstr fileName=StringFormat::Fmt("%s/%s-output-%s-%llu-%llu.bin",
+        directory.c_str(),name.c_str(),ToStr(observedOutputBuffer).c_str(),
+        (unsigned long long)observedOutputOffset,(unsigned long long)observedOutputBytes);
+    FILE *file=fopen(fileName.c_str(),"wbx");
+    if(!file) return false;
+    const bool wrote=fwrite(bytes.data(),1,bytes.size(),file)==bytes.size();
+    return fclose(file)==0 && wrote;
+  };
+  const bool singleExecution = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_SINGLE_EXECUTION") == "1";
+  const rdcstr replacement = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_REPLACE_INPUT");
+  // A single reduced Native launch can mediate one observed ordinary image.
+  // The reduction is fixed throughout natural/reference/restored comparisons;
+  // it is not a second intervention or a production input substitution.
+  if(singleExecution && ((mutableBuffer && mutableRange.empty()) ||
+      (!replacement.empty() && Process::GetEnvVariable(
+          "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_GROUP_LIMITS").empty())))
+    return fail("single original group requires a bounded scalar/content window");
+  const rdcstr indirectObservation = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_INDIRECT_OBSERVATION");
+  const bool pairedIndirect = indirectObservation == "paired";
+  const rdcstr groupLimits = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_GROUP_LIMITS");
+  NS::SharedPtr<MTL::Buffer> reducedArguments;
+  if(!indirectObservation.empty() && !pairedIndirect)
+    return fail("diagnostic indirect observation mode");
+  if(pairedIndirect || !groupLimits.empty())
+  {
+    const SDChunk *call = chunks[first->chunkIndex];
+    const auto argument = call->FindChild("indirectBuffer");
+    const auto offset = call->FindChild("indirectBufferOffset");
+    const auto threads = call->FindChild("threadsPerGroup");
+    auto resource = argument ? m_pDriver->GetResourceManager()->GetResource(
+        argument->AsResourceId(), true) : NULL;
+    auto buffer = resource && resource->m_Type == eResBuffer && resource->m_Real ?
+        Unwrap((WrappedMTLBuffer *)resource) : NULL;
+    if(!singleExecution || events.size() != 1 || !followingEvents.empty() ||
+       call->metadata.chunkID != uint32_t(MetalChunk::MTLComputeCommandEncoder_dispatchThreadgroups_indirect) ||
+       !mutableBuffer || mutableReference || mutableSham || buffer != mutableBuffer ||
+       !offset || offset->data.basic.u != mutableOffset ||
+       mutableBytes != sizeof(MTL::DispatchThreadgroupsIndirectArguments) || !threads ||
+       m_pDriver->HasRayQueryHeapPipeline(GetComputePipeline()))
+      return fail("diagnostic indirect comparison requires one sourced current GPU window");
+    if(pairedIndirect && !groupLimits.empty())
+      return fail("one diagnostic indirect intervention at a time");
+    bytebuf current;
+    GetBufferData(argument->AsResourceId(), mutableOffset, mutableBytes, current);
+    uint32_t groups[3] = {};
+    if(current.size() != sizeof(groups)) return fail("diagnostic indirect current GPU readback");
+    memcpy(groups, current.data(), sizeof(groups));
+    uint64_t work = 1;
+    for(const char *axis : {"width", "height", "depth"})
+    {
+      const auto size = threads->FindChild(axis);
+      if(!size || !size->data.basic.u || size->data.basic.u > 1024 / work)
+        return fail("diagnostic indirect threadgroup arithmetic");
+      work *= size->data.basic.u;
+    }
+    // A diagnostic job budget, not a production API limit or support proof.
+    for(uint32_t count : groups)
+    {
+      if(!count || count > (4ULL * 1024 * 1024) / work)
+        return fail("diagnostic indirect bounded current workload");
+      work *= count;
+    }
+    fprintf(stderr, "Metal diagnostic indirect observation comparison: offset=%llu groups=%u,%u,%u invocations=%llu; current GPU own seed, one original dispatch only\n",
+        (unsigned long long)mutableOffset, groups[0], groups[1], groups[2],
+        (unsigned long long)work);
+    if(!groupLimits.empty())
+    {
+      uint32_t limits[3] = {};
+      const char *cursor = groupLimits.c_str();
+      for(unsigned axis = 0; axis < 3; axis++)
+      {
+        char *end = NULL;
+        const unsigned long value = strtoul(cursor, &end, 10);
+        if(end == cursor || !value || value > groups[axis] ||
+           (axis < 2 ? *end != ',' : *end != 0))
+          return fail("diagnostic group limits may only reduce current Native workload");
+        limits[axis] = uint32_t(value); cursor = end + (axis < 2 ? 1 : 0);
+      }
+      reducedArguments = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(
+          sizeof(limits), MTL::ResourceStorageModeShared));
+      auto copy = m_OutputQueue->commandBuffer();
+      auto blit = copy && reducedArguments ? copy->blitCommandEncoder() : NULL;
+      if(!blit || !reducedArguments->contents()) return fail("diagnostic group limit staging");
+      blit->copyFromBuffer(mutableSeed.get(), 0, reducedArguments.get(), 0, sizeof(limits));
+      blit->endEncoding();
+      if(!finish(copy) || memcmp(reducedArguments->contents(), current.data(), sizeof(limits)))
+        return fail("diagnostic group limit own argument snapshot");
+      // Only this isolated Native launch is reduced. The original GPU window,
+      // shader, bindings and ordinary replay guards are never changed.
+      memcpy(reducedArguments->contents(), limits, sizeof(limits));
+      fprintf(stderr, "Metal diagnostic workload reduction: original=%u,%u,%u limited=%u,%u,%u; full/reduced reversal, original GPU source unchanged\n",
+          groups[0], groups[1], groups[2], limits[0], limits[1], limits[2]);
+    }
+  }
+  // Optional Native module roundtrip/group-translation diagnostic. Its caller
+  // verifies no-op equivalence before reducing work. This never changes the
+  // captured pipeline identity, bindings or ordinary replay qualification.
+  const rdcstr diagnosticModule = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_NATIVE_MODULE");
+  NS::SharedPtr<MTL::ComputePipelineState> diagnosticPipeline;
+  if(!diagnosticModule.empty())
+  {
+    if(!reducedArguments || !singleExecution || events.size() != 1 ||
+       !followingEvents.empty() || pairedIndirect || barrierComparison)
+      return fail("Native module diagnostic requires one bounded reduced dispatch");
+    const auto function = m_ComputePipelines.find(GetComputePipeline());
+    const auto shader = function == m_ComputePipelines.end() ? m_Shaders.end() :
+        m_Shaders.find(function->second);
+    if(shader == m_Shaders.end() || shader->second.entryPoint.empty())
+      return fail("Native module diagnostic requires captured entry point");
+    NS::Error *error = NULL;
+    auto library = NS::TransferPtr(Unwrap(m_pDriver)->newLibrary(
+        NS::String::string(diagnosticModule.c_str(), NS::UTF8StringEncoding), &error));
+    auto nativeFunction = library ? NS::TransferPtr(library->newFunction(
+        NS::String::string(shader->second.entryPoint.c_str(), NS::UTF8StringEncoding))) :
+        NS::SharedPtr<MTL::Function>();
+    diagnosticPipeline = nativeFunction ? NS::TransferPtr(Unwrap(m_pDriver)->newComputePipelineState(
+        nativeFunction.get(), &error)) : NS::SharedPtr<MTL::ComputePipelineState>();
+    const auto threads = chunks[first->chunkIndex]->FindChild("threadsPerGroup");
+    uint64_t threadCount = 1;
+    for(const char *axis : {"width", "height", "depth"})
+    {
+      const auto size = threads ? threads->FindChild(axis) : NULL;
+      if(!size || !size->data.basic.u || size->data.basic.u > 1024 / threadCount)
+        return fail("Native diagnostic module threadgroup arithmetic");
+      threadCount *= size->data.basic.u;
+    }
+    if(!diagnosticPipeline || diagnosticPipeline->maxTotalThreadsPerThreadgroup() < threadCount)
+      return fail("Native diagnostic module/pipeline creation");
+    fprintf(stderr, "Metal isolated Native module diagnostic: entry=%s file=%s; paired original/full and module/reduced, ordinary replay unchanged\n",
+        shader->second.entryPoint.c_str(), diagnosticModule.c_str());
+  }
+  // A destination-storage contrast is an isolated Native diagnostic. Change
+  // only a currently sourced texture handle, never the resource manager,
+  // descriptor shadow, original GPU inputs or normal replay qualification.
+  const rdcstr destinationStorage = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_DESTINATION_STORAGE");
+  const bool pairedDestination = !destinationStorage.empty();
+  const bool destinationSham = destinationStorage == "sham";
+  NS::SharedPtr<MTL::Texture> independentDestination;
+  struct DestinationField
+  {
+    MTL::Buffer *buffer = NULL;
+    uint64_t offset = 0;
+    bytebuf own;
+  };
+  rdcarray<DestinationField> destinationFields;
+  if(pairedDestination)
+  {
+    if((destinationStorage != "paired" && !destinationSham) || !singleExecution ||
+       events.size() != 1 || !followingEvents.empty() || barrierComparison || pairedIndirect ||
+       observeNumericFields || observeInputTextures || !mutableSeed || mutableReference ||
+       mutableSham || linearTarget || original->parentTexture() ||
+       original->textureType() != MTL::TextureType2D ||
+       writtenTextures.size() != 1 || !writtenTextures.count(target) || readTextures.count(target) ||
+       !Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_REPLACE_INPUT").empty())
+      return fail("one diagnostic destination-storage contrast on a sourced single writer");
+    MetalReplayAllocationBudget budget;
+    budget.Add(budget.nativeBytes, logicalSize);
+    if(!budget.Fits(Unwrap(m_pDriver)->recommendedMaxWorkingSetSize(),
+                    Unwrap(m_pDriver)->currentAllocatedSize()))
+      return fail("diagnostic destination budget");
+    auto desc = MTL::TextureDescriptor::texture2DDescriptor(original->pixelFormat(),
+        original->width(), original->height(), false);
+    desc->setStorageMode(MTL::StorageModePrivate);
+    desc->setUsage(MTL::TextureUsage(MTL::TextureUsageShaderRead | MTL::TextureUsageShaderWrite));
+    independentDestination = NS::TransferPtr(Unwrap(m_pDriver)->newTexture(desc));
+    if(!independentDestination || independentDestination->heap() ||
+       !independentDestination->gpuResourceID()._impl)
+      return fail("independent Native destination allocation");
+    const auto facts = m_pDriver->m_IRRuntimeDescriptorAccesses.find({first->fileOffset, 0});
+    if(facts == m_pDriver->m_IRRuntimeDescriptorAccesses.end())
+      return fail("diagnostic destination has no identified typed writer");
+    std::set<rdcpair<ResourceId, uint64_t>> fields;
+    for(const auto &access : facts->second)
+    {
+      if(access.kind != 3 || !access.write || access.resourceOnly) continue;
+      ResourceId table; memcpy(&table, &access.descriptorObject, sizeof(table));
+      uint64_t slotOffset = access.descriptorOffset;
+      if(table == ResourceId() && access.offset >= 8)
+      { memcpy(&table, &access.object, sizeof(table)); slotOffset = access.offset - 8; }
+      const auto slot = m_pDriver->m_DescriptorSlotShadow.find({table, slotOffset});
+      if(slot == m_pDriver->m_DescriptorSlotShadow.end() ||
+         !slot->second.sources.count(1) || slot->second.sources.at(1).resource != target) continue;
+      if(!slot->second.live || slot->second.gpuExpected || slot->second.sources.at(1).offset)
+        return fail("diagnostic destination publication identity");
+      if(!fields.insert({table, slotOffset}).second) continue;
+      auto resource = m_pDriver->GetResourceManager()->GetResource(table, true);
+      auto buffer = resource && resource->m_Type == eResBuffer && resource->m_Real ?
+          Unwrap((WrappedMTLBuffer *)resource) : NULL;
+      bytebuf patched;
+      if(!buffer || buffer->storageMode() != MTL::StorageModeShared || !buffer->contents() ||
+         slotOffset > buffer->length() || 24 > buffer->length() - slotOffset ||
+         !m_pDriver->PatchDescriptorSlot(slot->second, patched) || patched.size() != 24 ||
+         memcmp((byte *)buffer->contents() + slotOffset, patched.data(), 16))
+        return fail("diagnostic destination current typed bytes");
+      DestinationField field; field.buffer = buffer; field.offset = slotOffset;
+      field.own.assign((byte *)buffer->contents() + slotOffset, 24);
+      uint64_t handle = 0; memcpy(&handle, field.own.data() + 8, 8);
+      if(handle != original->gpuResourceID()._impl)
+        return fail("diagnostic writer Native handle mismatch");
+      destinationFields.push_back(field);
+    }
+    if(destinationFields.empty()) return fail("diagnostic destination typed field missing");
+    fprintf(stderr, "Metal diagnostic destination storage: fields=%zu originalHeap=%d originalOffset=%llu originalAllocated=%llu independentHeap=%d sham=%d; partial input boundary, no qualification change\n",
+        destinationFields.size(), original->heap() != NULL,
+        (unsigned long long)original->heapOffset(), (unsigned long long)original->allocatedSize(),
+        independentDestination->heap() != NULL, destinationSham);
+  }
+  bool useIndependentDestination = false;
+  auto restoreDestinationFields = [&]() {
+    bool exact = true;
+    for(const auto &field : destinationFields)
+    {
+      memcpy((byte *)field.buffer->contents() + field.offset, field.own.data(), field.own.size());
+      exact = !memcmp((byte *)field.buffer->contents() + field.offset,
+                      field.own.data(), field.own.size()) && exact;
+    }
+    return exact;
+  };
+  // Explicit producer-boundary intervention, diagnostic only. Ordinary data
+  // snapshots are copied between the validated original producer/consumer
+  // owners on the same Native queue. Never persist these bytes as initial
+  // state, change qualification, or replace a genuinely missing typed address.
+  struct FollowingBufferInput
+  {
+    ResourceId resource;
+    MTL::Buffer *original = NULL;
+    uint64_t offset = 0, length = 0;
+    NS::SharedPtr<MTL::Buffer> input, verified, own;
+  };
+  rdcarray<FollowingBufferInput> followingInputs;
+  const rdcstr followingContents = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_FOLLOWING_BUFFER_CONTENTS");
+  const rdcstr followingFolder = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_FOLLOWING_BUFFER_DIRECTORY");
+  const rdcstr followingControl = Process::GetEnvVariable(
+      "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_FOLLOWING_BUFFER_CONTROL");
+  if(!followingControl.empty() &&
+     ((followingControl != "own" && followingControl != "reference") ||
+      followingContents.empty() || followingFolder.empty()))
+    return fail("following control requires one bounded own/reference intervention");
+  if(!followingContents.empty() || !followingFolder.empty())
+  {
+    if(followingContents.empty() || followingFolder.empty() || !followingSource ||
+       !singleExecution || barrierComparison || pairedDestination || reducedArguments ||
+       mutableBuffer || !replacement.empty() || observeNumericFields || observeInputTextures)
+      return fail("one isolated ordinary producer-boundary intervention");
+    const char *cursor = followingContents.c_str();
+    uint64_t total = 0;
+    while(*cursor)
+    {
+      char *end = NULL;
+      const uint64_t number = strtoull(cursor, &end, 10);
+      FollowingBufferInput value;
+      if(!number || end == cursor || *end != ':') return fail("following buffer identity");
+      memcpy(&value.resource, &number, sizeof(value.resource)); cursor = end + 1;
+      value.offset = strtoull(cursor, &end, 10);
+      if(end == cursor || *end != ':') return fail("following buffer offset");
+      cursor = end + 1; value.length = strtoull(cursor, &end, 10);
+      if(end == cursor || (*end && *end != ',') || !value.length ||
+         total > 1024 * 1024 || value.length > 1024 * 1024 - total)
+        return fail("following diagnostic buffer range/budget");
+      auto object = m_pDriver->GetResourceManager()->GetResource(value.resource, true);
+      value.original = object && object->m_Type == eResBuffer && object->m_Real ?
+          Unwrap((WrappedMTLBuffer *)object) : NULL;
+      if(!value.original || value.offset > value.original->length() ||
+         value.length > value.original->length() - value.offset)
+        return fail("following buffer Native lifetime/range");
+      // Reuse the resource/range/generation recovery layer. Declared layouts
+      // alone are not shader proofs; live typed packets and unknown physical
+      // ownership remain protected, including heap and no-copy aliases.
+      if(!m_pDriver->IsDescriptorOrdinaryWriteRange(value.resource, value.offset, value.length))
+        return fail("following import requires known ordinary backing without live typed packets");
+      for(const auto &other : followingInputs)
+      {
+        // Current Native physical ranges, not invented capture metadata.
+        if(value.original == other.original && value.offset < other.offset + other.length &&
+           other.offset < value.offset + value.length)
+          return fail("following overlapping buffer windows");
+        if(value.original != other.original && value.original->heap() &&
+           value.original->heap() == other.original->heap() &&
+           value.original->heapOffset() < other.original->heapOffset() + other.original->allocatedSize() &&
+           other.original->heapOffset() < value.original->heapOffset() + value.original->allocatedSize())
+          return fail("following aliases need one physical snapshot owner");
+      }
+      // Imported ordinary values must never overwrite typed storage, including
+      // its actual Native backing alias. Missing relocation remains an error.
+      for(const auto &slot : m_pDriver->m_DescriptorSlotShadow)
+      {
+        if(!slot.second.live) continue;
+        auto tableObject = m_pDriver->GetResourceManager()->GetResource(slot.first.first, true);
+        auto table = tableObject && tableObject->m_Type == eResBuffer && tableObject->m_Real ?
+            Unwrap((WrappedMTLBuffer *)tableObject) : NULL;
+        if(!table) continue;
+        if(table == value.original || (table->heap() && table->heap() == value.original->heap() &&
+           table->heapOffset() < value.original->heapOffset() + value.original->allocatedSize() &&
+           value.original->heapOffset() < table->heapOffset() + table->allocatedSize()))
+          return fail("following ordinary import aliases typed storage");
+      }
+      MetalReplayAllocationBudget allocation;
+      allocation.Add(allocation.nativeBytes,
+          (total + value.length) * (followingControl.empty() ? 2 : 3));
+      if(!allocation.Fits(Unwrap(m_pDriver)->recommendedMaxWorkingSetSize(),
+                          Unwrap(m_pDriver)->currentAllocatedSize()))
+        return fail("following diagnostic allocation budget");
+      value.input = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(value.length, MTL::ResourceStorageModeShared));
+      value.verified = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(value.length, MTL::ResourceStorageModeShared));
+      if(!followingControl.empty())
+        value.own = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(value.length, MTL::ResourceStorageModeShared));
+      const rdcstr fileName = StringFormat::Fmt("%s/buffer-%llu-%llu-%llu.bin", followingFolder.c_str(),
+          number, value.offset, value.length);
+      FILE *file = fopen(fileName.c_str(), "rb");
+      bool read = file && value.input && value.verified && value.input->contents() && value.verified->contents() &&
+          (followingControl.empty() || (value.own && value.own->contents()));
+      if(read) read = fread(value.input->contents(), 1, value.length, file) == value.length && fgetc(file) == EOF;
+      if(file) read = fclose(file) == 0 && read;
+      if(!read) return fail("following exact sourced ordinary contents");
+      followingInputs.push_back(value); total += value.length;
+      fprintf(stderr, "Metal isolated following ordinary buffer: resource=%s offset=%llu bytes=%llu; sourced diagnostic values, Native identity and typed storage unchanged\n",
+          ToStr(value.resource).c_str(), value.offset, value.length);
+      if(!*end) break;
+      cursor = end + 1;
+      if(!*cursor) return fail("following input trailing separator");
+    }
+  }
+  if(!carriers.empty() && (pairedDestination || reducedArguments || pairedIndirect ||
+      !boundaryObservations.empty())) return fail("carrier contrast excludes other interventions");
+  bool usePreparedIndirect = false;
+  bool useReducedArguments = false;
+  bool useInterDispatchBarrier = false;
+  bool firstDispatchOnly = false;
+  bool declareAccelerationResidency = false;
+  bool restoreMutableSeed = singleExecution && mutableBuffer;
+  auto execute = [&](const rdcstr &name) {
+    // Both branches have the same Native copies and waits. Only the source of
+    // the second copy changes (original prefix bytes versus current own bytes).
+    if(mutableBuffer && (!copyBuffer(mutableBuffer, mutableOwn.get()) ||
+       !copyBuffer(restoreMutableSeed && !mutableSham ?
+           (mutableReference ? mutableReference.get() : mutableSeed.get()) : mutableOwn.get(), mutableBuffer)))
+      return false;
+    command = m_OutputQueue->commandBuffer();
+    bool success = encodeCopy(command, seed.get(), original) && restoreKnownWrites(command) && copyTextureGroup(command) && copyCarriers(command);
+    for(const auto &reference : carrierReferences)
+    {
+      uint64_t value = 0; memcpy(&value, (byte *)reference.table->contents() + reference.offset, 8);
+      if(value != reference.own) { restoreCarrierReferences(); return false; }
+      const uint64_t address = carrierMode == 1 ? reference.full : carrierMode == 2 ? reference.partial : reference.own;
+      memcpy((byte *)reference.table->contents() + reference.offset, &address, 8);
+    }
+    for(const auto &field : textureGroupFields)
+    {
+      if(memcmp((byte *)field.table->contents()+field.offset, field.own.data(), field.own.size()))
+      { restoreTextureGroupFields(); return false; }
+      const uint64_t handle = (useTextureGroup ? textureGroup.at(field.resource).replacement.get() :
+          textureGroup.at(field.resource).original)->gpuResourceID()._impl;
+      memcpy((byte *)field.table->contents()+field.offset+8, &handle, sizeof(handle));
+    }
+    MTL::Texture *executionDestination = useIndependentDestination && !destinationSham ?
+        independentDestination.get() : original;
+    if(pairedDestination)
+    {
+      success = encodeCopy(command, seed.get(), independentDestination.get()) && success;
+      for(const auto &field : destinationFields)
+      {
+        if(memcmp((byte *)field.buffer->contents() + field.offset,
+                  field.own.data(), field.own.size()))
+        { restoreDestinationFields(); return false; }
+        const uint64_t handle = executionDestination->gpuResourceID()._impl;
+        memcpy((byte *)field.buffer->contents() + field.offset + 8, &handle, sizeof(handle));
+      }
+    }
+    if(HasPendingComputeIndirectActions())
+    { restoreDestinationFields(); restoreTextureGroupFields(); restoreCarrierReferences(); return false; }
+    const auto savedOrdinals = m_LoadComputeIndirectOrdinals;
+    m_LoadComputeIndirectOrdinals[encoderID] = firstIndirectOrdinal;
+    const auto indirectState = source->BeginDiagnosticIndirectReplay(firstIndirectOrdinal);
+    success = success && captureBoundary(command, true);
+    auto encoder = success ? command->computeCommandEncoder(dispatchType) : NULL;
+    if(encoder && declareAccelerationResidency)
+      encoder->useResources(residencyResources.data(), residencyResources.size(), MTL::ResourceUsageRead);
+    if(encoder)
+      for(const auto &entry : textureGroup)
+        encoder->useResource(entry.second.replacement.get(), MTL::ResourceUsage(
+            MTL::ResourceUsageRead | (writtenTextures.count(entry.first) ? MTL::ResourceUsageWrite : 0)));
+    if(encoder && pairedDestination)
+      encoder->useResource(independentDestination.get(),
+          MTL::ResourceUsage(MTL::ResourceUsageRead | MTL::ResourceUsageWrite));
+    rdcarray<uint32_t> executionEvents = events;
+    rdcarray<MTL::Buffer *> executionArguments = sequenceArguments;
+    if(firstDispatchOnly)
+    {
+      executionEvents.resize(1);
+      executionArguments.resize(1);
+    }
+    success = encoder && m_pDriver->ReplayOriginalDispatches(executionEvents, encoder,
+        reducedArguments ? (useReducedArguments ? reducedArguments.get() : mutableSeed.get()) :
+            (usePreparedIndirect || pairedDestination) ? mutableSeed.get() : NULL, useInterDispatchBarrier,
+        barrierComparison ? &executionArguments : NULL,
+        diagnosticPipeline && useReducedArguments ? diagnosticPipeline.get() : NULL,
+        carrierBindings.empty() ? NULL : &carrierBindings);
+    if(encoder) encoder->endEncoding();
+    success = success && captureBoundary(command, false);
+    // One original group, with captured barriers. No mid-group readback or CPU
+    // wait. Repeating may change other writable inputs: this scope does not
+    // assert their completeness or qualify full-frame output.
+    bool completed = false;
+    if(followingSource && success)
+    {
+      // Commit producer then consumer on one Native queue, like the validated
+      // captured owner order. No CPU wait/readback between these submissions.
+      command->commit();
+      auto followingCommand = m_OutputQueue->commandBuffer();
+      if(!followingInputs.empty())
+      {
+        auto blit = followingCommand ? followingCommand->blitCommandEncoder() : NULL;
+        success = blit != NULL;
+        if(blit)
+        {
+          for(const auto &input : followingInputs)
+          {
+            // Matched diagnostic copies, with no intervening CPU wait. The
+            // own branch preserves the actual producer result; reference
+            // preserves the sourced fixture. Both issue the same three
+            // copies and retain the ordinary/typed/physical range checks.
+            if(!followingControl.empty())
+              blit->copyFromBuffer(input.original, input.offset, input.own.get(), 0, input.length);
+            MTL::Buffer *contentsSource = followingControl == "own" ? input.own.get() : input.input.get();
+            blit->copyFromBuffer(contentsSource, 0, input.original, input.offset, input.length);
+            // Verification snapshot before the consumer, read only once its
+            // entire command completes. No CPU wait/readback between owners.
+            blit->copyFromBuffer(input.original, input.offset, input.verified.get(), 0, input.length);
+          }
+          blit->endEncoding();
+        }
+      }
+      m_LoadComputeIndirectOrdinals[followingEncoderID] = 0;
+      const auto followingIndirectState = followingSource->BeginDiagnosticIndirectReplay(0);
+      auto followingEncoder = success && followingCommand ? followingCommand->computeCommandEncoder(followingType) : NULL;
+      success = followingEncoder && m_pDriver->ReplayOriginalDispatches(followingEvents, followingEncoder);
+      if(followingEncoder) followingEncoder->endEncoding();
+      const bool consumerCompleted = followingCommand && finish(followingCommand);
+      completed = consumerCompleted && command->status() == MTL::CommandBufferStatusCompleted && !command->error();
+      followingSource->EndDiagnosticIndirectReplay(followingIndirectState);
+      for(const auto &input : followingInputs)
+      {
+        MTL::Buffer *contentsSource = followingControl == "own" ? input.own.get() : input.input.get();
+        success = completed && memcmp(contentsSource->contents(), input.verified->contents(), input.length) == 0 && success;
+        // Record the intervention's already allocated source after the whole
+        // consumer finishes. This is not an additional GPU observation or
+        // production snapshot, and never becomes replay initial state.
+        if(success && !followingControl.empty())
+        {
+          uint64_t number = 0;
+          memcpy(&number, &input.resource, sizeof(number));
+          const rdcstr path = StringFormat::Fmt("%s/following-source-%llu-%llu-%llu.bin",
+              directory.c_str(), number, input.offset, input.length);
+          FILE *file = fopen(path.c_str(), "wbx");
+          if(!file) success = false;
+          else
+          {
+            success = fwrite(contentsSource->contents(), 1, input.length, file) == input.length;
+            success = fclose(file) == 0 && success;
+          }
+        }
+      }
+      if(!followingInputs.empty())
+        fprintf(stderr, "Metal isolated producer-boundary import: buffers=%zu exact=%d; same Native queue, no mid-owner CPU wait; diagnostic only, not replay acceptance\n",
+            followingInputs.size(), success);
+      if(!followingControl.empty())
+        fprintf(stderr, "Metal isolated following control: mode=%s copiesPerRange=3 sourceExportAfterConsumer=1; GPU visibility may change, not replay acceptance\n",
+            followingControl.c_str());
+    }
+    else completed = finish(command);
+    const bool arguments = completed && ResolvePendingComputeIndirectActions();
+    if(!completed) ClearPendingComputeIndirectActions();
+    source->EndDiagnosticIndirectReplay(indirectState);
+    m_LoadComputeIndirectOrdinals = savedOrdinals;
+    const bool groupFieldsRestored = restoreTextureGroupFields();
+    const bool carrierReferencesRestored = restoreCarrierReferences();
+    const bool fieldsRestored = restoreDestinationFields() && groupFieldsRestored && carrierReferencesRestored;
+    success = success && completed && arguments && fieldsRestored && verifyCarriers(name) && writeBoundary(name) && observeOutputBuffer(name) &&
+        (pairedDestination ? writeTexture(executionDestination, name,
+            executionDestination == original ? target : ResourceId()) : write(name));
+    if(success && pairedDestination)
+      success = writeTexture(original, name + "-original", target);
+    if(success && barrierComparison)
+      for(const auto &arg : argumentSeeds)
+      {
+        bytebuf current; GetBufferData(arg.source, arg.offset, arg.bytes.size(), current);
+        if(current != arg.bytes) success = false;
+      }
+    if(success && barrierComparison)
+      for(const auto &entry : writableSeeds)
+        if(entry.first != target && !writeTexture(entry.second.original,
+            name + "-writable-" + ToStr(entry.first), entry.first))
+          success = false;
+    if(success && !textureGroup.empty())
+      for(const auto &entry : writableSeeds)
+      {
+        auto texture = useTextureGroup && textureGroup.count(entry.first) ?
+            textureGroup.at(entry.first).replacement.get() : entry.second.original;
+        if(!writeTexture(texture, name + "-group-output-" + ToStr(entry.first),
+            useTextureGroup && textureGroup.count(entry.first) ? ResourceId() : entry.first)) success = false;
+      }
+    return success;
+  };
+  bool success = true;
+  const unsigned repetitions = !canonicalSchedule.empty() ? unsigned(canonicalSchedule.size()) :
+      pairedDestination || reducedArguments || barrierComparison || pairedIndirect ? 6U :
+      singleExecution ? 1U : mutableBuffer ? 3U : 6U;
+  for(unsigned repeat = 0; repeat < repetitions && success; repeat++)
+  {
+    if(!canonicalSchedule.empty())
+      compareSubresourceReadback = canonicalSchedule[repeat] == '1';
+    if(!scopeSchedule.empty()) firstDispatchOnly = scopeSchedule[repeat] == '0';
+    if(!residencySchedule.empty()) declareAccelerationResidency = residencySchedule[repeat] == '1';
+    if(!carriers.empty())
+    {
+      const unsigned schedule[] = {0, 1, 2, 2, 1, 0};
+      carrierMode = schedule[repeat]; carrierBindings.clear();
+      if(carrierMode)
+        for(const auto &entry : carriers)
+          carrierBindings[entry.first] = carrierMode == 1 ? entry.second.full.get() : entry.second.partial.get();
+    }
+    usePreparedIndirect = pairedIndirect && (repeat == 0 || repeat == 3 || repeat == 4);
+    useTextureGroup = !textureGroup.empty() && (repeat == 1 || repeat == 2 || repeat == 5);
+    useIndependentDestination = pairedDestination && (repeat == 1 || repeat == 2 || repeat == 5);
+    useReducedArguments = reducedArguments &&
+        (pairedDestination || !replacement.empty() || repeat == 1 || repeat == 2 || repeat == 5);
+    // Keep original captured barriers in a canonical-only intervention. The
+    // historical strengthened-barrier comparison remains available separately.
+    useInterDispatchBarrier = carriers.empty() && canonicalSchedule.empty() && barrierComparison &&
+        (repeat == 1 || repeat == 2 || repeat == 5);
+    success = execute(!carriers.empty() ? StringFormat::Fmt("sequence-carrier-%c-%u", 'A' + carrierMode, repeat) : pairedDestination ? StringFormat::Fmt("destination-%s-%u",
+        useIndependentDestination ? "independent" : "physical", repeat) :
+        reducedArguments ? StringFormat::Fmt("sequence-%s-%u",
+        useReducedArguments ? "reduced" : "full", repeat) : barrierComparison ? StringFormat::Fmt("sequence-%s-%u",
+        useInterDispatchBarrier ? "barrier" : "original", repeat) : pairedIndirect ? StringFormat::Fmt("sequence-%s-%u",
+        usePreparedIndirect ? "prepared" : "guarded", repeat) :
+        StringFormat::Fmt("sequence-%u", repeat));
+    if(!carriers.empty())
+      fprintf(stderr, "Metal diagnostic carrier contrast: repeat=%u mode=%c completed=%d; equal capacity, original resources, both outputs/args restored, copies matched across all modes\n", repeat, 'A' + carrierMode, success);
+    if(!textureGroup.empty())
+      fprintf(stderr, "Metal original-call texture replacement: repeat=%u substituted=%d fields=%zu completed=%d; both known writes restored, original shader/pipeline/args retained, diagnostic only\n",
+          repeat, useTextureGroup, textureGroupFields.size(), success);
+    if(pairedIndirect)
+      fprintf(stderr, "Metal diagnostic indirect paired run: repeat=%u prepared=%d completed=%d; ordinary replay unchanged\n",
+          repeat, usePreparedIndirect, success);
+    if(barrierComparison)
+      fprintf(stderr, "Metal diagnostic inter-dispatch barrier pair: repeat=%u strengthened=%d completed=%d; known writable own seeds, no mid-group CPU wait\n",
+          repeat, useInterDispatchBarrier, success);
+    if(!canonicalSchedule.empty())
+      fprintf(stderr, "Metal diagnostic same-prefix canonical control: repeat=%u canonical=%d completed=%d; output precedes optional readback, original barriers and own input seeds\n",
+          repeat, compareSubresourceReadback, success);
+    if(!scopeSchedule.empty())
+      fprintf(stderr, "Metal diagnostic same-prefix original scope: repeat=%u firstOnly=%d completed=%d; all known writable own seeds restored, omitted dispatches explicitly diagnostic, not full-frame acceptance\n",
+          repeat, firstDispatchOnly, success);
+    if(!residencySchedule.empty())
+      fprintf(stderr, "Metal diagnostic same-prefix AS residency: repeat=%u declared=%d resources=%zu completed=%d; original objects/addresses/commands unchanged, not production acceptance\n",
+          repeat, declareAccelerationResidency, residencyResources.size(), success);
+  }
+  if(!canonicalSchedule.empty()) compareSubresourceReadback = false;
+  if(mutableBuffer && !singleExecution)
+  {
+    success = success && copyBuffer(mutableBuffer, mutableDirty.get()) && writeBuffer(mutableDirty.get(), "mutable-dirty");
+    restoreMutableSeed = true;
+    for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+      success = execute(StringFormat::Fmt("mutable-fixed-%u", repeat));
+    restoreMutableSeed = false;
+    success = success && copyBuffer(mutableDirty.get(), mutableBuffer);
+    for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+      success = execute(StringFormat::Fmt("mutable-dirty-restored-%u", repeat));
+  }
+  if(mutableBuffer)
+  {
+    const bool restoredInput = copyBuffer(mutableSeed.get(), mutableBuffer) && writeBuffer(mutableBuffer, "mutable-restored");
+    success = success && restoredInput;
+    fprintf(stderr, "Metal original compute mutable isolation: buffer=%s sham=%d restored=%d; sole Native content intervention, extra copies/waits before groups, diagnostic only\n",
+        mutableNumber.c_str(), mutableSham, restoredInput);
+  }
+  const rdcstr from = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_REPLACE_FROM");
+  if(success && streamInputTextures && !replacement.empty())
+  {
+    // Strictly isolated diagnostic: stream ordinary reference image contents
+    // into separate Native snapshots before touching original shader inputs.
+    // Native identities, views, formats, address bindings and dispatch remain.
+    struct ImageSwap
+    {
+      MTL::Texture *original = NULL;
+      NS::SharedPtr<MTL::Texture> own, reference;
+      MTL::Buffer *buffer = NULL;
+      uint64_t bufferOffset = 0, bufferLength = 0;
+      NS::SharedPtr<MTL::Buffer> ownBuffer, referenceBuffer;
+    };
+    std::map<ResourceId, ImageSwap> images;
+    const char *next = replacement.c_str();
+    while(*next && success)
+    {
+      char *end = NULL;
+      const uint64_t number = strtoull(next, &end, 10);
+      ResourceId id; memcpy(&id, &number, sizeof(id));
+      if(!number || end == next || (*end && *end != ',') ||
+         !readTextures.count(id) || writtenTextures.count(id) || id == target ||
+         images.count(id) || images.size() >= readTextures.size() || from.empty())
+      { success = false; break; }
+      auto inputObject = m_pDriver->GetResourceManager()->GetResource(id, true);
+      if(!inputObject || inputObject->m_Type != eResTexture || !inputObject->m_Real)
+      { success = false; break; }
+      ImageSwap value; value.original = Unwrap((WrappedMTLTexture *)inputObject);
+      images[id] = value;
+      if(!*end) break;
+      next = end + 1;
+      if(!*next) success = false;
+    }
+    MetalReplayAllocationBudget allocation;
+    allocation.Add(allocation.nativeBytes, 1024 * 1024);
+    for(auto &image : images)
+    {
+      auto texture = image.second.original;
+      uint32_t x = 0, y = 0, size = 0;
+      if(texture->textureType() == MTL::TextureTypeTextureBuffer)
+      {
+        const ResourceId parent = GetBufferTextureSource(image.first);
+        auto bufferObject = m_pDriver->GetResourceManager()->GetResource(parent, true);
+        auto buffer = bufferObject && bufferObject->m_Type == eResBuffer && bufferObject->m_Real ?
+            Unwrap((WrappedMTLBuffer *)bufferObject) : NULL;
+        if(!buffer || texture->buffer() != buffer || texture->arrayLength() != 1 ||
+           texture->mipmapLevelCount() != 1 || texture->sampleCount() != 1 ||
+           texture->height() != 1 || texture->depth() != 1 || !texture->width() ||
+           !GetTextureDataBlockShape(texture->pixelFormat(), x, y, size) || x != 1 || y != 1 ||
+           !size || texture->width() > (128ULL << 20) / size)
+        { success = false; break; }
+        const uint64_t offset = texture->bufferOffset(), length = texture->width() * size;
+        if(offset > buffer->length() || length > buffer->length() - offset)
+        { success = false; break; }
+        image.second.buffer = buffer; image.second.bufferOffset = offset;
+        image.second.bufferLength = length;
+        allocation.Add(allocation.nativeBytes, length);
+        allocation.Add(allocation.nativeBytes, length);
+        continue;
+      }
+      if((texture->textureType() != MTL::TextureType2D &&
+          texture->textureType() != MTL::TextureType2DArray &&
+          texture->textureType() != MTL::TextureType3D) ||
+         texture->arrayLength() != 1 || texture->mipmapLevelCount() != 1 ||
+         texture->sampleCount() != 1 || !texture->width() || !texture->height() ||
+         !texture->depth() ||
+         (texture->textureType() != MTL::TextureType3D && texture->depth() != 1) ||
+         !GetTextureDataBlockShape(texture->pixelFormat(), x, y, size) || x != 1 || y != 1 ||
+         MakeResourceFormat(texture->pixelFormat()).compType == CompType::Depth)
+      { success = false; break; }
+      RDMTL::TextureDescriptor description;
+      description.textureType = texture->textureType(); description.pixelFormat = texture->pixelFormat();
+      description.width = texture->width(); description.height = texture->height();
+      description.depth = texture->depth(); description.arrayLength = 1;
+      description.mipmapLevelCount = 1; description.sampleCount = 1;
+      uint64_t total = 0;
+      if(!MetalTextureReplayLayout(description, total))
+      { success = false; break; }
+      allocation.Add(allocation.nativeBytes, total);
+      allocation.Add(allocation.nativeBytes, total);
+    }
+    if(!allocation.Fits(Unwrap(m_pDriver)->recommendedMaxWorkingSetSize(),
+                        Unwrap(m_pDriver)->currentAllocatedSize())) success = false;
+    for(auto &image : images)
+    {
+      if(!success) break;
+      auto texture = image.second.original;
+      if(image.second.buffer)
+      {
+        auto &view = image.second;
+        const uint64_t block = RDCMIN<uint64_t>(1024 * 1024, view.bufferLength);
+        view.ownBuffer = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(
+            view.bufferLength, MTL::ResourceStorageModePrivate));
+        view.referenceBuffer = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(
+            view.bufferLength, MTL::ResourceStorageModePrivate));
+        auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(block,
+            MTL::ResourceStorageModeShared));
+        auto copyCommand = m_OutputQueue->commandBuffer();
+        auto blit = view.ownBuffer && view.referenceBuffer && staging && staging->contents() &&
+            copyCommand ? copyCommand->blitCommandEncoder() : NULL;
+        if(!blit) { success = false; break; }
+        // Save exactly the view's base range; preserve its Native buffer, offset,
+        // view and GPU address. Upload reference bytes to an independent buffer
+        // first, so no shader input changes if preparation fails.
+        blit->copyFromBuffer(view.buffer, view.bufferOffset, view.ownBuffer.get(), 0, view.bufferLength);
+        blit->endEncoding(); success = finish(copyCommand);
+        FILE *file = success ? fopen((from + "/input-" + ToStr(image.first) + ".bin").c_str(), "rb") : NULL;
+        if(!file) { success = false; break; }
+        success = fseek(file, 0, SEEK_END) == 0 && ftell(file) >= 0 &&
+            uint64_t(ftell(file)) == view.bufferLength && fseek(file, 0, SEEK_SET) == 0;
+        for(uint64_t position = 0; position < view.bufferLength && success; position += block)
+        {
+          const uint64_t count = RDCMIN(block, view.bufferLength - position);
+          success = fread(staging->contents(), 1, count, file) == count;
+          if(!success) break;
+          auto upload = m_OutputQueue->commandBuffer();
+          auto copy = upload ? upload->blitCommandEncoder() : NULL;
+          if(!copy) { success = false; break; }
+          copy->copyFromBuffer(staging.get(), 0, view.referenceBuffer.get(), position, count);
+          copy->endEncoding(); success = finish(upload);
+        }
+        if(fclose(file)) success = false;
+        continue;
+      }
+      auto desc = MTL::TextureDescriptor::texture2DDescriptor(texture->pixelFormat(),
+          texture->width(), texture->height(), false);
+      desc->setTextureType(texture->textureType()); desc->setDepth(texture->depth());
+      desc->setStorageMode(MTL::StorageModePrivate);
+      desc->setUsage(MTL::TextureUsageShaderRead);
+      image.second.own = NS::TransferPtr(Unwrap(m_pDriver)->newTexture(desc));
+      image.second.reference = NS::TransferPtr(Unwrap(m_pDriver)->newTexture(desc));
+      auto copyCommand = m_OutputQueue->commandBuffer();
+      auto blit = image.second.own && image.second.reference && copyCommand ?
+          copyCommand->blitCommandEncoder() : NULL;
+      if(!blit) { success = false; break; }
+      blit->copyFromTexture(texture, 0, 0, MTL::Origin(0,0,0),
+          MTL::Size(texture->width(), texture->height(), texture->depth()), image.second.own.get(), 0, 0,
+          MTL::Origin(0,0,0));
+      blit->endEncoding(); success = finish(copyCommand);
+      uint32_t x = 0, y = 0, size = 0;
+      GetTextureDataBlockShape(texture->pixelFormat(), x, y, size);
+      const uint64_t row = texture->width() * size;
+      const uint64_t align = RDCMAX<uint64_t>(1,
+          Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
+      const uint64_t budget = 1024 * 1024;
+      if(align > budget || row > budget - (align - 1)) { success = false; break; }
+      const uint64_t pitch = AlignUp(row, align), blockRows = budget / pitch;
+      auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(pitch * blockRows,
+          MTL::ResourceStorageModeShared));
+      FILE *file = fopen((from + "/input-" + ToStr(image.first) + ".bin").c_str(), "rb");
+      if(!file || !staging || !staging->contents())
+      { if(file) fclose(file); success = false; break; }
+      success = success && fseek(file, 0, SEEK_END) == 0 &&
+          ftell(file) >= 0 && uint64_t(ftell(file)) == row * texture->height() * texture->depth() &&
+          fseek(file, 0, SEEK_SET) == 0;
+      for(uint64_t z = 0; z < texture->depth() && success; z++)
+      for(uint64_t line = 0; line < texture->height() && success; line += blockRows)
+      {
+        const uint64_t rows = RDCMIN(blockRows, uint64_t(texture->height()) - line);
+        for(uint64_t i = 0; i < rows && success; i++)
+          success = fread((byte *)staging->contents() + i * pitch, 1, row, file) == row;
+        if(!success) break;
+        auto upload = m_OutputQueue->commandBuffer();
+        auto copy = upload ? upload->blitCommandEncoder() : NULL;
+        if(!copy) { success = false; break; }
+        copy->copyFromBuffer(staging.get(), 0, pitch, pitch * rows,
+            MTL::Size(texture->width(), rows, 1), image.second.reference.get(), 0, 0,
+            MTL::Origin(0,line,z), MTL::BlitOptionNone);
+        copy->endEncoding(); success = finish(upload);
+      }
+      if(fclose(file)) success = false;
+    }
+    auto applyImages = [&](bool reference) {
+      auto copyCommand = m_OutputQueue->commandBuffer();
+      auto blit = copyCommand ? copyCommand->blitCommandEncoder() : NULL;
+      if(!blit || images.empty()) return false;
+      for(const auto &image : images)
+      {
+        if(image.second.buffer)
+        {
+          auto sourceBuffer = reference ? image.second.referenceBuffer.get() : image.second.ownBuffer.get();
+          if(!sourceBuffer) { blit->endEncoding(); return false; }
+          blit->copyFromBuffer(sourceBuffer, 0, image.second.buffer,
+              image.second.bufferOffset, image.second.bufferLength);
+          continue;
+        }
+        auto source = reference ? image.second.reference.get() : image.second.own.get();
+        if(!source) { blit->endEncoding(); return false; }
+        auto texture = image.second.original;
+        blit->copyFromTexture(source, 0, 0, MTL::Origin(0,0,0),
+            MTL::Size(texture->width(), texture->height(), texture->depth()), texture, 0, 0, MTL::Origin(0,0,0));
+      }
+      blit->endEncoding(); return finish(copyCommand);
+    };
+    // A second fixed data set is a same-invocation diagnostic contrast. Do not
+    // recreate original resources or overwrite the saved natural input bytes.
+    auto reloadReferences = [&](const rdcstr &folder) {
+      bool loaded = !folder.empty();
+      for(auto &image : images)
+      {
+        if(!loaded) break;
+        auto &view = image.second;
+        auto texture = view.original;
+        const uint64_t budget = 1024 * 1024;
+        FILE *file = fopen((folder + "/input-" + ToStr(image.first) + ".bin").c_str(), "rb");
+        if(!file) { loaded = false; break; }
+        if(view.buffer)
+        {
+          const uint64_t block = RDCMIN(budget, view.bufferLength);
+          auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(block,
+              MTL::ResourceStorageModeShared));
+          loaded = staging && staging->contents() && view.referenceBuffer &&
+              fseek(file, 0, SEEK_END) == 0 && ftell(file) >= 0 &&
+              uint64_t(ftell(file)) == view.bufferLength && fseek(file, 0, SEEK_SET) == 0;
+          for(uint64_t position = 0; position < view.bufferLength && loaded; position += block)
+          {
+            const uint64_t count = RDCMIN(block, view.bufferLength - position);
+            loaded = fread(staging->contents(), 1, count, file) == count;
+            if(!loaded) break;
+            auto upload = m_OutputQueue->commandBuffer();
+            auto copy = upload ? upload->blitCommandEncoder() : NULL;
+            if(!copy) { loaded = false; break; }
+            copy->copyFromBuffer(staging.get(), 0, view.referenceBuffer.get(), position, count);
+            copy->endEncoding(); loaded = finish(upload);
+          }
+        }
+        else
+        {
+          uint32_t x = 0, y = 0, size = 0;
+          loaded = GetTextureDataBlockShape(texture->pixelFormat(), x, y, size) && x == 1 && y == 1;
+          const uint64_t row = texture->width() * size;
+          const uint64_t align = RDCMAX<uint64_t>(1,
+              Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
+          loaded = loaded && align <= budget && row <= budget - (align - 1);
+          const uint64_t pitch = loaded ? AlignUp(row, align) : 0;
+          const uint64_t rowsPerBlock = pitch ? budget / pitch : 0;
+          auto staging = rowsPerBlock ? NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(
+              pitch * rowsPerBlock, MTL::ResourceStorageModeShared)) : NS::SharedPtr<MTL::Buffer>();
+          loaded = loaded && staging && staging->contents() && view.reference &&
+              fseek(file, 0, SEEK_END) == 0 && ftell(file) >= 0 &&
+              uint64_t(ftell(file)) == row * texture->height() * texture->depth() && fseek(file, 0, SEEK_SET) == 0;
+          for(uint64_t z = 0; z < texture->depth() && loaded; z++)
+          for(uint64_t line = 0; line < texture->height() && loaded; line += rowsPerBlock)
+          {
+            const uint64_t rows = RDCMIN(rowsPerBlock, uint64_t(texture->height()) - line);
+            for(uint64_t i = 0; i < rows && loaded; i++)
+              loaded = fread((byte *)staging->contents() + i * pitch, 1, row, file) == row;
+            if(!loaded) break;
+            auto upload = m_OutputQueue->commandBuffer();
+            auto copy = upload ? upload->blitCommandEncoder() : NULL;
+            if(!copy) { loaded = false; break; }
+            copy->copyFromBuffer(staging.get(), 0, pitch, pitch * rows,
+                MTL::Size(texture->width(), rows, 1), view.reference.get(), 0, 0,
+                MTL::Origin(0,line,z), MTL::BlitOptionNone);
+            copy->endEncoding(); loaded = finish(upload);
+          }
+        }
+        if(fclose(file)) loaded = false;
+      }
+      return loaded;
+    };
+    auto observeApplied = [&](const char *tag) {
+      for(const auto &image : images)
+        if(!writeTexture(image.second.original, rdcstr(tag) + "-" + ToStr(image.first), image.first))
+          return false;
+      return true;
+    };
+    const rdcstr secondFrom = Process::GetEnvVariable(
+        "RENDERDOC_METAL_DIAG_COMPUTE_SEQUENCE_REPLACE_SECOND_FROM");
+    bool touched = false;
+    if(success)
+    {
+      success = execute("natural");
+      if(success) { touched = true; success = applyImages(true); }
+      if(success && !secondFrom.empty()) success = observeApplied("applied-a");
+      for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+        success = execute(StringFormat::Fmt("mediated-%u", repeat));
+      if(success && !secondFrom.empty())
+      {
+        success = reloadReferences(secondFrom) && applyImages(true) && observeApplied("applied-b");
+        for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+          success = execute(StringFormat::Fmt("second-mediated-%u", repeat));
+        if(success) success = reloadReferences(from) && applyImages(true) && observeApplied("applied-a-restored");
+        for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+          success = execute(StringFormat::Fmt("first-reference-restored-%u", repeat));
+      }
+    }
+    const bool inputsRestored = !touched || applyImages(false);
+    if(success && inputsRestored) success = execute("restored");
+    success = success && inputsRestored;
+    fprintf(stderr, "Metal original compute streamed image mediation: inputs=%s restored=%d completed=%d; original Native identities, bounded staging, diagnostic only\n",
+        replacement.c_str(), inputsRestored, success);
+  }
+  else if(success && !replacement.empty())
+  {
+    char *end = NULL; uint64_t number = strtoull(replacement.c_str(), &end, 10);
+    ResourceId id; memcpy(&id, &number, sizeof(id));
+    if(!number || !end || *end || !inputPixels.count(id) || from.empty())
+      success = false;
+    else
+    {
+      auto resource = m_pDriver->GetResourceManager()->GetResource(id, true);
+      auto texture = Unwrap((WrappedMTLTexture *)resource);
+      bytebuf pixels; pixels.resize(inputPixels.at(id).size());
+      FILE *file = fopen((from + "/input-" + ToStr(id) + ".bin").c_str(), "rb");
+      success = file && fread(pixels.data(), 1, pixels.size(), file) == pixels.size() &&
+                fgetc(file) == EOF;
+      if(file) fclose(file);
+      auto upload = [&](const bytebuf &value) {
+        uint32_t x = 0, y = 0, size = 0;
+        if(!GetTextureDataBlockShape(texture->pixelFormat(), x, y, size) || x != 1 || y != 1)
+          return false;
+        const uint64_t row = texture->width() * size, height = texture->height();
+        const uint64_t align = RDCMAX<uint64_t>(1,
+            Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
+        if(!height || align > 1024 * 1024 || row > 1024 * 1024 - (align - 1) ||
+           row > 1024 * 1024 / height || row * height != value.size()) return false;
+        const uint64_t pitch = AlignUp(row, align);
+        if(pitch > 1024 * 1024 / height) return false;
+        auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(pitch * height,
+            MTL::ResourceStorageModeShared));
+        if(!staging || !staging->contents()) return false;
+        for(uint64_t line = 0; line < height; line++)
+          memcpy((byte *)staging->contents() + line * pitch, value.data() + line * row, row);
+        auto copyCommand = m_OutputQueue->commandBuffer();
+        auto blit = copyCommand ? copyCommand->blitCommandEncoder() : NULL;
+        if(!blit) return false;
+        blit->copyFromBuffer(staging.get(), 0, pitch, pitch * height,
+            MTL::Size(texture->width(), height, 1), texture, 0, 0,
+            MTL::Origin(0,0,0), MTL::BlitOptionNone);
+        blit->endEncoding(); bytebuf actual;
+        return finish(copyCommand) && ReadTextureSubresource(texture, {0,0,0}, actual, id) &&
+               actual == value;
+      };
+      bytebuf before;
+      if(success) success = ReadTextureSubresource(texture, {0,0,0}, before, id) &&
+                            before == inputPixels.at(id) && execute("natural") && upload(pixels);
+      for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+        success = execute(StringFormat::Fmt("mediated-%u", repeat));
+      const bool restored = upload(inputPixels.at(id));
+      if(success && restored) success = execute("restored");
+      success = success && restored;
+      fprintf(stderr, "Metal original compute group input mediation: readonly=%s restored=%d; isolated diagnostic only\n",
+          ToStr(id).c_str(), restored);
+    }
+  }
+  // Image mediation also calls execute(), so the earlier mutable export is
+  // not an end-of-diagnostic observation. Restore and observe the actual final
+  // window after every original Native dispatch, including failed mediation.
+  const bool finalMutableRestored = !mutableBuffer ||
+      (copyBuffer(mutableSeed.get(), mutableBuffer) &&
+       writeBuffer(mutableBuffer, "mutable-final-restored"));
+  command = m_OutputQueue->commandBuffer();
+  bool restored = encodeCopy(command, seed.get(), original) && restoreKnownWrites(command) && finish(command) &&
+                        write("output-restored");
+  restored = finalMutableRestored && restored;
+  if(restored && barrierComparison)
+    for(const auto &entry : writableSeeds)
+      if(entry.first != target && !writeTexture(entry.second.original,
+          "writable-restored-" + ToStr(entry.first), entry.first)) restored = false;
+  if(success && streamInputTextures)
+    for(ResourceId id : readTextures)
+    {
+      if(!observedTextures.empty() && !observedTextures.count(id)) continue;
+      if(writtenTextures.count(id) || id == target) continue;
+      auto resource = m_pDriver->GetResourceManager()->GetResource(id, true);
+      auto texture = resource && resource->m_Type == eResTexture && resource->m_Real ?
+          Unwrap((WrappedMTLTexture *)resource) : NULL;
+      if(!writeTexture(texture, "input-after-" + ToStr(id), id))
+      { success = false; break; }
+    }
+  RestoreEncoderState(saved);
+  fprintf(stderr, "Metal original compute sequence: encoder=%s first=%u last=%u count=%llu dispatchType=%u target=%s restored=%d completed=%d; captured setters/barriers retained, diagnosticNativeModule=%d, no mid-group CPU wait; diagnostic only, other writable-input completeness unknown.\n",
+      ToStr(encoderID).c_str(), events.front(), events.back(), uint64_t(events.size()),
+      uint32_t(dispatchType), ToStr(target).c_str(), restored, success, bool(diagnosticPipeline));
+  return success && restored;
+}
+
+bool MetalReplay::ProbeOriginalDispatch(ResourceId target, uint32_t eventId, uint64_t offset,
+                                        uint64_t length, const rdcstr &directory)
+{
+  auto fail = [](const char *reason) {
+    fprintf(stderr, "Metal original dispatch diagnostic failure: %s\n", reason); return false;
+  };
+  const APIEvent *event = GetEvent(eventId);
+  if(!event || event->eventId != eventId ||
+     event->chunkIndex >= m_pDriver->GetStructuredFile()->chunks.size()) return fail("event");
+  const auto chunk = m_pDriver->GetStructuredFile()->chunks[event->chunkIndex];
+  const auto field = chunk->FindChild("ComputeCommandEncoder");
+  if(!field || chunk->name != "MTLComputeCommandEncoder::dispatchThreadgroups")
+    return fail("bounded direct dispatch scope");
+  const ResourceId encoderId = field->AsResourceId();
+  auto object = m_pDriver->GetResourceManager()->GetResource(encoderId, true);
+  if(!object || object->m_Type != eResComputeCommandEncoder || !object->m_Real ||
+     !InitialiseOutputResources() || !m_pDriver->BeginOverlayReplayPrefix(encoderId))
+    return fail("prefix setup");
+  ReplayLog(eventId, eReplay_WithoutDraw);
+  m_OverlayNeedsFullReplay = true;
+  auto source = (WrappedMTLComputeCommandEncoder *)object;
+  const bool active = m_pDriver->GetReplayComputeCommandEncoder(source) == source;
+  const auto saved = SaveEncoderState();
+  const bool finished = m_pDriver->FinishOverlayReplayPrefix(encoderId);
+  RestoreEncoderState(saved);
+  if(!active || !finished || m_FatalError != ResultCode::Succeeded) return fail("prefix completion");
+  auto output = m_pDriver->GetResourceManager()->GetResource(target, true);
+  auto real = output && output->m_Type == eResBuffer && output->m_Real ?
+      Unwrap((WrappedMTLBuffer *)output) : NULL;
+  if(!real || !real->length() || real->length() > 1024 * 1024 ||
+     offset > real->length() || length > real->length() - offset)
+    return fail("selected output range/budget");
+  auto baseline = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(real->length(), MTL::ResourceStorageModePrivate));
+  if(!baseline) return fail("output seed allocation");
+  auto copy = [&](MTL::Buffer *from, uint64_t fromOffset, MTL::Buffer *to, uint64_t toOffset,
+                  uint64_t size) {
+    auto command = m_OutputQueue->commandBuffer();
+    auto blit = command ? command->blitCommandEncoder() : NULL;
+    if(!blit) return false;
+    blit->copyFromBuffer(from, fromOffset, to, toOffset, size);
+    blit->endEncoding(); command->commit(); command->waitUntilCompleted();
+    return command->status() == MTL::CommandBufferStatusCompleted && !command->error();
+  };
+  auto save = [&](MTL::Buffer *buffer, uint64_t fromOffset, uint64_t size, const rdcstr &name) {
+    auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(size, MTL::ResourceStorageModeShared));
+    if(!staging || !staging->contents() || !copy(buffer, fromOffset, staging.get(), 0, size)) return false;
+    FILE *file = fopen((directory + "/" + name + ".bin").c_str(), "wbx");
+    if(!file) return false;
+    const bool written = fwrite(staging->contents(), 1, size, file) == size;
+    return fclose(file) == 0 && written;
+  };
+  if(!copy(real, 0, baseline.get(), 0, real->length()) ||
+     !save(baseline.get(), 0, real->length(), "output-seed")) return fail("output seed capture");
+  // Observe only existing actual numeric access facts, not every resident buffer
+  // or the whole CBV arena. Partial display does not qualify ordinary replay.
+  uint64_t budget = 16 * 1024;
+  std::set<ResourceId> textureInputs;
+  const auto accesses = m_pDriver->m_IRRuntimeDescriptorAccesses.find({event->fileOffset, 0});
+  if(accesses != m_pDriver->m_IRRuntimeDescriptorAccesses.end())
+    for(const auto &access : accesses->second)
+    {
+      ResourceId id; memcpy(&id, &access.object, sizeof(id));
+      if(access.pipeline == saved.pipeline.computePipelineResourceId && access.kind == 3 &&
+         !access.write && !access.resourceOnly)
+      {
+        ResourceId table; memcpy(&table, &access.descriptorObject, sizeof(table));
+        uint64_t slotOffset = access.descriptorOffset;
+        if(table == ResourceId() && access.offset >= 8) { table = id; slotOffset = access.offset - 8; }
+        const auto slot = m_pDriver->m_DescriptorSlotShadow.find({table, slotOffset});
+        if(slot != m_pDriver->m_DescriptorSlotShadow.end())
+          for(const auto &binding : slot->second.sources)
+            if(binding.first == 1) textureInputs.insert(binding.second.resource);
+      }
+      if(access.pipeline != saved.pipeline.computePipelineResourceId || access.kind != 6 ||
+         access.write || access.resourceOnly || !access.byteSize || access.byteSize > budget) continue;
+      auto resource = m_pDriver->GetResourceManager()->GetResource(id, true);
+      auto buffer = resource && resource->m_Type == eResBuffer && resource->m_Real ?
+          Unwrap((WrappedMTLBuffer *)resource) : NULL;
+      if(!buffer || access.offset > buffer->length() ||
+         access.byteSize > buffer->length() - access.offset) continue;
+      const rdcstr name = StringFormat::Fmt("input-%s-%llu-%llu", ToStr(id).c_str(),
+          access.offset, access.byteSize);
+      // Duplicate display facts have the same range. Export once without adding
+      // another wait, and retain all real setters rather than rebuilding bindings.
+      if(FileIO::exists(directory + "/" + name + ".bin")) continue;
+      if(!save(buffer, access.offset, access.byteSize, name)) return fail("numeric input observation");
+      budget -= access.byteSize;
+    }
+  std::map<ResourceId, bytebuf> texturePixels;
+  uint64_t textureBudget = 1024 * 1024;
+  for(ResourceId id : textureInputs)
+  {
+    auto resource = m_pDriver->GetResourceManager()->GetResource(id, true);
+    auto texture = resource && resource->m_Type == eResTexture && resource->m_Real ?
+        Unwrap((WrappedMTLTexture *)resource) : NULL;
+    bytebuf pixels;
+    if(!texture || texture->textureType() != MTL::TextureType2D || texture->mipmapLevelCount() != 1 ||
+       texture->sampleCount() != 1 || texture->arrayLength() != 1 ||
+       !ReadTextureSubresource(texture, {0,0,0}, pixels, id) || pixels.size() > textureBudget)
+      return fail("consumer texture needs a different bounded subresource diagnostic");
+    textureBudget -= pixels.size(); texturePixels[id] = pixels;
+    FILE *file = fopen((directory + "/input-" + ToStr(id) + ".bin").c_str(), "wbx");
+    if(!file) return fail("consumer texture export");
+    const bool written = fwrite(pixels.data(), 1, pixels.size(), file) == pixels.size();
+    if(fclose(file) || !written) return fail("consumer texture export size");
+  }
+  auto execute = [&](const rdcstr &name) {
+    if(!copy(baseline.get(), 0, real, 0, real->length())) return false;
+    auto command = m_OutputQueue->commandBuffer();
+    auto encoder = command ? command->computeCommandEncoder() : NULL;
+    bool success = encoder && m_pDriver->ReplayOriginalDispatch(eventId, encoder);
+    if(encoder) encoder->endEncoding();
+    if(command) { command->commit(); command->waitUntilCompleted(); }
+    return success && command->status() == MTL::CommandBufferStatusCompleted && !command->error() &&
+           save(real, offset, length, name);
+  };
+  bool success = true;
+  for(bool reset : {false, true})
+    for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+    {
+      if(reset || !repeat) success = copy(baseline.get(), 0, real, 0, real->length());
+      auto command = success ? m_OutputQueue->commandBuffer() : NULL;
+      auto encoder = command ? command->computeCommandEncoder() : NULL;
+      success = encoder && m_pDriver->ReplayOriginalDispatch(eventId, encoder);
+      if(encoder) encoder->endEncoding();
+      if(command) { command->commit(); command->waitUntilCompleted(); }
+      success = success && command->status() == MTL::CommandBufferStatusCompleted && !command->error();
+      if(success) success = save(real, offset, length,
+          StringFormat::Fmt("%s-%u", reset ? "fixed-seed" : "feedback", repeat));
+    }
+  const rdcstr replacement = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DISPATCH_REPLACE_INPUT");
+  const rdcstr replacementFrom = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DISPATCH_REPLACE_FROM");
+  if(success && !replacement.empty())
+  {
+    auto failedIntervention = [&](const char *reason) {
+      copy(baseline.get(), 0, real, 0, real->length());
+      RestoreEncoderState(saved);
+      return fail(reason);
+    };
+    char *end = NULL; uint64_t number = strtoull(replacement.c_str(), &end, 10);
+    ResourceId id; memcpy(&id, &number, sizeof(id));
+    if(!number || !end || *end || !texturePixels.count(id) || replacementFrom.empty())
+      return failedIntervention("replacement must be an actual observed consumer texture");
+    auto resource = m_pDriver->GetResourceManager()->GetResource(id, true);
+    auto texture = Unwrap((WrappedMTLTexture *)resource);
+    uint32_t x = 0, y = 0, size = 0;
+    if(!GetTextureDataBlockShape(texture->pixelFormat(), x, y, size) || x != 1 || y != 1 ||
+       MakeResourceFormat(texture->pixelFormat()).compType == CompType::Depth)
+      return failedIntervention("replacement needs an ordinary colour subresource");
+    bytebuf pixels; pixels.resize(texturePixels.at(id).size());
+    FILE *file = fopen((replacementFrom + "/input-" + ToStr(id) + ".bin").c_str(), "rb");
+    if(!file) return failedIntervention("replacement consumer file");
+    const bool valid = fread(pixels.data(), 1, pixels.size(), file) == pixels.size() && fgetc(file) == EOF;
+    fclose(file); if(!valid) return failedIntervention("replacement consumer size");
+    auto upload = [&](const bytebuf &value) {
+      const uint64_t row = texture->width() * size, height = texture->height();
+      const uint64_t align = RDCMAX<uint64_t>(1,
+          Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
+      if(!height || align > 1024 * 1024 || row > 1024 * 1024 - (align - 1) ||
+         row > 1024 * 1024 / height || row * height != value.size()) return false;
+      const uint64_t pitch = AlignUp(row, align);
+      if(pitch > 1024 * 1024 / height) return false;
+      auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(pitch * height, MTL::ResourceStorageModeShared));
+      if(!staging || !staging->contents()) return false;
+      for(uint64_t line = 0; line < height; line++)
+        memcpy((byte *)staging->contents() + line * pitch, value.data() + line * row, row);
+      auto command = m_OutputQueue->commandBuffer();
+      auto blit = command ? command->blitCommandEncoder() : NULL;
+      if(!blit) return false;
+      blit->copyFromBuffer(staging.get(), 0, pitch, pitch * height,
+          MTL::Size(texture->width(), height, 1), texture, 0, 0, MTL::Origin(0,0,0), MTL::BlitOptionNone);
+      blit->endEncoding(); command->commit(); command->waitUntilCompleted();
+      bytebuf actual;
+      return command->status() == MTL::CommandBufferStatusCompleted && !command->error() &&
+          ReadTextureSubresource(texture, {0,0,0}, actual, id) && actual == value;
+    };
+    bytebuf before;
+    success = ReadTextureSubresource(texture, {0,0,0}, before, id) && before == texturePixels.at(id) &&
+              execute("natural") && upload(pixels);
+    for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+      success = execute(StringFormat::Fmt("mediated-%u", repeat));
+    const bool inputRestored = upload(texturePixels.at(id));
+    if(success && inputRestored) success = execute("restored");
+    success = success && inputRestored;
+    fprintf(stderr, "Metal original dispatch input mediation: source=%s restored=%d; isolated diagnostic only\n",
+        ToStr(id).c_str(), inputRestored);
+  }
+  const bool restored = copy(baseline.get(), 0, real, 0, real->length());
+  RestoreEncoderState(saved);
+  fprintf(stderr, "Metal original dispatch: event=%u encoder=%s pipeline=%s target=%s scope=%llu@%llu restored=%d completed=%d; original Native shader/setters/VA retained. Other input/side-effect completeness unknown; not full UE acceptance.\n",
+      eventId, ToStr(encoderId).c_str(), ToStr(saved.pipeline.computePipelineResourceId).c_str(),
+      ToStr(target).c_str(), length, offset, restored, success);
+  return success && restored;
+}
+
+bool MetalReplay::ProbeCommittedTextureBoundary(ResourceId output, const rdcstr &directory)
+{
+  if(!Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMMIT_RESOURCE_GROUP").empty())
+    return ProbeCommittedResourceGroup(output, directory);
+  // Execute the complete original frame, changing one explicitly selected
+  // input only after its real producer commit and before its consumer commit.
+  // This is an isolated causal experiment, never accepted ordinary replay.
+  auto number = [](const char *variable, uint64_t &value) {
+    const rdcstr text = Process::GetEnvVariable(variable);
+    char *end = NULL; value = strtoull(text.c_str(), &end, 10);
+    return value && end && end != text.c_str() && !*end;
+  };
+  uint64_t textureNumber = 0, producerNumber = 0, consumerNumber = 0, endNumber = 0;
+  if(!number("RENDERDOC_METAL_DIAG_COMMIT_TEXTURE", textureNumber) ||
+     !number("RENDERDOC_METAL_DIAG_COMMIT_PRODUCER", producerNumber) ||
+     !number("RENDERDOC_METAL_DIAG_COMMIT_CONSUMER", consumerNumber) ||
+     !number("RENDERDOC_METAL_DIAG_COMMIT_END_EVENT", endNumber) || endNumber > UINT32_MAX ||
+     m_pDriver->m_DiagnosticCommitObserver || !InitialiseOutputResources()) return false;
+  ResourceId input, producer, consumer;
+  memcpy(&input, &textureNumber, sizeof(input));
+  memcpy(&producer, &producerNumber, sizeof(producer));
+  memcpy(&consumer, &consumerNumber, sizeof(consumer));
+  const auto &order = m_pDriver->GetReplaySubmissionOrder();
+  const auto p = std::find(order.begin(), order.end(), producer);
+  const auto c = std::find(order.begin(), order.end(), consumer);
+  if(p == order.end() || c == order.end() || p >= c || input == output) return false;
+  const auto end = GetEvent(uint32_t(endNumber));
+  if(!end || end->eventId != endNumber) return false;
+  const rdcstr mode = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMMIT_MODE");
+  const bool replacing = mode == "replace", sham = mode == "sham";
+  if(mode != "observe" && !replacing && !sham) return false;
+  auto save = [&](const char *name, const bytebuf &bytes) {
+    FILE *file = fopen((directory + "/" + name + ".bin").c_str(), "wbx");
+    if(!file) return false;
+    const bool wrote = !bytes.empty() && fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size();
+    return fclose(file) == 0 && wrote;
+  };
+  unsigned observed = 0;
+  m_pDriver->m_DiagnosticCommitObserver = [&](WrappedMTLCommandBuffer *command) {
+    if(GetResID(command) != producer) return true;
+    if(observed++ || m_pDriver->HasCommittedReplaySubmission(consumer) ||
+       !m_pDriver->WaitReplayCommandBuffer(command, "isolated diagnostic texture boundary")) return false;
+    auto resource = m_pDriver->GetResourceManager()->GetResource(input, true);
+    auto texture = resource && resource->m_Type == eResTexture && resource->m_Real ?
+        Unwrap((WrappedMTLTexture *)resource) : NULL;
+    uint32_t bw = 0, bh = 0, block = 0;
+    if(!texture || texture->textureType() != MTL::TextureType2D || texture->sampleCount() != 1 ||
+       !texture->width() || !texture->height() || texture->mipmapLevelCount() != 1 ||
+       !GetTextureDataBlockShape(texture->pixelFormat(), bw, bh, block) || bw != 1 || bh != 1)
+      return false;
+    bytebuf before;
+    if(!ReadTextureSubresource(texture, {0,0,0}, before, input) || before.empty() ||
+       before.size() > 64ULL * 1024 * 1024 || !save("commit-before", before)) return false;
+    bytebuf replacement = before;
+    if(replacing)
+    {
+      const rdcstr path = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMMIT_REPLACE_FROM");
+      FILE *file = fopen(path.c_str(), "rb");
+      if(!file) return false;
+      const bool exact = fread(replacement.data(), 1, replacement.size(), file) == replacement.size() &&
+          fgetc(file) == EOF;
+      fclose(file); if(!exact) return false;
+    }
+    if(replacing || sham)
+    {
+      const uint64_t row = uint64_t(texture->width()) * block;
+      const uint64_t height = texture->height();
+      const uint64_t alignment = RDCMAX(1ULL,
+          Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
+      if(alignment > (64ULL << 20) || row > (64ULL << 20) - (alignment - 1)) return false;
+      const uint64_t pitch = AlignUp(row, alignment);
+      if(pitch > (64ULL << 20) / height || replacement.size() != row * height) return false;
+      auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(pitch * height, MTL::ResourceStorageModeShared));
+      if(!staging || !staging->contents()) return false;
+      for(uint64_t y = 0; y < height; ++y)
+        memcpy((byte *)staging->contents() + y * pitch, replacement.data() + y * row, row);
+      auto upload = m_OutputQueue->commandBuffer();
+      auto blit = upload ? upload->blitCommandEncoder() : NULL;
+      if(!blit) return false;
+      blit->copyFromBuffer(staging.get(), 0, pitch, pitch * height,
+          MTL::Size(texture->width(), height, 1), texture, 0, 0, MTL::Origin(0,0,0), MTL::BlitOptionNone);
+      blit->endEncoding(); upload->commit(); upload->waitUntilCompleted();
+      if(upload->status() != MTL::CommandBufferStatusCompleted || upload->error()) return false;
+    }
+    bytebuf after;
+    const bool good = ReadTextureSubresource(texture, {0,0,0}, after, input) &&
+        after == replacement && save("commit-after", after);
+    fprintf(stderr, "Metal diagnostic committed boundary: producer=%s consumer=%s input=%s mode=%s bytes=%zu exact=%d consumerUncommitted=1; original remaining frame commands retained\n",
+        ToStr(producer).c_str(), ToStr(consumer).c_str(), ToStr(input).c_str(), mode.c_str(), before.size(), good);
+    return good;
+  };
+  ReplayLog(uint32_t(endNumber), eReplay_Full);
+  m_pDriver->m_DiagnosticCommitObserver = {};
+  bool good = observed == 1 && m_FatalError == ResultCode::Succeeded;
+  auto resource = m_pDriver->GetResourceManager()->GetResource(output, true);
+  bytebuf image;
+  good = good && resource && resource->m_Type == eResTexture && resource->m_Real &&
+      ReadTextureSubresource(Unwrap((WrappedMTLTexture *)resource), {0,0,0}, image, output) &&
+      image.size() <= 64ULL * 1024 * 1024 && save("full-output", image);
+  // Do not overwrite an old physical view after later alias reuse. Restore the
+  // entire capture via its ordinary initial states and original commands.
+  if(good) ReplayLog(uint32_t(endNumber), eReplay_Full);
+  const bool restored = good && m_FatalError == ResultCode::Succeeded;
+  fprintf(stderr, "Metal diagnostic committed boundary complete: observed=%u complete=%d restoredByOrdinaryFullReplay=%d; intervention output is not Native or ordinary replay acceptance\n",
+      observed, good, restored);
+  return restored;
+}
+
+bool MetalReplay::ProbeCommittedResourceGroup(ResourceId output, const rdcstr &directory)
+{
+  // Isolated ordinary-data mediation after a real producer submission. The
+  // group is never recorded as initial state or used to grant replay support.
+  auto number = [](const char *variable, uint64_t &value) {
+    const rdcstr text = Process::GetEnvVariable(variable);
+    char *end = NULL; value = strtoull(text.c_str(), &end, 10);
+    return value && end && end != text.c_str() && !*end;
+  };
+  uint64_t producerNumber = 0, consumerNumber = 0, endNumber = 0;
+  if(!number("RENDERDOC_METAL_DIAG_COMMIT_PRODUCER", producerNumber) ||
+     !number("RENDERDOC_METAL_DIAG_COMMIT_CONSUMER", consumerNumber) ||
+     !number("RENDERDOC_METAL_DIAG_COMMIT_END_EVENT", endNumber) || endNumber > UINT32_MAX ||
+     m_pDriver->m_DiagnosticCommitObserver || !InitialiseOutputResources()) return false;
+  ResourceId producer, consumer;
+  memcpy(&producer, &producerNumber, sizeof(producer));
+  memcpy(&consumer, &consumerNumber, sizeof(consumer));
+  const auto &order = m_pDriver->GetReplaySubmissionOrder();
+  const auto p = std::find(order.begin(), order.end(), producer);
+  const auto c = std::find(order.begin(), order.end(), consumer);
+  if(p == order.end() || c == order.end() || p >= c || !GetEvent(uint32_t(endNumber))) return false;
+  const rdcstr mode = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMMIT_MODE");
+  if(mode != "observe" && mode != "sham" && mode != "replace") return false;
+  constexpr uint64_t budget = 64ULL * 1024 * 1024;
+  struct Member { ResourceId id; unsigned kind; uint64_t offset, length; rdcstr path; };
+  std::vector<Member> members;
+  FILE *list = fopen(Process::GetEnvVariable("RENDERDOC_METAL_DIAG_COMMIT_RESOURCE_GROUP").c_str(), "rb");
+  if(!list) return false;
+  unsigned kind = 0; unsigned long long id = 0, offset = 0, length = 0;
+  char path[2048]; uint64_t total = 0; bool valid = true;
+  while(true)
+  {
+    const int fields = fscanf(list, "%u %llu %llu %llu %2047s", &kind, &id, &offset, &length, path);
+    if(fields == EOF) break;
+    if(fields != 5 || kind > 1 || !id || !length || members.size() >= 32 ||
+       length > budget - total) { valid = false; break; }
+    Member member; memcpy(&member.id, &id, sizeof(member.id));
+    member.kind = kind; member.offset = offset; member.length = length; member.path = path;
+    if(member.id == output) { valid = false; break; }
+    for(const auto &old : members)
+      if(old.id == member.id) valid = false;
+    if(!valid) break;
+    members.push_back(member); total += length;
+  }
+  valid = valid && !ferror(list) && !members.empty(); fclose(list);
+  if(!valid) return false;
+  auto save = [&](const rdcstr &name, const bytebuf &bytes) {
+    FILE *file = fopen((directory + "/" + name + ".bin").c_str(), "wbx");
+    if(!file) return false;
+    const bool wrote = fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size();
+    return fclose(file) == 0 && wrote;
+  };
+  unsigned observed = 0;
+  m_pDriver->m_DiagnosticCommitObserver = [&](WrappedMTLCommandBuffer *command) {
+    if(GetResID(command) != producer) return true;
+    if(observed++ || m_pDriver->HasCommittedReplaySubmission(consumer) ||
+       !m_pDriver->WaitReplayCommandBuffer(command, "isolated diagnostic ordinary group")) return false;
+    struct Transfer
+    {
+      MTL::Buffer *buffer = NULL; MTL::Texture *texture = NULL;
+      uint64_t offset = 0, row = 0, pitch = 0, height = 0, depth = 0;
+      NS::SharedPtr<MTL::Buffer> staging;
+      bytebuf bytes;
+    };
+    std::vector<Transfer> transfers;
+    uint64_t allocationBytes = 0;
+    for(size_t index = 0; index < members.size(); index++)
+    {
+      const auto &member = members[index]; Transfer transfer;
+      auto object = m_pDriver->GetResourceManager()->GetResource(member.id, true);
+      if(!object || !object->m_Real) return false;
+      if(member.kind == 0)
+      {
+        if(object->m_Type != eResBuffer) return false;
+        transfer.buffer = Unwrap((WrappedMTLBuffer *)object); transfer.offset = member.offset;
+        if(transfer.offset > transfer.buffer->length() || member.length > transfer.buffer->length() - transfer.offset ||
+           !m_pDriver->IsDescriptorOrdinaryWriteRange(member.id, transfer.offset, member.length)) return false;
+        GetBufferData(member.id, member.offset, member.length, transfer.bytes);
+      }
+      else
+      {
+        if(object->m_Type != eResTexture || member.offset) return false;
+        transfer.texture = Unwrap((WrappedMTLTexture *)object);
+        const auto type = transfer.texture->textureType();
+        uint32_t bw = 0, bh = 0, block = 0;
+        if((type != MTL::TextureType2D && type != MTL::TextureType3D &&
+            type != MTL::TextureTypeTextureBuffer) || transfer.texture->sampleCount() != 1 ||
+           transfer.texture->mipmapLevelCount() != 1 ||
+           MakeResourceFormat(transfer.texture->pixelFormat()).compType == CompType::Depth ||
+           !GetTextureDataBlockShape(transfer.texture->pixelFormat(), bw, bh, block) || bw != 1 || bh != 1 ||
+           !ReadTextureSubresource(transfer.texture, {0,0,0}, transfer.bytes, member.id)) return false;
+        if(type == MTL::TextureTypeTextureBuffer)
+        {
+          transfer.buffer = transfer.texture->buffer(); transfer.offset = transfer.texture->bufferOffset();
+          if(!transfer.buffer || !m_pDriver->IsDescriptorOrdinaryWriteRange(
+                 GetBufferTextureSource(member.id), transfer.offset, member.length)) return false;
+          transfer.texture = NULL;
+        }
+        else
+        {
+          transfer.row = transfer.texture->width() * block;
+          transfer.height = transfer.texture->height(); transfer.depth = transfer.texture->depth();
+          const uint64_t alignment = RDCMAX<uint64_t>(1,
+              Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(transfer.texture->pixelFormat()));
+          if(alignment > budget || transfer.row > budget - (alignment - 1)) return false;
+          transfer.pitch = AlignUp(transfer.row, alignment);
+          if(!transfer.height || !transfer.depth || transfer.pitch > budget / transfer.height ||
+             transfer.pitch * transfer.height > budget / transfer.depth) return false;
+        }
+      }
+      if(transfer.bytes.size() != member.length || !save(StringFormat::Fmt("before-%zu", index), transfer.bytes))
+        return false;
+      if(transfer.buffer && (transfer.offset > transfer.buffer->length() ||
+         member.length > transfer.buffer->length() - transfer.offset ||
+         (member.kind == 0 && !m_pDriver->IsDescriptorOrdinaryWriteRange(member.id, transfer.offset, member.length))))
+        return false;
+      if(mode == "replace")
+      {
+        FILE *file = fopen(member.path.c_str(), "rb");
+        if(!file) return false;
+        const bool exact = fread(transfer.bytes.data(), 1, member.length, file) == member.length && fgetc(file) == EOF;
+        fclose(file); if(!exact) return false;
+      }
+      if(mode != "observe")
+      {
+        const uint64_t size = transfer.buffer ? member.length : transfer.pitch * transfer.height * transfer.depth;
+        if(size > budget - allocationBytes) return false;
+        allocationBytes += size;
+        MetalReplayAllocationBudget allocation; allocation.Add(allocation.nativeBytes, size);
+        if(!allocation.Fits(Unwrap(m_pDriver)->recommendedMaxWorkingSetSize(), Unwrap(m_pDriver)->currentAllocatedSize()))
+          return false;
+        transfer.staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(size, MTL::ResourceStorageModeShared));
+        if(!transfer.staging || !transfer.staging->contents()) return false;
+        if(transfer.buffer) memcpy(transfer.staging->contents(), transfer.bytes.data(), member.length);
+        else
+          for(uint64_t line = 0; line < transfer.height * transfer.depth; line++)
+            memcpy((byte *)transfer.staging->contents() + line * transfer.pitch,
+                transfer.bytes.data() + line * transfer.row, transfer.row);
+      }
+      transfers.push_back(transfer);
+    }
+    if(mode != "observe")
+    {
+      auto upload = m_OutputQueue->commandBuffer(); auto blit = upload ? upload->blitCommandEncoder() : NULL;
+      if(!blit) return false;
+      for(auto &transfer : transfers)
+        if(transfer.buffer)
+          blit->copyFromBuffer(transfer.staging.get(), 0, transfer.buffer, transfer.offset, transfer.bytes.size());
+        else
+          blit->copyFromBuffer(transfer.staging.get(), 0, transfer.pitch, transfer.pitch * transfer.height,
+              MTL::Size(transfer.texture->width(), transfer.height, transfer.depth), transfer.texture, 0, 0,
+              MTL::Origin(0,0,0), MTL::BlitOptionNone);
+      blit->endEncoding(); upload->commit(); upload->waitUntilCompleted();
+      if(upload->status() != MTL::CommandBufferStatusCompleted || upload->error()) return false;
+    }
+    for(size_t index = 0; index < members.size(); index++)
+    {
+      bytebuf actual; const auto &member = members[index]; const auto &transfer = transfers[index];
+      if(member.kind) { if(!ReadTextureSubresource(Unwrap((WrappedMTLTexture *)
+          m_pDriver->GetResourceManager()->GetResource(member.id, true)), {0,0,0}, actual, member.id)) return false; }
+      else GetBufferData(member.id, member.offset, member.length, actual);
+      if(actual != transfer.bytes || !save(StringFormat::Fmt("after-%zu", index), actual)) return false;
+    }
+    fprintf(stderr, "Metal diagnostic committed group: producer=%s consumer=%s mode=%s members=%zu bytes=%llu allExact=1 consumerUncommitted=1\n",
+        ToStr(producer).c_str(), ToStr(consumer).c_str(), mode.c_str(), members.size(), total);
+    return true;
+  };
+  ReplayLog(uint32_t(endNumber), eReplay_Full);
+  m_pDriver->m_DiagnosticCommitObserver = {};
+  auto object = m_pDriver->GetResourceManager()->GetResource(output, true); bytebuf image;
+  const bool good = observed == 1 && m_FatalError == ResultCode::Succeeded && object && object->m_Type == eResTexture &&
+      ReadTextureSubresource(Unwrap((WrappedMTLTexture *)object), {0,0,0}, image, output) &&
+      image.size() <= budget && save("full-output", image);
+  if(good) ReplayLog(uint32_t(endNumber), eReplay_Full);
+  const bool restored = good && m_FatalError == ResultCode::Succeeded;
+  fprintf(stderr, "Metal diagnostic committed group complete: observed=%u complete=%d restoredByOrdinaryFullReplay=%d; isolated data mediation, not ordinary replay acceptance\n",
+      observed, good, restored);
+  return restored;
+}
+
+bool MetalReplay::ProbeOriginalDraw(ResourceId target, uint32_t eventId, const rdcstr &directory)
+{
+  auto fail = [](const char *reason) { fprintf(stderr, "Metal original draw probe setup failure: %s\n", reason); return false; };
+  const APIEvent *event = GetEvent(eventId);
+  if(!event || event->eventId != eventId || event->chunkIndex >= m_pDriver->GetStructuredFile()->chunks.size())
+    return fail("event");
+  const SDChunk *chunk = m_pDriver->GetStructuredFile()->chunks[event->chunkIndex];
+  const SDObject *field = chunk->FindChild("RenderCommandEncoder");
+  if(!field) return fail("encoder field");
+  const ResourceId encoderId = field->AsResourceId();
+  auto object = m_pDriver->GetResourceManager()->GetResource(encoderId, true);
+  if(!object || object->m_Type != eResRenderCommandEncoder || !InitialiseOutputResources()) return fail("encoder/output resources");
+  auto source = (WrappedMTLRenderCommandEncoder *)object;
+  const bool retainDepth = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_RETAIN_DEPTH") == "1";
+  std::set<ResourceId> depthInputs;
+  // Diagnostic scope only: retain the real attachments and original tests when
+  // Native API state declares no depth/stencil writes. Verify their bytes below;
+  // this is not a shader proof or a condition on ordinary replay eligibility.
+  auto retainedDepthPass = [&](uint32_t draw, const RDMTL::RenderPassDescriptor &pass) {
+    if(!pass.depthAttachment.texture && !pass.stencilAttachment.texture) return true;
+    if(!retainDepth) return false;
+    const APIEvent *use = GetEvent(draw);
+    if(!use || use->chunkIndex >= m_pDriver->GetStructuredFile()->chunks.size()) return false;
+    const auto enc = m_pDriver->GetStructuredFile()->chunks[use->chunkIndex]->FindChild("RenderCommandEncoder");
+    if(!enc) return false;
+    ResourceId state;
+    for(uint32_t i = 1; i < draw; ++i)
+    {
+      const APIEvent *previous = GetEvent(i);
+      if(!previous || previous->chunkIndex >= m_pDriver->GetStructuredFile()->chunks.size()) continue;
+      const auto chunk = m_pDriver->GetStructuredFile()->chunks[previous->chunkIndex];
+      if(MetalChunk(chunk->metadata.chunkID) != MetalChunk::MTLRenderCommandEncoder_setDepthStencilState) continue;
+      const auto encoder = chunk->FindChild("RenderCommandEncoder");
+      const auto field = chunk->FindChild("depthStencilState");
+      if(encoder && field && encoder->AsResourceId() == enc->AsResourceId()) state = field->AsResourceId();
+    }
+    const auto ds = m_DepthStencilStates.find(state);
+    auto keep = [](const RDMTL::StencilDescriptor &stencil) {
+      return !stencil.enabled || !stencil.writeMask ||
+          (stencil.stencilFailureOperation == MTL::StencilOperationKeep &&
+           stencil.depthFailureOperation == MTL::StencilOperationKeep &&
+           stencil.depthStencilPassOperation == MTL::StencilOperationKeep);
+    };
+    if(ds == m_DepthStencilStates.end() || ds->second.depthWriteEnabled ||
+       !keep(ds->second.frontFaceStencil) || !keep(ds->second.backFaceStencil)) return false;
+    auto attachment = [&](const RDMTL::RenderPassAttachmentDescriptor &input) {
+      if(!input.texture) return true;
+      if(input.level || input.slice || input.depthPlane || input.resolveTexture ||
+         input.loadAction != MTL::LoadActionLoad || input.storeAction != MTL::StoreActionStore)
+        return false;
+      depthInputs.insert(GetResID(input.texture)); return true;
+    };
+    fprintf(stderr, "Metal retained original depth: event=%u state=%s depthWrites=0 stencilKeeps=1; original tests/attachments retained\n",
+        draw, ToStr(state).c_str());
+    return attachment(pass.depthAttachment) && attachment(pass.stencilAttachment);
+  };
+  if(!m_pDriver->BeginOverlayReplayPrefix(encoderId)) return fail("begin prefix");
+  ReplayLog(eventId, eReplay_WithoutDraw);
+  m_OverlayNeedsFullReplay = true;
+  if(!m_pDriver->GetReplayRenderCommandEncoder(source))
+  {
+    m_pDriver->FinishOverlayReplayPrefix(encoderId);
+    return fail("prefix encoder context");
+  }
+  EncoderReplayState saved = SaveEncoderState();
+  const bool finished = m_pDriver->FinishOverlayReplayPrefix(encoderId);
+  RestoreEncoderState(saved);
+  fprintf(stderr, "Metal original draw probe setup: finished=%d colors=%zu depth=%d stencil=%d visibility=%d rate=%d array=%llu tile=%llux%llu imageblock=%llu samples=%zu pipeline=%s\n", finished, saved.renderPass.colorAttachments.size(), saved.renderPass.depthAttachment.texture!=NULL, saved.renderPass.stencilAttachment.texture!=NULL, saved.renderPass.visibilityResultBuffer!=NULL, saved.renderPass.rasterizationRateMap!=NULL, saved.renderPass.renderTargetArrayLength, saved.renderPass.tileWidth, saved.renderPass.tileHeight, saved.renderPass.imageblockSampleLength, saved.renderPass.sampleBufferAttachments.size(), ToStr(saved.pipeline.pipelineResourceId).c_str());
+  if(!finished || m_FatalError != ResultCode::Succeeded || saved.renderPass.colorAttachments.empty() ||
+     !retainedDepthPass(eventId, saved.renderPass) ||
+     saved.renderPass.visibilityResultBuffer || saved.renderPass.rasterizationRateMap ||
+     saved.renderPass.renderTargetArrayLength > 1 || saved.renderPass.tileWidth ||
+     saved.renderPass.tileHeight || saved.renderPass.imageblockSampleLength) return fail("prefix/pass shape");
+  const auto &attachment = saved.renderPass.colorAttachments[0];
+  if(!attachment.texture || GetResID(attachment.texture) != target || attachment.level ||
+     attachment.slice || attachment.depthPlane || attachment.resolveTexture) return fail("target attachment identity/subresource");
+  for(size_t i = 1; i < saved.renderPass.colorAttachments.size(); i++)
+    if(saved.renderPass.colorAttachments[i].texture) return fail("multiple targets");
+  MTL::Texture *original = Unwrap(attachment.texture);
+  uint32_t bw = 0, bh = 0, bytes = 0;
+  if(!original || original->textureType() != MTL::TextureType2D || original->sampleCount() != 1 ||
+     original->storageMode() == MTL::StorageModeMemoryless ||
+     !GetTextureDataBlockShape(original->pixelFormat(), bw, bh, bytes) || bw != 1 || bh != 1 ||
+     !original->width() || !original->height() ||
+     original->width() > (128ULL << 20) / bytes / original->height()) return fail("texture layout/budget");
+  auto descriptor = MTL::TextureDescriptor::texture2DDescriptor(original->pixelFormat(),
+      original->width(), original->height(), false);
+  descriptor->setStorageMode(MTL::StorageModePrivate);
+  descriptor->setUsage(MTL::TextureUsage(MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead));
+  auto scratch = NS::TransferPtr(Unwrap(m_pDriver)->newTexture(descriptor));
+  if(!scratch) return fail("scratch creation");
+  auto save = [&](MTL::Texture *texture, const rdcstr &name, bytebuf &data) {
+    if(!ReadTextureSubresource(texture, {0,0,0}, data, texture == original ? target : ResourceId()))
+      return false;
+    const rdcstr path = directory + "/" + name + ".bin";
+    FILE *file = fopen(path.c_str(), "wbx");
+    if(!file) return false;
+    const bool written = fwrite(data.data(), 1, data.size(), file) == data.size();
+    return fclose(file) == 0 && written;
+  };
+  bytebuf before, after, output;
+  if(!save(original, "prefix-before", before)) return fail("prefix readback");
+  const bool readInputPixels = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_READ_INPUTS") == "1";
+  const bool readPrivateBuffers = readInputPixels ||
+      Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_READ_BUFFERS") == "1";
+  std::set<ResourceId> identifiedTextures = depthInputs;
+  std::map<ResourceId, bytebuf> inputPixels;
+  // An opt-in, isolated intervention on one already observed ordinary numeric
+  // field. Never rewrite typed addresses, qualify replay, or retain these bytes
+  // beyond this diagnostic. The whole arena is deliberately not read or frozen.
+  const rdcstr fieldText = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_BUFFER_FIELD");
+  ResourceId fieldBuffer;
+  uint64_t fieldOffset = 0;
+  bytebuf fieldOriginal;
+  if(!fieldText.empty())
+  {
+    unsigned long long number = 0, offset = 0, size = 0;
+    char trailing = 0;
+    if(sscanf(fieldText.c_str(), "%llu:%llu:%llu%c", &number, &offset, &size, &trailing) != 3 ||
+       !number || size != 4 || offset % 4)
+      return fail("diagnostic numeric field scope");
+    memcpy(&fieldBuffer, &number, sizeof(fieldBuffer));
+    fieldOffset = offset;
+    for(const auto &slot : m_pDriver->m_DescriptorSlotShadow)
+      if(slot.first.first == fieldBuffer &&
+         (fieldOffset >= slot.first.second ? fieldOffset - slot.first.second < 24 :
+                                            slot.first.second - fieldOffset < 4))
+        return fail("diagnostic field overlaps typed descriptor");
+  }
+  uint64_t readBytesBudget = 16 * 1024;
+  // Inspect the already identified consumer facts, not every resident object.
+  // No new AIR analysis or recovery qualification is performed. Optional exact
+  // readbacks below are bounded diagnostic observations after prefix completion.
+  // Missing/partial display facts stay unknown and do not reject this draw.
+  for(uint32_t stage : {1U, 2U})
+  {
+    const auto key = make_rdcpair(event->fileOffset, stage);
+    const auto accesses = m_pDriver->m_IRRuntimeDescriptorAccesses.find(key);
+    const auto complete = m_pDriver->m_IRRuntimeDescriptorAccessComplete.find(key);
+    fprintf(stderr, "Metal original draw inputs: stage=%u identified=%zu displayComplete=%d\n",
+        stage, accesses == m_pDriver->m_IRRuntimeDescriptorAccesses.end() ? 0 : accesses->second.size(),
+        complete != m_pDriver->m_IRRuntimeDescriptorAccessComplete.end() && complete->second);
+    if(accesses == m_pDriver->m_IRRuntimeDescriptorAccesses.end()) continue;
+    unsigned count = 0;
+    for(const auto &access : accesses->second)
+    {
+      if(access.pipeline != saved.pipeline.pipelineResourceId || count++ >= 128) continue;
+      ResourceId objectId, table;
+      memcpy(&objectId, &access.object, sizeof(objectId));
+      memcpy(&table, &access.descriptorObject, sizeof(table));
+      fprintf(stderr, "Metal original draw access: stage=%u kind=%u object=%s offset=%llu bytes=%llu table=%s slot=%llu write=%d residencyOnly=%d\n",
+          stage, access.kind, ToStr(objectId).c_str(), access.offset, access.byteSize, ToStr(table).c_str(),
+          access.descriptorOffset, access.write, access.resourceOnly);
+      if(access.kind == 6 && access.byteSize && access.byteSize <= readBytesBudget && !access.write)
+      {
+        readBytesBudget -= access.byteSize;
+        auto object = m_pDriver->GetResourceManager()->GetResource(objectId, true);
+        MTL::Buffer *real = object && object->m_Type == eResBuffer && object->m_Real ?
+            Unwrap((WrappedMTLBuffer *)object) : NULL;
+        bytebuf privateBytes;
+        if(readPrivateBuffers && real && real->storageMode() == MTL::StorageModePrivate &&
+           access.offset <= real->length() && access.byteSize <= real->length() - access.offset)
+          GetBufferData(objectId, access.offset, access.byteSize, privateBytes);
+        const byte *observedBytes = privateBytes.size() == access.byteSize ? privateBytes.data() :
+            real && real->storageMode() == MTL::StorageModeShared && real->contents() &&
+            access.offset <= real->length() && access.byteSize <= real->length() - access.offset ?
+            (const byte *)real->contents() + access.offset : NULL;
+        const bool observed = observedBytes != NULL;
+        fprintf(stderr, "Metal original draw read bytes: stage=%u buffer=%s offset=%llu bytes=%llu observed=%d data=",
+            stage, ToStr(objectId).c_str(), access.offset, access.byteSize, observed);
+        if(observed) for(uint64_t i = 0; i < access.byteSize; i++)
+          fprintf(stderr, "%02x", observedBytes[i]);
+        fprintf(stderr, "\n");
+        if(objectId == fieldBuffer && access.offset == fieldOffset && access.byteSize == 4 &&
+           !access.resourceOnly && observed)
+        {
+          bytebuf value;
+          value.assign(observedBytes, 4);
+          if(!fieldOriginal.empty() && fieldOriginal != value)
+            return fail("diagnostic numeric field changed during observation");
+          fieldOriginal = value;
+        }
+      }
+      // Texture and sampler display facts name table fields; ordinary buffer
+      // facts name the actual allocation and may have no descriptor provenance.
+      uint64_t slotOffset = access.descriptorOffset;
+      if(table == ResourceId() && (access.kind == 3 || access.kind == 5))
+      {
+        table = objectId;
+        if(access.kind == 3 && access.offset < 8) continue;
+        slotOffset = access.kind == 3 ? access.offset - 8 : access.offset;
+      }
+      const auto slot = m_pDriver->m_DescriptorSlotShadow.find({table, slotOffset});
+      if(slot == m_pDriver->m_DescriptorSlotShadow.end()) continue;
+      for(const auto &source : slot->second.sources)
+      {
+        fprintf(stderr, "Metal original draw origin: stage=%u table=%s slot=%llu generation=%llu live=%d gpuExpected=%d field=%u resource=%s memberOffset=%llu\n",
+            stage, ToStr(table).c_str(), slotOffset, slot->second.generation, slot->second.live,
+            slot->second.gpuExpected, source.first, ToStr(source.second.resource).c_str(), source.second.offset);
+        if(access.kind == 3 && !access.write && !access.resourceOnly && source.first == 1)
+          identifiedTextures.insert(source.second.resource);
+      }
+      auto backing = m_pDriver->GetResourceManager()->GetResource(table, true);
+      MTL::Buffer *real = backing && backing->m_Type == eResBuffer && backing->m_Real ?
+          Unwrap((WrappedMTLBuffer *)backing) : NULL;
+      bytebuf relocated;
+      const bool observed = real && real->storageMode() == MTL::StorageModeShared && real->contents() &&
+          slotOffset <= real->length() && 16 <= real->length() - slotOffset &&
+          m_pDriver->PatchDescriptorSlot(slot->second, relocated) && relocated.size() == 24;
+      fprintf(stderr, "Metal original draw identity: stage=%u table=%s slot=%llu observed=%d match16=%d\n",
+          stage, ToStr(table).c_str(), slotOffset, observed,
+          observed && memcmp((const byte *)real->contents() + slotOffset, relocated.data(), 16) == 0);
+    }
+  }
+  const bool pairedStorage = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_PAIRED_STORAGE") == "1";
+  // The destination-context diagnostic observes every Native mip/slice of an
+  // identified readonly image, not only subresource zero. This changes neither
+  // shader bindings nor replay eligibility. Input replacement remains scoped to
+  // the older single-subresource diagnostic below.
+  auto readObservedPixels = [&](MTL::Texture *texture, ResourceId id, bytebuf &pixels,
+                                uint64_t remaining) {
+    pixels.clear();
+    if(!pairedStorage && !retainDepth) return ReadTextureSubresource(texture, {0,0,0}, pixels, id);
+    if(!texture || texture->sampleCount() != 1 || !texture->mipmapLevelCount()) return false;
+    const auto type = texture->textureType();
+    const bool cube = type == MTL::TextureTypeCube || type == MTL::TextureTypeCubeArray;
+    const uint64_t slices = type == MTL::TextureType3D ? 1 : texture->arrayLength();
+    if(!slices || slices > UINT32_MAX / (cube ? 6U : 1U) ||
+       texture->mipmapLevelCount() > UINT32_MAX) return false;
+    const uint32_t count = uint32_t(slices) * (cube ? 6U : 1U);
+    for(uint32_t mip = 0; mip < texture->mipmapLevelCount(); ++mip)
+      for(uint32_t slice = 0; slice < count; ++slice)
+      {
+        bytebuf part;
+        if(!ReadTextureSubresource(texture, {mip,slice,0}, part, id) || part.empty() ||
+           part.size() > remaining - pixels.size()) return false;
+        pixels.append(part);
+      }
+    return !pixels.empty();
+  };
+  if(readInputPixels)
+  {
+    uint64_t pixelBudget = 64 * 1024 * 1024;
+    unsigned ordinal = 0;
+    for(ResourceId id : identifiedTextures)
+    {
+      auto object = m_pDriver->GetResourceManager()->GetResource(id, true);
+      MTL::Texture *texture = object && object->m_Type == eResTexture && object->m_Real ?
+          Unwrap((WrappedMTLTexture *)object) : NULL;
+      if(!texture || texture->sampleCount() != 1 ||
+         (!pairedStorage && !retainDepth && (texture->mipmapLevelCount() != 1 ||
+         (texture->textureType() != MTL::TextureType2D && texture->textureType() != MTL::TextureType3D) ||
+         (texture->textureType() == MTL::TextureType2D && texture->arrayLength() != 1))))
+        return fail("identified pixel input needs a different subresource diagnostic");
+      fprintf(stderr, "Metal original draw input subresources: resource=%s mips=%llu arrayLength=%llu type=%u allSubresources=%d\n",
+          ToStr(id).c_str(), texture->mipmapLevelCount(), texture->arrayLength(),
+          uint32_t(texture->textureType()), pairedStorage || retainDepth);
+      bytebuf pixels;
+      if(!readObservedPixels(texture, id, pixels, pixelBudget) || pixels.size() > pixelBudget)
+        return fail("identified input readback/budget");
+      pixelBudget -= pixels.size();
+      inputPixels[id] = pixels;
+      const rdcstr path = directory + "/input-" + ToStr(id) + ".bin";
+      FILE *file = fopen(path.c_str(), "wbx");
+      if(!file) return fail("input output file");
+      const bool written = fwrite(pixels.data(), 1, pixels.size(), file) == pixels.size();
+      if(fclose(file) || !written) return fail("input output write");
+      fprintf(stderr, "Metal original draw pixel input: ordinal=%u resource=%s format=%u width=%llu height=%llu depth=%llu bytes=%zu path=%s\n",
+          ordinal++, ToStr(id).c_str(), uint32_t(texture->pixelFormat()), texture->width(),
+          texture->height(), texture->depth(), pixels.size(), path.c_str());
+    }
+  }
+  if(retainDepth && !readInputPixels)
+    return fail("retained depth requires actual attachment observations");
+  if(!fieldText.empty())
+  {
+    if(fieldOriginal.size() != 4)
+      return fail("diagnostic field is not an observed ordinary readonly input");
+    FILE *file = fopen((directory + "/numeric-field.bin").c_str(), "wbx");
+    if(!file) return fail("diagnostic numeric field output");
+    const bool written = fwrite(fieldOriginal.data(), 1, 4, file) == 4;
+    if(fclose(file) || !written) return fail("diagnostic numeric field write");
+  }
+  const auto scalarFacts = m_pDriver->m_IRComputeUniformReadContents.find(event->fileOffset);
+  uint64_t scalarBudget = 16 * 1024;
+  if(scalarFacts != m_pDriver->m_IRComputeUniformReadContents.end())
+    for(const auto &fact : scalarFacts->second)
+    {
+      if(fact.second.size() > scalarBudget) continue;
+      scalarBudget -= fact.second.size();
+      auto object = m_pDriver->GetResourceManager()->GetResource(fact.first.first, true);
+      MTL::Buffer *real = object && object->m_Type == eResBuffer && object->m_Real ?
+          Unwrap((WrappedMTLBuffer *)object) : NULL;
+      const bool observed = real && real->storageMode() == MTL::StorageModeShared && real->contents() &&
+          fact.first.second <= real->length() && fact.second.size() <= real->length() - fact.first.second;
+      const byte *current = observed ? (const byte *)real->contents() + fact.first.second : NULL;
+      fprintf(stderr, "Metal original draw scalar: buffer=%s offset=%llu bytes=%zu observed=%d match=%d captured=",
+          ToStr(fact.first.first).c_str(), fact.first.second, fact.second.size(), observed,
+          observed && memcmp(current, fact.second.data(), fact.second.size()) == 0);
+      for(byte value : fact.second) fprintf(stderr, "%02x", value);
+      fprintf(stderr, " actual=");
+      if(current) for(size_t i = 0; i < fact.second.size(); i++) fprintf(stderr, "%02x", current[i]);
+      fprintf(stderr, "\n");
+    }
+  fprintf(stderr, "Metal original draw probe: event=%u encoder=%s pipeline=%s format=%u size=%llux%llu; original Native setters/shaders, retained resources, scratch attachment. Indirect UAV side effects unknown; not a full-UE Native oracle.\n",
+      eventId, ToStr(encoderId).c_str(), ToStr(saved.pipeline.pipelineResourceId).c_str(),
+      uint32_t(original->pixelFormat()), original->width(), original->height());
+  // Optional fixed attachment seed is an isolated scratch-only intervention.
+  // It leaves every original shader resource, object identity and address intact.
+  NS::SharedPtr<MTL::Buffer> fixedSeed;
+  bytebuf fixedSeedBytes;
+  uint64_t fixedSeedPitch = 0;
+  const rdcstr seedFrom = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_TARGET_SEED_FROM");
+  if(!seedFrom.empty())
+  {
+    bytebuf seed; seed.resize(before.size());
+    FILE *file = fopen((seedFrom + "/prefix-before.bin").c_str(), "rb");
+    if(!file) return fail("fixed scratch seed file");
+    const bool valid = fread(seed.data(), 1, seed.size(), file) == seed.size() && fgetc(file) == EOF;
+    fclose(file);
+    if(!valid) return fail("fixed scratch seed size");
+    fixedSeedBytes = seed;
+    const uint64_t row = original->width() * bytes, height = original->height();
+    const uint64_t budget = 128ULL * 1024 * 1024;
+    const uint64_t alignment = RDCMAX<uint64_t>(1,
+        Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(original->pixelFormat()));
+    if(alignment > budget || row > budget - (alignment - 1) || row > budget / height ||
+       seed.size() != row * height) return fail("fixed scratch seed layout");
+    fixedSeedPitch = AlignUp(row, alignment);
+    if(fixedSeedPitch > budget / height) return fail("fixed scratch seed budget");
+    fixedSeed = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(fixedSeedPitch * height, MTL::ResourceStorageModeShared));
+    if(!fixedSeed || !fixedSeed->contents()) return fail("fixed scratch seed staging");
+    for(uint64_t y = 0; y < height; y++)
+      memcpy((byte *)fixedSeed->contents() + y * fixedSeedPitch, seed.data() + y * row, row);
+    fprintf(stderr, "Metal original draw fixed scratch seed: path=%s bytes=%zu; original shader inputs unchanged\n",
+        seedFrom.c_str(), seed.size());
+  }
+  NS::SharedPtr<MTL::Texture> physicalSeed;
+  bool usePhysicalTarget = false;
+  if(pairedStorage)
+  {
+    // Only this diagnostic changes the destination. Keep a GPU copy of the
+    // original target for identical repeat seeds and restoration afterwards.
+    physicalSeed = NS::TransferPtr(Unwrap(m_pDriver)->newTexture(descriptor));
+    auto command = physicalSeed ? m_OutputQueue->commandBuffer() : NULL;
+    auto blit = command ? command->blitCommandEncoder() : NULL;
+    if(!blit) return fail("physical target seed allocation");
+    blit->copyFromTexture(original, 0, 0, MTL::Origin(0,0,0),
+        MTL::Size(original->width(),original->height(),1), physicalSeed.get(), 0, 0,
+        MTL::Origin(0,0,0));
+    blit->endEncoding(); command->commit(); command->waitUntilCompleted();
+    if(command->status() != MTL::CommandBufferStatusCompleted || command->error())
+      return fail("physical target seed completion");
+    fprintf(stderr, "Metal original draw destination footprint: heap=%p offset=%llu allocated=%llu; paired diagnostic only\n",
+        original->heap(), original->heapOffset(), original->allocatedSize());
+  }
+  auto executeDraw = [&](const rdcstr &name) {
+    bool success = true;
+    MTL::Texture *destination = usePhysicalTarget ? original : scratch.get();
+    MTL::CommandBuffer *command = m_OutputQueue->commandBuffer();
+    auto blit = command ? command->blitCommandEncoder() : NULL;
+    if(!blit) return false;
+    if(fixedSeed)
+      blit->copyFromBuffer(fixedSeed.get(), 0, fixedSeedPitch, fixedSeedPitch * original->height(),
+          MTL::Size(original->width(), original->height(), 1), destination, 0, 0,
+          MTL::Origin(0,0,0), MTL::BlitOptionNone);
+    else
+    blit->copyFromTexture(pairedStorage ? physicalSeed.get() : original, 0, 0, MTL::Origin(0,0,0),
+        MTL::Size(original->width(),original->height(),1), destination, 0, 0, MTL::Origin(0,0,0));
+    blit->endEncoding();
+    // Retain original pass metadata, including API counter sampling. Counters
+    // are diagnostic outputs; their repeated writes are not certified immutable
+    // inputs. Only the colour attachment is redirected to the seeded scratch.
+    MTL::RenderPassDescriptor *pass = (MTL::RenderPassDescriptor *)saved.renderPass;
+    auto color = pass->colorAttachments()->object(0);
+    color->setTexture(destination); color->setLoadAction(MTL::LoadActionLoad);
+    color->setStoreAction(MTL::StoreActionStore);
+    auto encoder = command->renderCommandEncoder(pass);
+    pass->release();
+    success = encoder && m_pDriver->ReplayOverlayDraw(eventId, encoder,
+        [](MTL::RenderCommandEncoder *) {}, true);
+    if(encoder) encoder->endEncoding();
+    command->commit(); command->waitUntilCompleted();
+    success &= command->status() == MTL::CommandBufferStatusCompleted;
+    if(success) success = save(destination, name, output);
+    return success;
+  };
+  bool success = true;
+  const rdcstr replacementNumber = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_REPLACE_INPUT");
+  const rdcstr replacementFrom = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_REPLACE_FROM");
+  std::set<ResourceId> replacements;
+  std::map<ResourceId, bytebuf> replacementPixels;
+  if(!replacementNumber.empty())
+  {
+    if(!readInputPixels || replacementFrom.empty())
+      return fail("replacement must be an identified, observed input");
+    if(replacementNumber == "all")
+    {
+      // The isolated upload helper covers ordinary colour subresources. Depth
+      // and stencil remain observed dependencies, with their original content.
+      // This diagnostic subset does not qualify any production API or input.
+      for(ResourceId id : identifiedTextures)
+      {
+        auto object = m_pDriver->GetResourceManager()->GetResource(id, true);
+        auto texture = object && object->m_Type == eResTexture && object->m_Real ?
+            Unwrap((WrappedMTLTexture *)object) : NULL;
+        if(!texture) return fail("identified replacement object");
+        if(MakeResourceFormat(texture->pixelFormat()).compType == CompType::Depth ||
+           texture->pixelFormat() == MTL::PixelFormatStencil8 ||
+           texture->pixelFormat() == MTL::PixelFormatX32_Stencil8)
+        {
+          fprintf(stderr, "Metal original draw mediation observed-only depth/stencil: %s\n",
+                  ToStr(id).c_str());
+          continue;
+        }
+        replacements.insert(id);
+      }
+    }
+    else
+    {
+      const char *cursor = replacementNumber.c_str();
+      while(*cursor)
+      {
+        char *end = NULL;
+        uint64_t number = strtoull(cursor, &end, 10);
+        ResourceId id; memcpy(&id, &number, sizeof(id));
+        if(!number || !end || end == cursor || (*end && *end != ',') ||
+           inputPixels.find(id) == inputPixels.end() || replacements.size() >= 128 ||
+           !replacements.insert(id).second) return fail("replacement identity");
+        cursor = *end ? end + 1 : end;
+      }
+    }
+    if(replacements.empty()) return fail("empty identified input group");
+    for(ResourceId id : replacements)
+    {
+      auto object = m_pDriver->GetResourceManager()->GetResource(id, true);
+      auto texture = object && object->m_Type == eResTexture && object->m_Real ?
+          Unwrap((WrappedMTLTexture *)object) : NULL;
+      uint32_t x = 0, y = 0, z = 0;
+      if(!texture || texture == original ||
+         (texture->textureType() != MTL::TextureType2D &&
+          texture->textureType() != MTL::TextureType2DArray &&
+          texture->textureType() != MTL::TextureTypeCube &&
+          texture->textureType() != MTL::TextureTypeCubeArray &&
+          texture->textureType() != MTL::TextureType3D) ||
+         !GetTextureDataBlockShape(texture->pixelFormat(), x, y, z) || x != 1 || y != 1 ||
+         MakeResourceFormat(texture->pixelFormat()).compType == CompType::Depth ||
+         texture->pixelFormat() == MTL::PixelFormatStencil8 ||
+         texture->pixelFormat() == MTL::PixelFormatX32_Stencil8)
+        return fail("replacement requires an ordinary colour diagnostic input");
+      const rdcstr path = replacementFrom + "/input-" + ToStr(id) + ".bin";
+      FILE *file = fopen(path.c_str(), "rb");
+      if(!file) return fail("replacement input file");
+      auto &pixels = replacementPixels[id]; pixels.resize(inputPixels.at(id).size());
+      const bool valid = fread(pixels.data(), 1, pixels.size(), file) == pixels.size() &&
+                         fgetc(file) == EOF;
+      fclose(file);
+      if(!valid) return fail("replacement size");
+    }
+  }
+  auto uploadInput = [&](ResourceId id, const bytebuf &pixels) {
+    auto inputObject = m_pDriver->GetResourceManager()->GetResource(id, true);
+    auto texture = inputObject && inputObject->m_Type == eResTexture && inputObject->m_Real ?
+        Unwrap((WrappedMTLTexture *)inputObject) : NULL;
+    uint32_t bw = 0, bh = 0, bytes = 0;
+    const uint64_t budget = 64ULL * 1024 * 1024;
+    if(!texture || texture->sampleCount() != 1 || pixels.empty() || pixels.size() > budget ||
+       !GetTextureDataBlockShape(texture->pixelFormat(), bw, bh, bytes) || bw != 1 || bh != 1)
+      return false;
+    const auto type = texture->textureType();
+    const bool volume = type == MTL::TextureType3D;
+    const bool cube = type == MTL::TextureTypeCube || type == MTL::TextureTypeCubeArray;
+    if(!volume && type != MTL::TextureType2D && type != MTL::TextureType2DArray && !cube)
+      return false;
+    const uint64_t slices = volume ? 1 : texture->arrayLength();
+    if(!slices || slices > UINT32_MAX / (cube ? 6U : 1U) ||
+       !texture->mipmapLevelCount() || texture->mipmapLevelCount() > 64) return false;
+    const uint32_t count = uint32_t(slices) * (cube ? 6U : 1U);
+    const uint64_t alignment = RDCMAX<uint64_t>(1,
+        Unwrap(m_pDriver)->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
+    struct Upload { uint32_t mip, slice; uint64_t width, height, depth, row, pitch, offset, size; };
+    rdcarray<Upload> uploads;
+    uint64_t offset = 0;
+    // Match the bounded observation's Native mip/slice order. Validate the
+    // entire payload before touching any original input; retain the same view
+    // and handles, including its actual parent-relative subresource identity.
+    for(uint32_t mip = 0; mip < texture->mipmapLevelCount(); ++mip)
+      for(uint32_t slice = 0; slice < count; ++slice)
+      {
+        Upload u; u.mip = mip; u.slice = slice; u.offset = offset;
+        u.width = RDCMAX(1ULL, uint64_t(texture->width()) >> mip);
+        u.height = RDCMAX(1ULL, uint64_t(texture->height()) >> mip);
+        u.depth = volume ? RDCMAX(1ULL, uint64_t(texture->depth()) >> mip) : 1;
+        if(u.width > budget / bytes || alignment > budget) return false;
+        u.row = u.width * bytes;
+        if(u.row > budget - (alignment - 1) || u.row > budget / u.height / u.depth)
+          return false;
+        u.pitch = AlignUp(u.row, alignment); u.size = u.row * u.height * u.depth;
+        if(u.pitch > budget / u.height / u.depth || offset > pixels.size() ||
+           u.size > pixels.size() - offset || uploads.size() >= budget / sizeof(Upload)) return false;
+        offset += u.size; uploads.push_back(u);
+      }
+    if(offset != pixels.size()) return false;
+    for(const Upload &u : uploads)
+    {
+      auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(u.pitch * u.height * u.depth,
+                                                                MTL::ResourceStorageModeShared));
+      if(!staging || !staging->contents()) return false;
+      for(uint64_t layer = 0; layer < u.depth; ++layer)
+        for(uint64_t line = 0; line < u.height; ++line)
+          memcpy((byte *)staging->contents() + (layer * u.height + line) * u.pitch,
+                 pixels.data() + u.offset + (layer * u.height + line) * u.row, u.row);
+      auto command = m_OutputQueue->commandBuffer();
+      auto blit = command ? command->blitCommandEncoder() : NULL;
+      if(!blit) return false;
+      blit->copyFromBuffer(staging.get(), 0, u.pitch, u.pitch * u.height,
+          MTL::Size(u.width, u.height, u.depth), texture, u.slice, u.mip,
+          MTL::Origin(0,0,0), MTL::BlitOptionNone);
+      blit->endEncoding(); command->commit(); command->waitUntilCompleted();
+      if(command->status() != MTL::CommandBufferStatusCompleted || command->error()) return false;
+    }
+    return true;
+  };
+  bytebuf fieldReplacement;
+  const bool replaceField = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_REPLACE_BUFFER_FIELD") == "1";
+  if(replaceField)
+  {
+    if(fieldOriginal.size() != 4 || replacementFrom.empty())
+      return fail("numeric field replacement requires its observed input");
+    fieldReplacement.resize(4);
+    FILE *file = fopen((replacementFrom + "/numeric-field.bin").c_str(), "rb");
+    if(!file) return fail("numeric field replacement file");
+    const bool valid = fread(fieldReplacement.data(), 1, 4, file) == 4 && fgetc(file) == EOF;
+    fclose(file);
+    if(!valid) return fail("numeric field replacement size");
+  }
+  auto uploadField = [&](const bytebuf &value) {
+    auto object = m_pDriver->GetResourceManager()->GetResource(fieldBuffer, true);
+    auto buffer = object && object->m_Type == eResBuffer && object->m_Real ?
+        Unwrap((WrappedMTLBuffer *)object) : NULL;
+    if(!buffer || value.size() != 4 || fieldOffset > buffer->length() ||
+       value.size() > buffer->length() - fieldOffset) return false;
+    auto staging = NS::TransferPtr(Unwrap(m_pDriver)->newBuffer(value.data(), value.size(),
+                                                              MTL::ResourceStorageModeShared));
+    auto command = staging ? m_OutputQueue->commandBuffer() : NULL;
+    auto blit = command ? command->blitCommandEncoder() : NULL;
+    if(!blit) return false;
+    blit->copyFromBuffer(staging.get(), 0, buffer, fieldOffset, value.size());
+    blit->endEncoding(); command->commit(); command->waitUntilCompleted();
+    bytebuf actual;
+    GetBufferData(fieldBuffer, fieldOffset, value.size(), actual);
+    return command->status() == MTL::CommandBufferStatusCompleted && !command->error() && actual == value;
+  };
+  const rdcstr sequenceText = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_SEQUENCE");
+  if(!sequenceText.empty())
+  {
+    if(replaceField) return fail("numeric field intervention is isolated to one Native draw");
+    // Retained Native API sequence, with an explicitly observed boundary.
+    // It is an isolated diagnostic: never a replacement for ordinary replay.
+    rdcarray<uint32_t> events;
+    const char *cursor = sequenceText.c_str();
+    while(*cursor)
+    {
+      char *end = NULL; const unsigned long number = strtoul(cursor, &end, 10);
+      if(!number || number > UINT32_MAX || !end || end == cursor ||
+         (*end && *end != ',') || events.size() >= 8 ||
+         (!events.empty() && events.back() >= number)) return fail("sequence event list");
+      events.push_back(uint32_t(number)); cursor = *end ? end + 1 : end;
+    }
+    if(!readInputPixels || events.size() < 2 || events.front() != eventId)
+      return fail("sequence boundary/scope");
+    const auto lastEvent = GetEvent(events.back());
+    if(!lastEvent || lastEvent->chunkIndex >= m_pDriver->GetStructuredFile()->chunks.size())
+      return fail("sequence final event");
+    const auto lastField = m_pDriver->GetStructuredFile()->chunks[lastEvent->chunkIndex]->FindChild("RenderCommandEncoder");
+    if(!lastField) return fail("sequence final encoder");
+    const ResourceId lastEncoder = lastField->AsResourceId();
+    if(!m_pDriver->BeginOverlayReplayPrefix(lastEncoder)) return fail("sequence context prefix");
+    ReplayLog(events.back(), eReplay_WithoutDraw);
+    const auto context = SaveEncoderState();
+    const bool ended = m_pDriver->FinishOverlayReplayPrefix(lastEncoder);
+    RestoreEncoderState(context);
+    if(!ended || m_FatalError != ResultCode::Succeeded) return fail("sequence prefix completion");
+    struct Step { uint32_t event; ResourceId owner, target; RDMTL::RenderPassDescriptor pass; };
+    rdcarray<Step> steps;
+    std::map<ResourceId, bytebuf> originalTargets, seeds;
+    uint64_t remaining = 64ULL * 1024 * 1024;
+    size_t previousSubmit = 0; bool firstSubmit = true;
+    for(uint32_t draw : events)
+    {
+      Step step; step.event = draw;
+      if(!m_pDriver->ReadOverlayRenderPass(draw, step.owner, step.pass) ||
+         step.pass.colorAttachments.size() != 1 || !retainedDepthPass(draw, step.pass) ||
+         step.pass.visibilityResultBuffer ||
+         step.pass.rasterizationRateMap || step.pass.renderTargetArrayLength > 1 ||
+         step.pass.tileWidth || step.pass.tileHeight || step.pass.imageblockSampleLength)
+        return fail("sequence original pass scope");
+      const auto &color = step.pass.colorAttachments[0];
+      auto native = color.texture ? Unwrap(color.texture) : NULL;
+      uint32_t x = 0, y = 0, z = 0;
+      if(!native || color.level || color.slice || color.depthPlane || color.resolveTexture ||
+         color.storeAction != MTL::StoreActionStore ||
+         native->textureType() != MTL::TextureType2D || native->sampleCount() != 1 ||
+         !GetTextureDataBlockShape(native->pixelFormat(), x, y, z) || x != 1 || y != 1)
+        return fail("sequence defined target");
+      step.target = GetResID(color.texture);
+      const auto &order = m_pDriver->GetReplaySubmissionOrder();
+      auto submitted = std::find(order.begin(), order.end(), step.owner);
+      if(submitted == order.end()) return fail("sequence owner submission");
+      const size_t position = submitted - order.begin();
+      if(!firstSubmit && position < previousSubmit) return fail("sequence dependency order");
+      firstSubmit = false; previousSubmit = position;
+      if(!originalTargets.count(step.target))
+      {
+        bytebuf pixels;
+        if(!ReadTextureSubresource(native, {0,0,0}, pixels, step.target) ||
+           pixels.empty() || pixels.size() > remaining) return fail("sequence target budget");
+        remaining -= pixels.size(); originalTargets[step.target] = pixels;
+        // First target seed and identified input versions came from before the
+        // first draw. Other targets retain the completed context prefix seed.
+        auto input = inputPixels.find(step.target);
+        seeds[step.target] = step.target == target ? before :
+            input != inputPixels.end() ? input->second : pixels;
+        fprintf(stderr, "Metal retained sequence seed: target=%s bytes=%zu source=%s\n",
+            ToStr(step.target).c_str(), seeds[step.target].size(),
+            step.target == target ? "first-target-before" :
+            input != inputPixels.end() ? "first-identified-input" : "last-context-prefix");
+      }
+      fprintf(stderr, "Metal retained sequence step: event=%u owner=%s target=%s submit=%zu\n",
+          draw, ToStr(step.owner).c_str(), ToStr(step.target).c_str(), position);
+      steps.push_back(step);
+    }
+    // Check the identified boundary, rather than assuming every resident image
+    // is an input or that a later prefix retains the earlier version. These
+    // observations remain diagnostic facts, never replay admission checks.
+    std::map<ResourceId, bytebuf> fixedOtherInputs;
+    for(const auto &input : inputPixels)
+    {
+      if(seeds.count(input.first)) continue;
+      auto object = m_pDriver->GetResourceManager()->GetResource(input.first, true);
+      bytebuf pixels;
+      if(!object || object->m_Type != eResTexture || !object->m_Real ||
+         !readObservedPixels(Unwrap((WrappedMTLTexture *)object), input.first, pixels, 64ULL * 1024 * 1024))
+        return fail("sequence identified boundary observation");
+      fprintf(stderr, "Metal retained sequence boundary: input=%s bytes=%zu firstVersionEqual=%d\n",
+          ToStr(input.first).c_str(), pixels.size(), pixels == input.second);
+      if(retainDepth && pixels != input.second)
+        return fail("retained depth sequence input version changed between prefixes");
+      fixedOtherInputs[input.first] = std::move(pixels);
+    }
+    // Defined submission order is retained; the paired split/wait mode changes
+    // only the diagnostic command boundaries, with identical boundary bytes.
+    const rdcstr splitMode = Process::GetEnvVariable("RENDERDOC_METAL_DIAG_ORIGINAL_DRAW_SEQUENCE_SPLIT");
+    const bool paired = splitMode == "paired";
+    const bool mediating = !replacements.empty();
+    // A Load attachment is an execution input too. Isolate its original
+    // Native sequence seed from ordinary readonly texture intervention; the
+    // former scratch-only seed option must not silently imply this proof.
+    const bool seedMediating = !fixedSeedBytes.empty();
+    if(seedMediating && (mediating || paired))
+      return fail("one sequence seed/submission/input intervention at a time");
+    if(seedMediating && fixedSeedBytes.size() != seeds.at(target).size())
+      return fail("sequence first attachment seed size");
+    if(mediating && paired) return fail("one sequence intervention at a time");
+    for(ResourceId id : replacements)
+      if(!seeds.count(id) || !inputPixels.count(id))
+        return fail("sequence replacement must be an identified boundary target");
+    bool sequenceOK = true;
+    for(unsigned repeat = 0; repeat < ((mediating || seedMediating) ? 9U : paired ? 6U : 3U) && sequenceOK; ++repeat)
+    {
+      const bool split = splitMode == "1" || (paired && repeat >= 3);
+      const bool intervene = (mediating || seedMediating) && repeat >= 3 && repeat < 6;
+      fprintf(stderr, "Metal retained sequence run: repeat=%u split=%d paired=%d phase=%s\n",
+          repeat, split, paired, intervene ? "boundary-intervention" :
+          (mediating || seedMediating) && repeat >= 6 ? "boundary-restored" : "boundary-natural");
+      auto executionSeed = [&](ResourceId id) -> const bytebuf & {
+        if(intervene && seedMediating && id == target) return fixedSeedBytes;
+        if(intervene && replacements.count(id)) return replacementPixels.at(id);
+        return seeds.at(id);
+      };
+      for(const auto &seed : seeds)
+        if(sequenceOK) sequenceOK = uploadInput(seed.first, executionSeed(seed.first));
+      for(const auto &seed : seeds)
+        if(sequenceOK)
+        {
+          auto object = m_pDriver->GetResourceManager()->GetResource(seed.first, true);
+          bytebuf observed;
+          sequenceOK = object && object->m_Type == eResTexture && object->m_Real &&
+              ReadTextureSubresource(Unwrap((WrappedMTLTexture *)object), {0,0,0}, observed, seed.first) &&
+              observed == executionSeed(seed.first);
+        }
+      MTL::CommandBuffer *command = NULL; ResourceId owner;
+      auto complete = [&]() {
+        if(!command) return true;
+        command->commit(); command->waitUntilCompleted();
+        const bool ok = command->status() == MTL::CommandBufferStatusCompleted && !command->error();
+        command = NULL; return ok;
+      };
+      for(Step &step : steps)
+      {
+        if(!sequenceOK) break;
+        if(command && (split || owner != step.owner)) sequenceOK = complete();
+        if(!sequenceOK) break;
+        if(!command) { command = m_OutputQueue->commandBuffer(); owner = step.owner; }
+        MTL::RenderPassDescriptor *pass = (MTL::RenderPassDescriptor *)step.pass;
+        auto encoder = command ? command->renderCommandEncoder(pass) : NULL;
+        pass->release();
+        sequenceOK = encoder && m_pDriver->ReplayOverlayDraw(step.event, encoder,
+            [](MTL::RenderCommandEncoder *) {}, true);
+        if(encoder) encoder->endEncoding();
+      }
+      sequenceOK = complete() && sequenceOK;
+      for(const auto &input : fixedOtherInputs)
+      {
+        auto object = m_pDriver->GetResourceManager()->GetResource(input.first, true);
+        bytebuf pixels;
+        const bool unchanged = object && object->m_Type == eResTexture && object->m_Real &&
+            readObservedPixels(Unwrap((WrappedMTLTexture *)object), input.first, pixels, 64ULL * 1024 * 1024) &&
+            pixels == input.second;
+        fprintf(stderr, "Metal retained sequence boundary after: repeat=%u input=%s unchanged=%d\n",
+            repeat, ToStr(input.first).c_str(), unchanged);
+        sequenceOK = unchanged && sequenceOK;
+      }
+      if(sequenceOK)
+      {
+        auto object = m_pDriver->GetResourceManager()->GetResource(steps.back().target, true);
+        bytebuf pixels;
+        const rdcstr name = StringFormat::Fmt("sequence-final-%u", repeat);
+        sequenceOK = object && object->m_Type == eResTexture && object->m_Real &&
+            save(Unwrap((WrappedMTLTexture *)object), name, pixels);
+      }
+    }
+    bool restored = true;
+    for(const auto &entry : originalTargets) restored = uploadInput(entry.first, entry.second) && restored;
+    for(const auto &entry : originalTargets)
+    {
+      auto object = m_pDriver->GetResourceManager()->GetResource(entry.first, true); bytebuf pixels;
+      restored = object && object->m_Type == eResTexture && object->m_Real &&
+          ReadTextureSubresource(Unwrap((WrappedMTLTexture *)object), {0,0,0}, pixels, entry.first) &&
+          pixels == entry.second && restored;
+    }
+    RestoreEncoderState(context);
+    fprintf(stderr, "Metal retained sequence: completed=%d mode=%s targetsRestored=%d; identified boundary textures only, other input/side-effect completeness unknown; not full UE acceptance\n",
+        sequenceOK, splitMode.c_str(), restored);
+    return sequenceOK && restored;
+  }
+  auto verifyInputs = [&](bool replaced) {
+    for(const auto &entry : inputPixels)
+    {
+      auto object = m_pDriver->GetResourceManager()->GetResource(entry.first, true);
+      auto texture = object && object->m_Type == eResTexture ? Unwrap((WrappedMTLTexture *)object) : NULL;
+      bytebuf actual;
+      const bytebuf &expected = replaced && replacements.count(entry.first) ?
+          replacementPixels.at(entry.first) : entry.second;
+      if(!texture || !readObservedPixels(texture, entry.first, actual, 64ULL * 1024 * 1024) ||
+         actual != expected)
+        return false;
+    }
+    return true;
+  };
+  if(pairedStorage)
+  {
+    if(!readInputPixels || !replacements.empty() || replaceField || !sequenceText.empty())
+      return fail("one physical-storage intervention with observed inputs only");
+    bool stableInputs = true;
+    // Alternate the destination and reverse the pair order, with equal Native
+    // seed/counter/readback work. No source pixels or shader expressions change.
+    for(unsigned repeat = 0; repeat < 6 && success; repeat++)
+    {
+      usePhysicalTarget = repeat == 1 || repeat == 2 || repeat == 5;
+      success = executeDraw(StringFormat::Fmt("%s-%u",
+          usePhysicalTarget ? "physical" : "independent", repeat));
+      const bool unchanged = verifyInputs(false);
+      stableInputs = unchanged && stableInputs;
+      fprintf(stderr, "Metal original draw paired storage: repeat=%u physical=%d completed=%d observedInputsUnchanged=%d\n",
+          repeat, usePhysicalTarget, success, unchanged);
+    }
+    auto command = m_OutputQueue->commandBuffer();
+    auto blit = command ? command->blitCommandEncoder() : NULL;
+    bool restored = blit != NULL;
+    if(blit)
+    {
+      blit->copyFromTexture(physicalSeed.get(), 0, 0, MTL::Origin(0,0,0),
+          MTL::Size(original->width(),original->height(),1), original, 0, 0, MTL::Origin(0,0,0));
+      blit->endEncoding(); command->commit(); command->waitUntilCompleted();
+      bytebuf actual;
+      restored = command->status() == MTL::CommandBufferStatusCompleted && !command->error() &&
+          ReadTextureSubresource(original, {0,0,0}, actual, target) && actual == before;
+    }
+    RestoreEncoderState(saved);
+    fprintf(stderr, "Metal original draw paired storage summary: completed=%d restored=%d observedInputsUnchanged=%d; input completeness unknown, not full Native acceptance\n",
+        success, restored, stableInputs);
+    return success && restored;
+  }
+  if(!replacements.empty() || replaceField)
+  {
+    success = executeDraw("natural");
+    // Isolated causal intervention only. Keep the same Native shader, object
+    // identities and addresses; change only this identified dependency group.
+    // Restore every member even when a partial upload or an alias check fails.
+    // These outputs never certify ordinary replay or full-UE acceptance.
+    for(ResourceId id : replacements)
+      if(success) success = uploadInput(id, replacementPixels.at(id));
+    if(success) success = verifyInputs(true);
+    // Compare the field's marginal effect in this same prefix and texture state,
+    // rather than inferring causality from another replay's difference count.
+    if(success && replaceField) success = executeDraw("texture-only");
+    if(success && replaceField) success = uploadField(fieldReplacement);
+    for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+      success = executeDraw(StringFormat::Fmt("draw-%u", repeat));
+    bool restored = true;
+    if(replaceField)
+    {
+      restored = uploadField(fieldOriginal);
+      if(success && restored) success = executeDraw("field-restored");
+    }
+    for(ResourceId id : replacements)
+      restored = uploadInput(id, inputPixels.at(id)) && restored;
+    restored = verifyInputs(false) && restored;
+    fprintf(stderr, "Metal original draw mediation: inputs=%zu all identified textures restored=%d\n",
+        replacements.size(), restored);
+    success = success && restored;
+    if(success) success = executeDraw("restored");
+  }
+  else for(unsigned repeat = 0; repeat < 3 && success; repeat++)
+    success = executeDraw(StringFormat::Fmt("draw-%u", repeat));
+  if(success) success = save(original, "prefix-after", after) && before == after;
+  RestoreEncoderState(saved);
+  fprintf(stderr, "Metal original draw probe: %s; original attachment unchanged=%d, prefix resource/UAV inputs not certified immutable\n", success ? "COMPLETED" : "FAIL", before == after);
+  return success;
 }
 
 bool MetalReplay::IsRenderOutput(ResourceId id)
@@ -5769,6 +9782,22 @@ bool MetalReplay::ReadTextureSubresource(MTL::Texture *texture, const Subresourc
   const uint64_t width = RDCMAX(1ULL, uint64_t(texture->width()) >> sub.mip);
   const uint64_t height = RDCMAX(1ULL, uint64_t(texture->height()) >> sub.mip);
   const uint64_t depth = volume ? RDCMAX(1ULL, uint64_t(texture->depth()) >> sub.mip) : 1;
+  // Validate the selected subresource using the same logical API layout as
+  // creation and initial restoration. A wide row is not an 8192-square copy.
+  RDMTL::TextureDescriptor descriptor;
+  descriptor.textureType = volume ? MTL::TextureType3D : MTL::TextureType2D;
+  descriptor.pixelFormat = texture->pixelFormat();
+  descriptor.width = width;
+  descriptor.height = height;
+  descriptor.depth = depth;
+  descriptor.arrayLength = 1;
+  descriptor.mipmapLevelCount = 1;
+  descriptor.sampleCount = 1;
+  descriptor.storageMode = texture->storageMode();
+  uint64_t logicalSize = 0;
+  if(!MetalTextureReplayLayout(descriptor, logicalSize))
+    return false;
+  const uint64_t budget = 128ULL * 1024 * 1024;
   const bool compressed = blockWidth > 1 || blockHeight > 1;
   const bool depthFormat = depthStencil || texture->pixelFormat() == MTL::PixelFormatDepth16Unorm ||
                            texture->pixelFormat() == MTL::PixelFormatDepth32Float;
@@ -5776,11 +9805,20 @@ bool MetalReplay::ReadTextureSubresource(MTL::Texture *texture, const Subresourc
   const uint64_t tightRowPitch = ((width + blockWidth - 1) / blockWidth) * blockBytes;
   const uint64_t alignment = depthFormat ? 256 : compressed ? 1 : RDCMAX<uint64_t>(
       1, device->minimumLinearTextureAlignmentForPixelFormat(texture->pixelFormat()));
+  if(alignment > budget || tightRowPitch > budget - (alignment - 1))
+    return false;
   const uint64_t rowPitch = AlignUp(tightRowPitch, alignment);
+  if(rowPitch > budget / rows || rowPitch * rows > budget / depth)
+    return false;
   const uint64_t depthSize = rowPitch * rows * depth;
   const uint64_t stencilRowPitch = depthStencil ? AlignUp(width, alignment) : 0;
+  if(depthStencil && stencilRowPitch > (budget - depthSize) / height)
+    return false;
   const uint64_t bufferSize = depthSize + stencilRowPitch * height;
-  if(width > 8192 || height > 8192 || depth > 256 || bufferSize > 128ULL * 1024 * 1024)
+  // The public D32S8 representation includes padding; budget it independently
+  // of the tightly packed capture planes and the native staging alignment.
+  const uint64_t outputRowPitch = depthStencil ? width * 8 : tightRowPitch;
+  if(outputRowPitch > budget / rows || outputRowPitch * rows > budget / depth)
   {
     RDCERR("Metal texture readback exceeds the validated subresource budget");
     return false;
@@ -5828,7 +9866,6 @@ bool MetalReplay::ReadTextureSubresource(MTL::Texture *texture, const Subresourc
   }
 
   // RenderDoc's D32S8 representation is eight bytes: float depth, uint8 stencil, three padding.
-  const uint64_t outputRowPitch = depthStencil ? width * 8 : tightRowPitch;
   data.resize(size_t(outputRowPitch * rows * depth));
   const byte *src = (const byte *)readback->contents();
   for(uint64_t z = 0; z < depth; z++)
