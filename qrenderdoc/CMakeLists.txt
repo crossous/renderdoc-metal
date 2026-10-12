@@ -95,6 +95,9 @@ if(APPLE)
     if(ENABLE_QRENDERDOC AND ENABLE_METAL AND RELEASE_MODE AND NOT EXISTS "${METAL_SHADER_TOOLS_ROOT}/manifest.json")
         message(FATAL_ERROR "Metal releases require bundled processors. Run util/buildscripts/scripts/build_metal_shader_tools_macos.sh and set METAL_SHADER_TOOLS_ROOT.")
     endif()
+    if(RELEASE_MODE)
+        string(APPEND QMAKE_CXXFLAGS " -ffile-prefix-map=${CMAKE_SOURCE_DIR}=. -ffile-prefix-map=${CMAKE_BINARY_DIR}=build")
+    endif()
     set(QMAKE_RPATHDIR "@executable_path/../lib")
     add_custom_command(OUTPUT RenderDoc.icns
         COMMAND echo Creating OS X Icon

@@ -485,6 +485,12 @@ elseif(UNIX)
     endif()
 endif()
 
+# Keep private checkout/build paths out of macOS Release diagnostics and debug records.
+if(APPLE AND RELEASE_MODE)
+    add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+                        "-ffile-prefix-map=${CMAKE_BINARY_DIR}=build")
+endif()
+
 add_subdirectory(renderdoc)
 
 # these variables are handled within the CMakeLists.txt in qrenderdoc,
