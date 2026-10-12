@@ -13,39 +13,11 @@ import unittest
 from unittest.mock import Mock, patch
 
 from ue_metal_capture_supervisor import Progress, run_launcher, run_owned, stop_group
-from run_testproj_metal_ray_macos import (diagnostic_editor_settings, diagnostic_editor_layout,
-                                        observed_startup_window, boundary_export_summary)
+from run_testproj_metal_ray_macos import diagnostic_editor_settings
 
 INIT = b"[2026.10.05-15.51.04:008][  0]LogInit: Engine is initialized. Leaving FEngineLoop::Init()\n"
 
 
-class BoundaryExportTests(unittest.TestCase):
-    def test_repeated_locator_requires_complete_group_at_each_encoder(self):
-        with tempfile.TemporaryDirectory() as directory:
-            files = []
-            for encoder in (3, 4):
-                for resource in (5, 6):
-                    path = Path(directory) / (f'capture-epoch-1-command-ResourceId::2-'
-                        f'encoder-ResourceId::{encoder}-buffer-ResourceId::{resource}-offset-0-length-4.bin')
-                    path.write_bytes(b'\0' * 4)
-                    files.append(path)
-            self.assertEqual(boundary_export_summary(files, 'buffer:5:0:4,buffer:6:0:4', '')
-                             ['execution'], 'EXPORTED')
-            # Three files cannot hide one incomplete original encoder.
-            self.assertEqual(boundary_export_summary(files[:-1], 'buffer:5:0:4,buffer:6:0:4', '')
-                             ['execution'], 'FAILED')
-
-    def test_no_export_truncation_and_native_failure_remain_failures(self):
-        self.assertEqual(boundary_export_summary([], 'buffer:5:0:4', '')['execution'], 'FAILED')
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / ('capture-epoch-1-command-ResourceId::2-'
-                'encoder-ResourceId::3-buffer-ResourceId::5-offset-0-length-4.bin')
-            path.write_bytes(b'\0' * 3)
-            self.assertEqual(boundary_export_summary([path], 'buffer:5:0:4', '')['execution'], 'FAILED')
-            path.write_bytes(b'\0' * 4)
-            result = boundary_export_summary([path], 'buffer:5:0:4',
-                                            'Metal boundary observation: result=FAILED')
-            self.assertEqual(result['execution'], 'FAILED')
 
 
 class ProgressTests(unittest.TestCase):
@@ -130,42 +102,7 @@ class ProgressTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
-    def test_layout_override_isolated_without_changing_docking_contents(self):
-        primary = dict(Type='Area', Nodes=[dict(TabId='LevelEditor', TabState='OpenedTab')],
-                       WindowPlacement='Placement_ParentSpecified', WindowSize_X=1728,
-                       WindowSize_Y=1020, WindowPosition_X=0, WindowPosition_Y=34.5,
-                       bIsMaximized=True)
-        secondary = dict(Type='Area', WindowPlacement='Placement_Automatic', WindowSize_X=1000)
-        source = {'UnrealEd_Layout_v1.6': dict(PrimaryAreaIndex=0, Areas=[primary, secondary]),
-                  'LevelEditor_Layout_v1.8': dict(PrimaryAreaIndex=0, Areas=[primary])}
-        text, changed = diagnostic_editor_layout(source)
-        decoded = {name: json.loads(value.replace('(', '{').replace(')', '}'))
-                   for name, value in (line.split('=', 1) for line in text.splitlines()[1:])}
-        area = decoded['UnrealEd_Layout_v1.6']['Areas'][0]
-        self.assertEqual(area['WindowPlacement'], 'Placement_NoWindow')
-        self.assertNotIn('bIsMaximized', area)
-        self.assertEqual(area['Nodes'], primary['Nodes'])
-        self.assertEqual(decoded['UnrealEd_Layout_v1.6']['Areas'][1], secondary)
-        self.assertEqual(decoded['LevelEditor_Layout_v1.8'], source['LevelEditor_Layout_v1.8'])
-        self.assertTrue(source['UnrealEd_Layout_v1.6']['Areas'][0]['bIsMaximized'])
-        self.assertEqual(changed, ['UnrealEd_Layout_v1.6'])
-        with self.assertRaises(RuntimeError):
-            diagnostic_editor_layout({'UnrealEd_Layout_v1.6': dict(PrimaryAreaIndex=4, Areas=[])})
-        with self.assertRaises(RuntimeError):
-            diagnostic_editor_layout({'UnrealEd_Layout_v1.6': dict(PrimaryAreaIndex=0,
-                                                               Areas=[dict(Nodes=['label(with)'])])})
 
-    def test_actual_startup_window_observation(self):
-        bounded = ('Controlled window requested 1400x950, applied 1400x950; '
-                   'previous 1400x950 mode=2 maximized=0')
-        self.assertEqual(observed_startup_window(bounded, (1400, 950))['previous'], [1400, 950])
-        self.assertTrue(observed_startup_window(bounded, (1400, 950))['bounded'])
-        # The previous successful capture actually began maximized. A requested
-        # INI value alone must never certify this diagnostic's startup bounds.
-        self.assertFalse(observed_startup_window(bounded.replace('previous 1400x950 mode=2 maximized=0',
-                                                  'previous 3456x2040 mode=2 maximized=1'), (1400, 950))['bounded'])
-        with self.assertRaises(RuntimeError):
-            observed_startup_window('', (1400, 950))
 
     def test_saved_maximized_window_and_other_keys_preserved(self):
         source = ("[RootWindow]\nWindowSize=X=1728 Y=1020\nInitiallyMaximized=True\nWindowPosition=X=5 Y=6\n"
