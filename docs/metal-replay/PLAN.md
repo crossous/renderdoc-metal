@@ -1,5 +1,10 @@
-# Metal stage release — 2026-10-13
+# 当前里程碑（metal.3）
 
-Stage delivery closed. Next: fixed UE anchor, necessary producer physical/input/submission restoration transition and real error-preserving closure. Do not repeat closed local hypotheses or mistake new support/parse coverage for whole-frame causal progress. Keep original time/RSS/Native budgets and serialized GPU work.
+| 项目 | 结论与下一步 |
+| --- | --- |
+| 冻结范围 | 仅合法 Native 线程组误拒修复及相关测试；诊断/未完试验排除并保留。 |
+| 阶段交付 | 最终源码重建、签名 bundle 回归/GUI/性能及远端标签附件核对；详证见发布记录。 |
+| UE 主锚点 | 完整差异未闭合、最早恢复违规UNKNOWN，不以数量变化宣称改善。 |
+| 下一阶段 | 固定1cb8/实际3fed，追真实 material/list producer、physical 版本及原提交；不再发布新实验。 |
 
-[Final release record](RELEASE_2026-10-13.md) · [Release](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
+[唯一发布详证](RELEASE_METAL_3_2026-10-13.md)。原串行锁、时间/RSS与故障保护保持。整体适配INCOMPLETE。

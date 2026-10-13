@@ -6,7 +6,7 @@
 <h1 align="center">RenderDoc Metal</h1>
 <p align="center"><strong>在 macOS 上捕获 Metal 帧，检查图形调用与资源。</strong></p>
 <p align="center">
-  <a href="https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2"><img src="https://img.shields.io/badge/download-macOS_arm64-3bb779" alt="下载 macOS arm64 应用"></a>
+  <a href="https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.3"><img src="https://img.shields.io/badge/download-macOS_arm64-3bb779" alt="下载 macOS arm64 应用"></a>
   <img src="https://img.shields.io/badge/API-Metal-555555" alt="Metal API">
   <img src="https://img.shields.io/badge/status-development_preview-d99a29" alt="开发预览">
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-4279bf" alt="MIT 许可证"></a>
@@ -27,7 +27,7 @@
 | --- | --- |
 | **`metal-replay-v1.46`** | 默认分支，持续开发 Metal 后端、测试与 macOS 集成。 |
 | `codex/ue58-safe-checkpoint` | 较早的 UE 集成检查点，保留作历史参考。 |
-| **`v1.46-metal.2`** | 优化构建的 macOS arm64 Release 应用，按开发预览版发布。 |
+| **`v1.46-metal.3`** | 优化构建的 macOS arm64 Release 应用，按开发预览版发布。 |
 
 ## 实际界面
 
@@ -44,11 +44,11 @@
 
 </details>
 
-> **当前验收状态：** metal.2 通过相关 API/compute RT、事件/EID0、此前匹配的 UE、GUI 与运行时检查。固定较大 UE capture 与同帧 Native 的完整图像比较仍失败。本次是阶段预览，不代表完整 UE/Lumen 光追回放已正确。详见 [发布证据](docs/metal-replay/RELEASE_2026-10-13.md)。
+> **当前验收状态：** metal.3 通过相关 API/compute RT、事件/EID0、此前匹配的 UE、GUI 与运行时检查。固定较大 UE capture 与同帧 Native 的完整图像比较仍失败。本次是阶段预览，不代表完整 UE/Lumen 光追回放已正确。详见 [发布证据](docs/metal-replay/RELEASE_METAL_3_2026-10-13.md)。
 
 ## 下载应用
 
-**[下载 Apple Silicon 版 RenderDocMetal.app](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.2/RenderDocMetal-v1.46-metal.2-macos-arm64.zip)** · [版本说明与校验值](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
+**[下载 Apple Silicon 版 RenderDocMetal.app](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.3/RenderDocMetal-v1.46-metal.3-macos-arm64.zip)** · [版本说明与校验值](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.3)
 
 1. 解压 ZIP，将 **`RenderDocMetal.app`** 移到 `/Applications`。
 2. 打开应用。后端、命令行工具、Qt、Python 与固定版本 shader tools 均已打包，**运行不需要 Homebrew**。
@@ -74,7 +74,7 @@ open -n "/Applications/RenderDocMetal.app" --args "/path/to/UE-Lumen-Nanite-VSM-
 | 虚拟阴影贴图 | 搜索 **`VirtualShadow`** 或 **`Shadow`**，查看相应 draw/dispatch 与纹理。 |
 | 事件往返 | 在前后事件之间切换，再返回帧末，检查资源内容与绑定。自动化 EID 0 测试另有记录。 |
 
-此前 Debug 构建首次加载这份较大截帧约需三分钟；新 Release 的固定可比 capture 加载测量见 [阶段记录](docs/metal-replay/RELEASE_2026-10-13.md)，该测量不冒充本旧 demo 的耗时。这是 **UI 手工验收样例**，不是像素完全一致的认证结果。场景、比较方式与 SHA256 检查见 [样例说明](util/test/metal/captures/ue-lumen-nanite-vsm-720p/README.md)。
+此前 Debug 构建首次加载这份较大截帧约需三分钟；新 Release 的固定可比 capture 加载测量见 [阶段记录](docs/metal-replay/RELEASE_METAL_3_2026-10-13.md)，该测量不冒充本旧 demo 的耗时。这是 **UI 手工验收样例**，不是像素完全一致的认证结果。场景、比较方式与 SHA256 检查见 [样例说明](util/test/metal/captures/ue-lumen-nanite-vsm-720p/README.md)。
 
 ## Metal 图形能力
 
@@ -126,7 +126,7 @@ bash util/buildscripts/scripts/build_metal_dev_macos.sh
 bash util/buildscripts/scripts/test_metal_ray_basics_macos.sh
 ```
 
-构建配置、哈希和真实测试范围见 [Metal 开发文档](docs/metal-replay/README.md)与 [Release 记录](docs/metal-replay/RELEASE_2026-10-13.md)。构建成功、GPU 执行完成、输出比较、整体验收分别记录，历史版本通过不能直接计为新二进制通过。
+构建配置、哈希和真实测试范围见 [Metal 开发文档](docs/metal-replay/README.md)与 [Release 记录](docs/metal-replay/RELEASE_METAL_3_2026-10-13.md)。构建成功、GPU 执行完成、输出比较、整体验收分别记录，历史版本通过不能直接计为新二进制通过。
 
 ## 致谢与许可证
 

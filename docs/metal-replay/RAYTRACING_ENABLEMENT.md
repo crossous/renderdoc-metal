@@ -1,3 +1,5 @@
+2026-10-13 metal.3：合法 Native 线程组误拒的窄范围阶段交付，最终产物验收/性能/已知限制见[发布记录](RELEASE_METAL_3_2026-10-13.md)。不扩大能力声明；完整 UE 差异仍未解决。以下为各原候选的历史证据，不继承为新产物通过。
+
 2026-10-08：对应 compute RT 开启验收已完成。当前 backend/bundle `f1ba1862`，`supportsRaytracing` 跟随 Native 设备，公开路径无需 probe；`supportsRaytracingFromRender` 保持false。开启后官方Metal2、真实UE/Lumen整帧三次EID0与同帧Native零差、query事件/绑定、独立合法变体、相关生命周期/frame及完整转换矩阵均在同候选实跑通过。GPU COMPLETED / 输出 MATCH（UE EXACT_MATCH）/ overall PASS仅对应记录的compute/API/预算及本机设备范围；Metal3扩展、render-stage、物理不支持设备实跑及原Qt GUI崩溃未认证。旧1dc FAIL不改写，旧hash不继承。[最终唯一记录](HEAP_BACKING_RECOVERY_2026-10-08.md#compute-rt-能力开启与最终验收完成f1ba18622026-10-08)。持续任务已按达标约定停止（metal automation已删除），不继续重跑或自动扩展验收范围。
 
 2026-10-08 当前c88d10d4：按需控制输入/真实CPU恢复分离、独立Native、第二份UE无损整帧/reset/query绑定及scoped T2通过；M4生产捕获流程与固定最终验收仍开放，两个生产RT flagsfalse。[当前唯一证据](HEAP_BACKING_RECOVERY_2026-10-08.md#按需控制输入与跨捕获恢复候选-c88d10d4)，外盘scalar-interval-evidence.json；历史结果只属于其hash。

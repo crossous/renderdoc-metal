@@ -1,5 +1,9 @@
-# Metal stage release — 2026-10-13
+# 当前交接（2026-10-13，metal.3）
 
-Release publication complete: remote tag peels to build source, four asset digests/downloads and extracted bundle files/signature match. Resume fixed1cb8 from the release code; preserve excluded working copy and actual error-preserving subset. Earliest API violation/whole-frame cause UNKNOWN. No automatic next-stage commit/publish.
+本次发布范围固定为 metal.2 源码加合法 Native compute 线程组误拒修复及两个相关测试文件。转换器默认 tg_size 不再冻结实际 Native shape；设备/编译器限制、线程组内存和资源/地址/寿命恢复检查保留。默认关闭 CPU 纹理身份观察、Clear 读回和未完成材料列表/bitcode/AS 试验不纳入。原目录 dirty 与外盘证据完整保留。
 
-[Final release record](RELEASE_2026-10-13.md) · [Release](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
+最终源码、实际签名 dylib/bundle、通过/失败/未运行范围、GUI及可比性能见[metal.3发布记录](RELEASE_METAL_3_2026-10-13.md)和 Release 附件。较大 UE Native/replay 差异仍为已知问题，不能计作修复；不扩大 supportsRaytracing、render-stage RT 或 Metal3 声明。
+
+发布后回固定1cb8及实际保错3fed子集，沿真实 material/list producer、physical 版本和原提交定位最早恢复违规。材料列表审查仅取得来源 locator，没有 viewport 因果结论；不重复已关闭的 root/SH/count/Clear/world/AS-format/读回假设。串行锁、原时间/RSS/故障保护与外盘管理不变；后续不自动提交或发布。
+
+标签准确源码与产物哈希以 Release manifest/SHA256SUMS 为准。不能拿0677/5024或旧962结果背书本次最终产物。完整 UE 根因UNKNOWN，整体适配INCOMPLETE；持续任务不结束。

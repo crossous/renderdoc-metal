@@ -6,7 +6,7 @@
 <h1 align="center">RenderDoc Metal</h1>
 <p align="center"><strong>Metal frame capture and graphics inspection on macOS.</strong></p>
 <p align="center">
-  <a href="https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2"><img src="https://img.shields.io/badge/download-macOS_arm64-3bb779" alt="macOS arm64 download"></a>
+  <a href="https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.3"><img src="https://img.shields.io/badge/download-macOS_arm64-3bb779" alt="macOS arm64 download"></a>
   <img src="https://img.shields.io/badge/API-Metal-555555" alt="Metal API">
   <img src="https://img.shields.io/badge/status-development_preview-d99a29" alt="Development preview">
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-4279bf" alt="MIT license"></a>
@@ -27,7 +27,7 @@ The focus is the **macOS Metal capture/replay backend** and its integration with
 | --- | --- |
 | **`metal-replay-v1.46`** | Default branch; active Metal backend, tests and macOS integration. |
 | `codex/ue58-safe-checkpoint` | Earlier UE integration checkpoint; retained for historical reference. |
-| **`v1.46-metal.2`** | Optimized macOS arm64 Release application, distributed as a development preview. |
+| **`v1.46-metal.3`** | Optimized macOS arm64 Release application, distributed as a development preview. |
 
 ## In the debugger
 
@@ -44,11 +44,11 @@ The scene enables **Lumen hardware RT / inline ray queries, Nanite and Virtual S
 
 </details>
 
-> **Current acceptance status:** metal.2 passes the related API/compute RT, event/EID0, matched UE, GUI and runtime checks. The fixed larger UE captures still fail complete same-frame Native image comparison. This is a stage preview, not complete UE/Lumen ray-tracing certification. See the [release evidence](docs/metal-replay/RELEASE_2026-10-13.md).
+> **Current acceptance status:** metal.3 passes the related API/compute RT, event/EID0, matched UE, GUI and runtime checks. The fixed larger UE captures still fail complete same-frame Native image comparison. This is a stage preview, not complete UE/Lumen ray-tracing certification. See the [release evidence](docs/metal-replay/RELEASE_METAL_3_2026-10-13.md).
 
 ## Download
 
-**[Download RenderDocMetal.app for Apple Silicon](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.2/RenderDocMetal-v1.46-metal.2-macos-arm64.zip)** · [Release notes & checksums](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2)
+**[Download RenderDocMetal.app for Apple Silicon](https://github.com/crossous/renderdoc-metal/releases/download/v1.46-metal.3/RenderDocMetal-v1.46-metal.3-macos-arm64.zip)** · [Release notes & checksums](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.3)
 
 1. Extract the ZIP and move **`RenderDocMetal.app`** to `/Applications`.
 2. Open the app. The bundle includes the backend, CLI, Qt, Python and pinned shader processors; **Homebrew is not required to run it**.
@@ -74,7 +74,7 @@ open -n "/Applications/RenderDocMetal.app" --args "/path/to/UE-Lumen-Nanite-VSM-
 | Virtual shadow maps | Search **`VirtualShadow`** or **`Shadow`** and inspect the associated draw/dispatch and textures. |
 | Replay navigation | Move between earlier/later actions and return to the last action; inspect resource contents and bindings. Automated EID 0 tests are documented separately. |
 
-Initial loading of this large capture took about three minutes in the recorded Debug build; The new release publishes a comparable fixed-capture loading measurement in its [stage record](docs/metal-replay/RELEASE_2026-10-13.md); it is not a timing for this older demo. This is a **manual UI acceptance fixture**, not a pixel-perfect output certification. The [fixture README](util/test/metal/captures/ue-lumen-nanite-vsm-720p/README.md) explains the exact scene, comparison and SHA256 verification.
+Initial loading of this large capture took about three minutes in the recorded Debug build; The new release publishes a comparable fixed-capture loading measurement in its [stage record](docs/metal-replay/RELEASE_METAL_3_2026-10-13.md); it is not a timing for this older demo. This is a **manual UI acceptance fixture**, not a pixel-perfect output certification. The [fixture README](util/test/metal/captures/ue-lumen-nanite-vsm-720p/README.md) explains the exact scene, comparison and SHA256 verification.
 
 ## Metal capabilities
 
@@ -98,7 +98,7 @@ Initial loading of this large capture took about three minutes in the recorded D
 
 The project-level **RenderDoc Metal Capture** plugin adds path settings and a **Capture Metal Frame** viewport button / Tools menu entry.
 
-1. Download the [UE plugin package](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.2), or copy [`util/ue/RenderDocMetalCapture`](util/ue/RenderDocMetalCapture) into `<YourProject>/Plugins/RenderDocMetalCapture`.
+1. Download the [UE plugin package](https://github.com/crossous/renderdoc-metal/releases/tag/v1.46-metal.3), or copy [`util/ue/RenderDocMetalCapture`](util/ue/RenderDocMetalCapture) into `<YourProject>/Plugins/RenderDocMetalCapture`.
 2. Enable **RenderDoc Metal Capture** in the Plugins dialog. Rebuild the source plugin against your exact UE version when required; the included integration is built against **UE 5.8.3 / macOS arm64**.
 3. Open **Project Settings → Plugins → RenderDoc Metal**. Set the **RenderDoc application (.app)** path, or supply the **RenderDoc library (.dylib)** path instead. The dylib field takes precedence when both are set.
 4. Enable **Automatically attach on editor startup**, then restart UE. Settings are stored per user/project. Commandlets and Null RHI runs are skipped by default.
