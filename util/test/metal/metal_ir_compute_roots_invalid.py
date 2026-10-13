@@ -14,7 +14,11 @@ def main():
     p.add_argument('--case',action='append',help='Run selected development cases after a fixture correction')
     p.add_argument('--sampler-outside-library',type=Path,
                    help='Compiled seven-sampler library for pre-submit rejection only; never execute natively')
-    a=p.parse_args();r=Path(__file__).resolve().parents[3];b=r/'build-macos-debug';w=a.work_dir.resolve();w.mkdir(parents=True,exist_ok=True)
+    a=p.parse_args()
+    # A valid converter default tg_size is not a Native API threadgroup constraint.
+    # Retain the historical failure name as a legal-control alias.
+    if a.case:a.case=['legal-ABI-threadgroup' if case=='ABI-threadgroup' else case for case in a.case]
+    r=Path(__file__).resolve().parents[3];b=r/'build-macos-debug';w=a.work_dir.resolve();w.mkdir(parents=True,exist_ok=True)
     original=ET.parse(a.source);f=lambda c,n:c.find('./*[@name="'+n+'"]')
     with zipfile.ZipFile(a.source.with_suffix('')) as z:blobs={n:z.read(n) for n in z.namelist()}
     named=lambda tree,n:[c for c in tree.find('./chunks') if c.get('name')==n]
@@ -81,7 +85,7 @@ def main():
     if named(original,reflectionName):
         cases=cases[:-1]+['reflection-duplicate','reflection-frame','reflection-pipeline-zero',
             'reflection-pipeline-buffer','reflection-empty','reflection-oversize',
-            'ABI-root-binding','ABI-root-rebound-buffer','ABI-threadgroup','ABI-root-length','ABI-binding-bool',
+            'ABI-root-binding','ABI-root-rebound-buffer','legal-ABI-threadgroup','ABI-root-length','ABI-binding-bool',
             'ABI-binding-alias','ABI-root-overlap','ABI-root-type','ABI-query-claim',
             'ABI-resource-claim','legal-runtime-ABI','legal-original']
     if currentWrites:
@@ -159,7 +163,7 @@ def main():
                 for initial in named(tree,'Internal::Initial Contents'):
                     if f(initial,'id').text==source and f(initial,'Contents') is not None:
                         blobPatches[int(f(initial,'Contents').text)]=(sourceAt,value)
-            elif tag.startswith('ABI-') or tag=='legal-runtime-ABI':
+            elif tag.startswith('ABI-') or tag in ('legal-runtime-ABI','legal-ABI-threadgroup'):
                 fact=named(tree,reflectionName)[0]
                 compiler=json.loads(f(fact,'reflection').text)
                 payload=dict(Origin='MetalIRRuntimeBindings',ShaderType='Compute',RootBindPoint=2,
@@ -171,7 +175,7 @@ def main():
                     f(setter,'index').text='2'
                     call=next(c for c in ch if c.get('name','').startswith('MTLComputeCommandEncoder::dispatch'))
                     ch.insert(list(ch).index(call),setter)
-                elif tag=='ABI-threadgroup':payload['state']['tg_size']=[32,1,1]
+                elif tag=='legal-ABI-threadgroup':payload['state']['tg_size']=[32,1,1]
                 elif tag=='ABI-root-length':
                     payload['TopLevelArgumentBuffer'].pop(-2)
                     payload['TopLevelArgumentBuffer'][-1]['EltOffset']-=8
@@ -350,7 +354,7 @@ def main():
                 for c in named(tree,'MTLCommandEncoder::DescriptorInlineBinding'):
                     if int(f(c,'entry').text)==len(roots)-1:f(c,'resource').text=f(query,'output').text
             else:assert tag=='legal-original'
-            padding=4096 if tag.startswith('ABI-') or tag=='legal-runtime-ABI' else 128
+            padding=4096 if tag.startswith('ABI-') or tag in ('legal-runtime-ABI','legal-ABI-threadgroup') else 128
             for c in ch:c.set('length',str(int(c.get('length','0'))+padding))
             xml=w/(tag+'.zip.xml');tree.write(xml,encoding='utf-8',xml_declaration=True)
             with zipfile.ZipFile(xml.with_suffix(''),'w',zipfile.ZIP_DEFLATED) as z:
@@ -366,7 +370,7 @@ def main():
                     if tag=='output-initial-short' and int(n)==int(f(outputInitial,'Contents').text):data=data[:-1]
                     z.writestr(n,data)
             cap=w/(tag+'.rdc');run(tag+'-import',[b/'bin/renderdoccmd','convert','-f',xml,'-o',cap,'-c','rdc'],0)
-            if tag in ('legal-original','legal-split-copy','legal-runtime-ABI'):
+            if tag in ('legal-original','legal-split-copy','legal-runtime-ABI','legal-ABI-threadgroup'):
                 run(tag+'-API',[a.oracle,cap,a.hit,132],0);run(tag+'-CLI',[b/'bin/renderdoccmd','replay','--loops','3',cap],0);m['legal_controls']+=1
             else:
                 run(tag+'-API',[b/'metal-ray-b534/final-short/opener',cap],4);run(tag+'-CLI',[b/'bin/renderdoccmd','replay','--loops','1',cap],1)

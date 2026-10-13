@@ -73,6 +73,8 @@ int main(int argc,char **argv)
   const bool scalarOverwrite=getenv("RENDERDOC_METAL_RUNTIME_SCALAR_OVERWRITE")!=nullptr;
   const bool scalarCounter=getenv("RENDERDOC_METAL_RUNTIME_SCALAR_COUNTER")!=nullptr;
   const bool groupBuiltins=getenv("RENDERDOC_METAL_RUNTIME_GROUP_BUILTINS")!=nullptr;
+  const bool groupShapeVariant=getenv("RENDERDOC_METAL_RUNTIME_GROUP_SHAPE_VARIANT")!=nullptr;
+  if(groupShapeVariant && !groupBuiltins)return 1;
   const bool loop=argc>=5 && strcmp(argv[4],"loop")==0;
   const bool bufferTypes=argc==6 && strcmp(argv[5],"buffer-types")==0;
   if((argc>=5 && !loop) || (argc==6 && !bufferTypes))return 1;
@@ -715,7 +717,10 @@ int main(int argc,char **argv)
       if(queryDynamicAS){[compute useResource:tlas2 usage:MTLResourceUsageRead];[compute useResource:header2 usage:MTLResourceUsageRead];[compute useResource:contributions2 usage:MTLResourceUsageRead];}
       if(nativeRayQuery){[compute useResource:header usage:MTLResourceUsageRead];[compute useResource:contributions usage:MTLResourceUsageRead];[compute useResource:tlas usage:MTLResourceUsageRead];[compute useResource:blas usage:MTLResourceUsageRead];}
       if(loop){[compute useResource:indices usage:MTLResourceUsageRead];[compute useResource:source usage:MTLResourceUsageRead];}
-      [compute dispatchThreadgroups:queryGroupIndices?MTLSizeMake(3,1,1):groupBuiltins?MTLSizeMake(2,2,2):MTLSizeMake(1,1,1) threadsPerThreadgroup:groupBuiltins?MTLSizeMake(2,1,1):guardedIndex?MTLSizeMake(64,1,1):MTLSizeMake(1,1,1)];[compute endEncoding];
+      // This Native variant keeps the source default metadata (2,1,1), while
+      // choosing another legal API shape. In the group-builtin shader both
+      // shapes write only linear==0 (all other indices are below settings[3]).
+      [compute dispatchThreadgroups:queryGroupIndices?MTLSizeMake(3,1,1):groupBuiltins?(groupShapeVariant?MTLSizeMake(2,2,1):MTLSizeMake(2,2,2)):MTLSizeMake(1,1,1) threadsPerThreadgroup:groupBuiltins?(groupShapeVariant?MTLSizeMake(4,1,1):MTLSizeMake(2,1,1)):guardedIndex?MTLSizeMake(64,1,1):MTLSizeMake(1,1,1)];[compute endEncoding];
       [command commit];[command waitUntilCompleted];if(command.status!=MTLCommandBufferStatusCompleted)return 5;
     }
     auto final=[queue commandBuffer];auto read=[final blitCommandEncoder];

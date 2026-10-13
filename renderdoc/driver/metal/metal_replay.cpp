@@ -1058,11 +1058,9 @@ bool MetalReplay::ValidateComputeThreadgroupSnapshot(ResourceId pipeline, const 
   auto limits = m_ComputeThreadgroupLimits.find(pipeline);
   if(limits == m_ComputeThreadgroupLimits.end())
     return false;
-  const auto abi = m_pDriver->m_IRComputeRuntimeABIs.find(pipeline);
-  if(abi != m_pDriver->m_IRComputeRuntimeABIs.end() &&
-     (threads.width != abi->second.threads[0] || threads.height != abi->second.threads[1] ||
-      threads.depth != abi->second.threads[2]))
-    return false;
+  // Converter tg_size describes the source shader's default dispatch geometry,
+  // not a Native pipeline requirement. Validate the actual API threadgroup
+  // against compiler/device limits and dynamic memory bindings below.
   const MTL::Size maximum = Unwrap(m_pDriver)->maxThreadsPerThreadgroup();
   if(!threads.width || !threads.height || !threads.depth || threads.width > maximum.width ||
      threads.height > maximum.height || threads.depth > maximum.depth ||
