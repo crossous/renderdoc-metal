@@ -1,5 +1,7 @@
 # 当前里程碑（metal.3）
 
+2026-10-13 已发布v1.46-metal.3：tag/source 5178f08d04c5abdb9f2ce384d0fac55a65294474，packaged dylib e5cc44b8495204e61cef6f368a1a605cc6d32b00275371ed89120bcac2960ee6。远端标签/四附件digest及重下载全部1788文件/link/签名核对通过。仅本次阶段交付完成，完整UE仍FAIL/根因UNKNOWN；后续生产基线来自该tag，不自动提交或发布。
+
 | 项目 | 结论与下一步 |
 | --- | --- |
 | 冻结范围 | 仅合法 Native 线程组误拒修复及相关测试；诊断/未完试验排除并保留。 |
